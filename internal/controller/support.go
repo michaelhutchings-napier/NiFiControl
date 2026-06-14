@@ -13,6 +13,8 @@ import (
 
 const NiFiControlFinalizer = "nifi.controlnifi.io/finalizer"
 
+const clusterRefIndexField = "spec.clusterRef"
+
 func ensureFinalizer(ctx context.Context, c client.Client, obj client.Object) (bool, error) {
 	if controllerutil.ContainsFinalizer(obj, NiFiControlFinalizer) {
 		return false, nil
@@ -84,10 +86,7 @@ func clusterDependencyWaitingFor(ctx context.Context, c client.Client, namespace
 		return []string{"clusterRef.name"}, nil
 	}
 
-	refNamespace := ref.Namespace
-	if refNamespace == "" {
-		refNamespace = namespace
-	}
+	refNamespace := clusterRefNamespace(namespace, ref)
 
 	cluster := &nifiv1alpha1.NiFiCluster{}
 	key := types.NamespacedName{Name: ref.Name, Namespace: refNamespace}
@@ -102,6 +101,20 @@ func clusterDependencyWaitingFor(ctx context.Context, c client.Client, namespace
 	}
 
 	return nil, nil
+}
+
+func clusterRefIndexValue(namespace string, ref nifiv1alpha1.ClusterReference) string {
+	if ref.Name == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s", clusterRefNamespace(namespace, ref), ref.Name)
+}
+
+func clusterRefNamespace(namespace string, ref nifiv1alpha1.ClusterReference) string {
+	if ref.Namespace != "" {
+		return ref.Namespace
+	}
+	return namespace
 }
 
 func waitingForChanged(current []string, desired []string) bool {
