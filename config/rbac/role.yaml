@@ -5,6 +5,12 @@ metadata:
   name: nificontrol-manager-role
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+- apiGroups:
   - nifi.controlnifi.io
   resources:
   - nificlusters

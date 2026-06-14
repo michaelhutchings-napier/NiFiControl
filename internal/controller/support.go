@@ -70,6 +70,22 @@ func markParameterContextAccepted(ctx context.Context, c client.Client, obj *nif
 	return c.Status().Update(ctx, obj)
 }
 
+func markParameterContextReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiParameterContext, nifiID string, revisionVersion int64) error {
+	obj.Status.CommonStatus.MarkReady(obj.Generation, "ParameterContextReady", "The NiFi parameter context is reconciled.")
+	obj.Status.NiFiID = nifiID
+	obj.Status.Revision.Version = revisionVersion
+	obj.Status.Sync.LastError = ""
+	return c.Status().Update(ctx, obj)
+}
+
+func markParameterContextNotReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiParameterContext, reason, message string) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, reason, message)
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.Sync.LastError = message
+	return c.Status().Update(ctx, obj)
+}
+
 func markParameterContextWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiParameterContext, waitingFor []string) error {
 	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
 	return c.Status().Update(ctx, obj)
@@ -101,8 +117,20 @@ func markFlowDeploymentWaitingForDependencies(ctx context.Context, c client.Clie
 }
 
 func clusterDependencyWaitingFor(ctx context.Context, c client.Client, namespace string, ref nifiv1alpha1.ClusterReference) ([]string, error) {
+	cluster, waitingFor, err := clusterDependency(ctx, c, namespace, ref)
+	if err != nil || cluster == nil {
+		return waitingFor, err
+	}
+	return nil, nil
+}
+
+func readyClusterForReference(ctx context.Context, c client.Client, namespace string, ref nifiv1alpha1.ClusterReference) (*nifiv1alpha1.NiFiCluster, []string, error) {
+	return clusterDependency(ctx, c, namespace, ref)
+}
+
+func clusterDependency(ctx context.Context, c client.Client, namespace string, ref nifiv1alpha1.ClusterReference) (*nifiv1alpha1.NiFiCluster, []string, error) {
 	if ref.Name == "" {
-		return []string{"clusterRef.name"}, nil
+		return nil, []string{"clusterRef.name"}, nil
 	}
 
 	refNamespace := clusterRefNamespace(namespace, ref)
@@ -111,15 +139,15 @@ func clusterDependencyWaitingFor(ctx context.Context, c client.Client, namespace
 	key := types.NamespacedName{Name: ref.Name, Namespace: refNamespace}
 	if err := c.Get(ctx, key, cluster); err != nil {
 		if apierrors.IsNotFound(err) {
-			return []string{fmt.Sprintf("NiFiCluster/%s/%s", refNamespace, ref.Name)}, nil
+			return nil, []string{fmt.Sprintf("NiFiCluster/%s/%s", refNamespace, ref.Name)}, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	if !cluster.Status.Ready {
-		return []string{fmt.Sprintf("NiFiCluster/%s/%s:Ready", refNamespace, ref.Name)}, nil
+		return nil, []string{fmt.Sprintf("NiFiCluster/%s/%s:Ready", refNamespace, ref.Name)}, nil
 	}
 
-	return nil, nil
+	return cluster, nil, nil
 }
 
 func clusterRefIndexValue(namespace string, ref nifiv1alpha1.ClusterReference) string {
