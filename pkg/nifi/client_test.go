@@ -88,3 +88,93 @@ func TestHTTPParameterContextClientCreateParameterContext(t *testing.T) {
 		t.Fatalf("created id = %q, want pc-1", created.ID)
 	}
 }
+
+func TestHTTPParameterContextClientGetParameterContext(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/parameter-contexts/pc-1" {
+			t.Fatalf("path = %s, want /nifi-api/parameter-contexts/pc-1", r.URL.Path)
+		}
+		if r.URL.Query().Get("includeInheritedParameters") != "false" {
+			t.Fatalf("includeInheritedParameters = %q, want false", r.URL.Query().Get("includeInheritedParameters"))
+		}
+		_ = json.NewEncoder(w).Encode(ParameterContextEntity{ID: "pc-1"})
+	}))
+	defer server.Close()
+
+	got, err := (HTTPParameterContextClient{}).GetParameterContext(t.Context(), server.URL, "pc-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "pc-1" {
+		t.Fatalf("id = %q, want pc-1", got.ID)
+	}
+}
+
+func TestHTTPParameterContextClientDeleteParameterContext(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Fatalf("method = %s, want DELETE", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/parameter-contexts/pc-1" {
+			t.Fatalf("path = %s, want /nifi-api/parameter-contexts/pc-1", r.URL.Path)
+		}
+		if r.URL.Query().Get("version") != "12" {
+			t.Fatalf("version = %q, want 12", r.URL.Query().Get("version"))
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	if err := (HTTPParameterContextClient{}).DeleteParameterContext(t.Context(), server.URL, "pc-1", 12); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHTTPParameterContextClientCreateParameterContextUpdateRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/parameter-contexts/pc-1/update-requests" {
+			t.Fatalf("path = %s, want /nifi-api/parameter-contexts/pc-1/update-requests", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(ParameterContextUpdateRequestEntity{
+			Request: ParameterContextUpdateRequest{RequestID: "update-1", Complete: false},
+		})
+	}))
+	defer server.Close()
+
+	request, err := (HTTPParameterContextClient{}).CreateParameterContextUpdateRequest(t.Context(), server.URL, "pc-1", ParameterContextEntity{ID: "pc-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Request.RequestID != "update-1" {
+		t.Fatalf("request id = %q, want update-1", request.Request.RequestID)
+	}
+}
+
+func TestHTTPParameterContextClientGetParameterContextUpdateRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/parameter-contexts/pc-1/update-requests/update-1" {
+			t.Fatalf("path = %s, want /nifi-api/parameter-contexts/pc-1/update-requests/update-1", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(ParameterContextUpdateRequestEntity{
+			Request: ParameterContextUpdateRequest{RequestID: "update-1", Complete: true},
+		})
+	}))
+	defer server.Close()
+
+	request, err := (HTTPParameterContextClient{}).GetParameterContextUpdateRequest(t.Context(), server.URL, "pc-1", "update-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Request.RequestID != "update-1" || !request.Request.Complete {
+		t.Fatalf("request = %#v, want complete update-1", request.Request)
+	}
+}

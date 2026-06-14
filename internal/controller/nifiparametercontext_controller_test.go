@@ -17,9 +17,12 @@ import (
 )
 
 type fakeParameterContextClient struct {
-	contexts []nifi.ParameterContextEntity
-	created  []nifi.ParameterContextEntity
-	err      error
+	contexts      []nifi.ParameterContextEntity
+	created       []nifi.ParameterContextEntity
+	updated       []nifi.ParameterContextEntity
+	deleted       []string
+	updateRequest nifi.ParameterContextUpdateRequestEntity
+	err           error
 }
 
 func (f *fakeParameterContextClient) ListParameterContexts(ctx context.Context, baseURI string) ([]nifi.ParameterContextEntity, error) {
@@ -27,6 +30,18 @@ func (f *fakeParameterContextClient) ListParameterContexts(ctx context.Context, 
 		return nil, f.err
 	}
 	return f.contexts, nil
+}
+
+func (f *fakeParameterContextClient) GetParameterContext(ctx context.Context, baseURI string, id string) (*nifi.ParameterContextEntity, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	for i := range f.contexts {
+		if parameterContextEntityID(f.contexts[i]) == id {
+			return &f.contexts[i], nil
+		}
+	}
+	return nil, nil
 }
 
 func (f *fakeParameterContextClient) CreateParameterContext(ctx context.Context, baseURI string, entity nifi.ParameterContextEntity) (*nifi.ParameterContextEntity, error) {
@@ -40,6 +55,49 @@ func (f *fakeParameterContextClient) CreateParameterContext(ctx context.Context,
 	created.Revision.Version = 0
 	f.contexts = append(f.contexts, created)
 	return &created, nil
+}
+
+func (f *fakeParameterContextClient) DeleteParameterContext(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.deleted = append(f.deleted, id)
+	return nil
+}
+
+func (f *fakeParameterContextClient) CreateParameterContextUpdateRequest(ctx context.Context, baseURI string, contextID string, entity nifi.ParameterContextEntity) (*nifi.ParameterContextUpdateRequestEntity, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.updated = append(f.updated, entity)
+	if f.updateRequest.Request.RequestID == "" {
+		f.updateRequest = nifi.ParameterContextUpdateRequestEntity{
+			Request: nifi.ParameterContextUpdateRequest{
+				RequestID:        "update-1",
+				Complete:         false,
+				PercentCompleted: 50,
+				State:            "Updating",
+			},
+		}
+	}
+	return &f.updateRequest, nil
+}
+
+func (f *fakeParameterContextClient) GetParameterContextUpdateRequest(ctx context.Context, baseURI string, contextID string, requestID string) (*nifi.ParameterContextUpdateRequestEntity, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.updateRequest.Request.RequestID == "" {
+		f.updateRequest = nifi.ParameterContextUpdateRequestEntity{
+			Request: nifi.ParameterContextUpdateRequest{
+				RequestID:        requestID,
+				Complete:         true,
+				PercentCompleted: 100,
+				State:            "Complete",
+			},
+		}
+	}
+	return &f.updateRequest, nil
 }
 
 func TestNiFiParameterContextReconcileCreatesParameterContext(t *testing.T) {
@@ -183,7 +241,7 @@ func TestNiFiParameterContextReconcileAdoptsExistingByNameWhenAllowed(t *testing
 	}
 }
 
-func TestNiFiParameterContextReconcileDoesNotClaimSpecUpdateWithoutUpdateSupport(t *testing.T) {
+func TestNiFiParameterContextReconcileSubmitsUpdateRequest(t *testing.T) {
 	scheme := testScheme()
 	cluster := readyTestCluster()
 	parameterContext := &nifiv1alpha1.NiFiParameterContext{
@@ -205,7 +263,69 @@ func TestNiFiParameterContextReconcileDoesNotClaimSpecUpdateWithoutUpdateSupport
 	k8sClient := newParameterContextTestClient(scheme, cluster, parameterContext)
 	nifiClient := &fakeParameterContextClient{
 		contexts: []nifi.ParameterContextEntity{
-			{ID: "pc-existing", Revision: nifi.Revision{Version: 12}, Component: nifi.ParameterContextComponent{Name: "payments"}},
+			{ID: "pc-existing", Revision: nifi.Revision{Version: 12}, Component: nifi.ParameterContextComponent{Name: "payments", Description: "Old description"}},
+		},
+	}
+	reconciler := &NiFiParameterContextReconciler{
+		Client:                 k8sClient,
+		Scheme:                 scheme,
+		ParameterContextClient: nifiClient,
+	}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: parameterContext.Name, Namespace: parameterContext.Namespace}}
+
+	reconcileParameterContextTwice(t, reconciler, request)
+
+	if len(nifiClient.updated) != 1 {
+		t.Fatalf("updated count = %d, want 1", len(nifiClient.updated))
+	}
+	if nifiClient.updated[0].Component.Description != "Changed description" {
+		t.Fatalf("updated description = %q, want Changed description", nifiClient.updated[0].Component.Description)
+	}
+	current := &nifiv1alpha1.NiFiParameterContext{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if current.Status.LatestUpdateRequest == nil || current.Status.LatestUpdateRequest.ID != "update-1" {
+		t.Fatalf("latest update request = %#v, want update-1", current.Status.LatestUpdateRequest)
+	}
+	assertControllerCondition(t, current.Status.Conditions, nifiv1alpha1.ConditionReady, metav1.ConditionFalse, "UpdateRunning")
+}
+
+func TestNiFiParameterContextReconcilePollsUpdateRequestReady(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	parameterContext := &nifiv1alpha1.NiFiParameterContext{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "default", Generation: 2},
+		Spec: nifiv1alpha1.NiFiParameterContextSpec{
+			ClusterRef:  nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			Description: "Changed description",
+		},
+		Status: nifiv1alpha1.NiFiParameterContextStatus{
+			CommonStatus: nifiv1alpha1.CommonStatus{
+				ObservedGeneration: 2,
+				Ready:              false,
+				NiFiID:             "pc-existing",
+				Revision:           nifiv1alpha1.RevisionStatus{Version: 12},
+				Dependencies:       nifiv1alpha1.DependencyStatus{Ready: true},
+			},
+			LatestUpdateRequest: &nifiv1alpha1.ParameterContextUpdateRequestStatus{
+				ID:       "update-1",
+				Complete: false,
+			},
+		},
+	}
+	k8sClient := newParameterContextTestClient(scheme, cluster, parameterContext)
+	nifiClient := &fakeParameterContextClient{
+		contexts: []nifi.ParameterContextEntity{
+			{ID: "pc-existing", Revision: nifi.Revision{Version: 13}, Component: nifi.ParameterContextComponent{Name: "payments", Description: "Changed description"}},
+		},
+		updateRequest: nifi.ParameterContextUpdateRequestEntity{
+			Request: nifi.ParameterContextUpdateRequest{
+				RequestID:        "update-1",
+				Complete:         true,
+				PercentCompleted: 100,
+				State:            "Complete",
+			},
 		},
 	}
 	reconciler := &NiFiParameterContextReconciler{
@@ -221,10 +341,62 @@ func TestNiFiParameterContextReconcileDoesNotClaimSpecUpdateWithoutUpdateSupport
 	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
 		t.Fatal(err)
 	}
-	if current.Status.Ready {
-		t.Fatal("parameter context ready = true, want false for unsupported update")
+	if !current.Status.Ready {
+		t.Fatal("parameter context ready = false, want true")
 	}
-	assertControllerCondition(t, current.Status.Conditions, nifiv1alpha1.ConditionReady, metav1.ConditionFalse, "UpdateNotImplemented")
+	if current.Status.Revision.Version != 13 {
+		t.Fatalf("revision = %d, want 13", current.Status.Revision.Version)
+	}
+	if current.Status.LatestUpdateRequest == nil || !current.Status.LatestUpdateRequest.Complete {
+		t.Fatalf("latest update request = %#v, want complete", current.Status.LatestUpdateRequest)
+	}
+}
+
+func TestNiFiParameterContextReconcileDeletesNiFiContextWhenPolicyDelete(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	deletionTime := metav1.Now()
+	parameterContext := &nifiv1alpha1.NiFiParameterContext{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "payments",
+			Namespace:         "default",
+			Generation:        1,
+			Finalizers:        []string{NiFiControlFinalizer},
+			DeletionTimestamp: &deletionTime,
+		},
+		Spec: nifiv1alpha1.NiFiParameterContextSpec{
+			ClusterRef:     nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			DeletionPolicy: nifiv1alpha1.DeletionPolicyDelete,
+			AdoptionPolicy: nifiv1alpha1.AdoptionPolicy{Mode: nifiv1alpha1.AdoptionPolicyAdoptByName},
+			Reconciliation: nifiv1alpha1.ReconciliationPolicy{},
+			DriftPolicy:    nifiv1alpha1.DriftPolicy{},
+			InheritedRefs:  nil,
+			Parameters:     nil,
+			Description:    "",
+		},
+		Status: nifiv1alpha1.NiFiParameterContextStatus{
+			CommonStatus: nifiv1alpha1.CommonStatus{
+				NiFiID:   "pc-existing",
+				Revision: nifiv1alpha1.RevisionStatus{Version: 12},
+			},
+		},
+	}
+	k8sClient := newParameterContextTestClient(scheme, cluster, parameterContext)
+	nifiClient := &fakeParameterContextClient{}
+	reconciler := &NiFiParameterContextReconciler{
+		Client:                 k8sClient,
+		Scheme:                 scheme,
+		ParameterContextClient: nifiClient,
+	}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: parameterContext.Name, Namespace: parameterContext.Namespace}}
+
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(nifiClient.deleted) != 1 || nifiClient.deleted[0] != "pc-existing" {
+		t.Fatalf("deleted = %#v, want pc-existing", nifiClient.deleted)
+	}
 }
 
 func testScheme() *runtime.Scheme {

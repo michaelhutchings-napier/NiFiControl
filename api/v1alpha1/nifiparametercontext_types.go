@@ -25,6 +25,19 @@ type NiFiParameterContextSpec struct {
 
 type NiFiParameterContextStatus struct {
 	CommonStatus `json:",inline"`
+	// LatestUpdateRequest tracks the active or most recent asynchronous NiFi parameter context update request.
+	LatestUpdateRequest *ParameterContextUpdateRequestStatus `json:"latestUpdateRequest,omitempty"`
+}
+
+type ParameterContextUpdateRequestStatus struct {
+	ID               string `json:"id,omitempty"`
+	URI              string `json:"uri,omitempty"`
+	SubmissionTime   string `json:"submissionTime,omitempty"`
+	LastUpdated      string `json:"lastUpdated,omitempty"`
+	Complete         bool   `json:"complete,omitempty"`
+	FailureReason    string `json:"failureReason,omitempty"`
+	PercentCompleted int32  `json:"percentCompleted,omitempty"`
+	State            string `json:"state,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -24,7 +24,11 @@ type HTTPReachabilityChecker struct {
 
 type ParameterContextClient interface {
 	ListParameterContexts(ctx context.Context, baseURI string) ([]ParameterContextEntity, error)
+	GetParameterContext(ctx context.Context, baseURI string, id string) (*ParameterContextEntity, error)
 	CreateParameterContext(ctx context.Context, baseURI string, entity ParameterContextEntity) (*ParameterContextEntity, error)
+	DeleteParameterContext(ctx context.Context, baseURI string, id string, revisionVersion int64) error
+	CreateParameterContextUpdateRequest(ctx context.Context, baseURI string, contextID string, entity ParameterContextEntity) (*ParameterContextUpdateRequestEntity, error)
+	GetParameterContextUpdateRequest(ctx context.Context, baseURI string, contextID string, requestID string) (*ParameterContextUpdateRequestEntity, error)
 }
 
 type HTTPParameterContextClient struct {
@@ -61,6 +65,21 @@ type Parameter struct {
 
 type ParameterContextsResponse struct {
 	ParameterContexts []ParameterContextEntity `json:"parameterContexts"`
+}
+
+type ParameterContextUpdateRequestEntity struct {
+	Request ParameterContextUpdateRequest `json:"request,omitempty"`
+}
+
+type ParameterContextUpdateRequest struct {
+	RequestID        string `json:"requestId,omitempty"`
+	URI              string `json:"uri,omitempty"`
+	SubmissionTime   string `json:"submissionTime,omitempty"`
+	LastUpdated      string `json:"lastUpdated,omitempty"`
+	Complete         bool   `json:"complete,omitempty"`
+	FailureReason    string `json:"failureReason,omitempty"`
+	PercentCompleted int32  `json:"percentCompleted,omitempty"`
+	State            string `json:"state,omitempty"`
 }
 
 func (c HTTPReachabilityChecker) CheckReachable(ctx context.Context, baseURI string, timeout time.Duration) error {
@@ -111,6 +130,20 @@ func (c HTTPParameterContextClient) ListParameterContexts(ctx context.Context, b
 	return response.ParameterContexts, nil
 }
 
+func (c HTTPParameterContextClient) GetParameterContext(ctx context.Context, baseURI string, id string) (*ParameterContextEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/parameter-contexts/%s", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+	endpoint += "?includeInheritedParameters=false"
+
+	var response ParameterContextEntity
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
 func (c HTTPParameterContextClient) CreateParameterContext(ctx context.Context, baseURI string, entity ParameterContextEntity) (*ParameterContextEntity, error) {
 	endpoint, err := apiURL(baseURI, "/parameter-contexts")
 	if err != nil {
@@ -119,6 +152,42 @@ func (c HTTPParameterContextClient) CreateParameterContext(ctx context.Context, 
 
 	var response ParameterContextEntity
 	if err := c.doJSON(ctx, http.MethodPost, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPParameterContextClient) DeleteParameterContext(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/parameter-contexts/%s", url.PathEscape(id)))
+	if err != nil {
+		return err
+	}
+	endpoint += fmt.Sprintf("?version=%d", revisionVersion)
+
+	return c.doJSON(ctx, http.MethodDelete, endpoint, nil, nil)
+}
+
+func (c HTTPParameterContextClient) CreateParameterContextUpdateRequest(ctx context.Context, baseURI string, contextID string, entity ParameterContextEntity) (*ParameterContextUpdateRequestEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/parameter-contexts/%s/update-requests", url.PathEscape(contextID)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response ParameterContextUpdateRequestEntity
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPParameterContextClient) GetParameterContextUpdateRequest(ctx context.Context, baseURI string, contextID string, requestID string) (*ParameterContextUpdateRequestEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/parameter-contexts/%s/update-requests/%s", url.PathEscape(contextID), url.PathEscape(requestID)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response ParameterContextUpdateRequestEntity
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
 		return nil, err
 	}
 	return &response, nil

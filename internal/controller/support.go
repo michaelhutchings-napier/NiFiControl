@@ -78,6 +78,15 @@ func markParameterContextReady(ctx context.Context, c client.Client, obj *nifiv1
 	return c.Status().Update(ctx, obj)
 }
 
+func markParameterContextUpdateRunning(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiParameterContext, request *nifiv1alpha1.ParameterContextUpdateRequestStatus) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, "UpdateRunning", "The NiFi parameter context update request is still running.")
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.LatestUpdateRequest = request
+	obj.Status.Sync.LastError = ""
+	return c.Status().Update(ctx, obj)
+}
+
 func markParameterContextNotReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiParameterContext, reason, message string) error {
 	obj.Status.CommonStatus.MarkNotReady(obj.Generation, reason, message)
 	obj.Status.Dependencies.Ready = true

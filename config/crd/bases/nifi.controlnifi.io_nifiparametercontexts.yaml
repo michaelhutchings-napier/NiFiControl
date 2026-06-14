@@ -226,6 +226,28 @@ spec:
                   status:
                     type: string
                 type: object
+              latestUpdateRequest:
+                description: LatestUpdateRequest tracks the active or most recent
+                  asynchronous NiFi parameter context update request.
+                properties:
+                  complete:
+                    type: boolean
+                  failureReason:
+                    type: string
+                  id:
+                    type: string
+                  lastUpdated:
+                    type: string
+                  percentCompleted:
+                    format: int32
+                    type: integer
+                  state:
+                    type: string
+                  submissionTime:
+                    type: string
+                  uri:
+                    type: string
+                type: object
               nifiId:
                 type: string
               observedGeneration:

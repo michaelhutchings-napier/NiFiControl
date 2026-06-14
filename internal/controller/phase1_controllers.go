@@ -149,8 +149,7 @@ func (r *NiFiParameterContextReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, err
 	}
 	if !instance.DeletionTimestamp.IsZero() {
-		_, err := removeFinalizer(ctx, r.Client, instance)
-		return ctrl.Result{}, err
+		return r.reconcileParameterContextDelete(ctx, instance)
 	}
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
@@ -203,16 +202,20 @@ func (r *NiFiParameterContextReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	if existing := parameterContextByID(contexts, instance.Status.NiFiID); existing != nil {
-		nifiID := parameterContextEntityID(*existing)
-		if instance.Status.ObservedGeneration != instance.Generation {
-			message := "Updating an existing NiFi parameter context is not implemented yet."
-			if shouldMarkParameterContextNotReady(instance, "UpdateNotImplemented", message) {
-				return ctrl.Result{}, markParameterContextNotReady(ctx, r.Client, instance, "UpdateNotImplemented", message)
+		full, err := pcClient.GetParameterContext(ctx, endpoint, parameterContextEntityID(*existing))
+		if err != nil {
+			message := fmt.Sprintf("Failed to get NiFi parameter context: %v", err)
+			if shouldMarkParameterContextNotReady(instance, "NiFiGetFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markParameterContextNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
 			}
-			return ctrl.Result{}, nil
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
-		if !parameterContextStatusMatches(instance, nifiID, existing.Revision.Version) {
-			return ctrl.Result{}, markParameterContextReady(ctx, r.Client, instance, nifiID, existing.Revision.Version)
+		return r.reconcileExistingParameterContext(ctx, instance, endpoint, pcClient, entity, full)
+	}
+	if pending := instance.Status.LatestUpdateRequest; pending != nil && !pending.Complete {
+		message := fmt.Sprintf("NiFi parameter context update request %q is pending, but parameter context %q was not found.", pending.ID, instance.Status.NiFiID)
+		if shouldMarkParameterContextNotReady(instance, "UpdateTargetNotFound", message) {
+			return ctrl.Result{}, markParameterContextNotReady(ctx, r.Client, instance, "UpdateTargetNotFound", message)
 		}
 		return ctrl.Result{}, nil
 	}
@@ -224,11 +227,15 @@ func (r *NiFiParameterContextReconciler) Reconcile(ctx context.Context, req ctrl
 			}
 			return ctrl.Result{}, nil
 		}
-		nifiID := parameterContextEntityID(*existing)
-		if !parameterContextStatusMatches(instance, nifiID, existing.Revision.Version) {
-			return ctrl.Result{}, markParameterContextReady(ctx, r.Client, instance, nifiID, existing.Revision.Version)
+		full, err := pcClient.GetParameterContext(ctx, endpoint, parameterContextEntityID(*existing))
+		if err != nil {
+			message := fmt.Sprintf("Failed to get NiFi parameter context: %v", err)
+			if shouldMarkParameterContextNotReady(instance, "NiFiGetFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markParameterContextNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
-		return ctrl.Result{}, nil
+		return r.reconcileExistingParameterContext(ctx, instance, endpoint, pcClient, entity, full)
 	}
 
 	created, err := pcClient.CreateParameterContext(ctx, endpoint, entity)
@@ -251,6 +258,121 @@ func (r *NiFiParameterContextReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, markParameterContextReady(ctx, r.Client, instance, nifiID, created.Revision.Version)
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *NiFiParameterContextReconciler) reconcileParameterContextDelete(ctx context.Context, instance *nifiv1alpha1.NiFiParameterContext) (ctrl.Result, error) {
+	if instance.Spec.DeletionPolicy != nifiv1alpha1.DeletionPolicyDelete || instance.Status.NiFiID == "" {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	endpoint := cluster.Status.Endpoint
+	if endpoint == "" && cluster.Spec.API != nil {
+		endpoint = cluster.Spec.API.URI
+	}
+	if endpoint == "" {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	pcClient := r.ParameterContextClient
+	if pcClient == nil {
+		pcClient = nifi.HTTPParameterContextClient{}
+	}
+	if err := pcClient.DeleteParameterContext(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	_, err = removeFinalizer(ctx, r.Client, instance)
+	return ctrl.Result{}, err
+}
+
+func (r *NiFiParameterContextReconciler) reconcileExistingParameterContext(ctx context.Context, instance *nifiv1alpha1.NiFiParameterContext, endpoint string, pcClient nifi.ParameterContextClient, desired nifi.ParameterContextEntity, existing *nifi.ParameterContextEntity) (ctrl.Result, error) {
+	if existing == nil {
+		message := "NiFi returned an empty parameter context response."
+		if shouldMarkParameterContextNotReady(instance, "NiFiGetFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markParameterContextNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	nifiID := parameterContextEntityID(*existing)
+	if pending := instance.Status.LatestUpdateRequest; pending != nil && !pending.Complete {
+		request, err := pcClient.GetParameterContextUpdateRequest(ctx, endpoint, nifiID, pending.ID)
+		if err != nil {
+			message := fmt.Sprintf("Failed to get NiFi parameter context update request: %v", err)
+			if shouldMarkParameterContextNotReady(instance, "UpdateRequestGetFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markParameterContextNotReady(ctx, r.Client, instance, "UpdateRequestGetFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		status := parameterContextUpdateRequestStatus(request)
+		if status.FailureReason != "" {
+			if shouldMarkParameterContextNotReady(instance, "UpdateRequestFailed", status.FailureReason) {
+				instance.Status.LatestUpdateRequest = status
+				return ctrl.Result{}, markParameterContextNotReady(ctx, r.Client, instance, "UpdateRequestFailed", status.FailureReason)
+			}
+			return ctrl.Result{}, nil
+		}
+		if !status.Complete {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, markParameterContextUpdateRunning(ctx, r.Client, instance, status)
+		}
+		instance.Status.LatestUpdateRequest = status
+		return r.markParameterContextReadyFromNiFi(ctx, instance, endpoint, pcClient, nifiID, existing.Revision.Version)
+	}
+
+	if parameterContextNeedsUpdate(desired, *existing) {
+		updateEntity := desired
+		updateEntity.ID = nifiID
+		updateEntity.Component.ID = nifiID
+		updateEntity.Revision.Version = existing.Revision.Version
+		request, err := pcClient.CreateParameterContextUpdateRequest(ctx, endpoint, nifiID, updateEntity)
+		if err != nil {
+			message := fmt.Sprintf("Failed to create NiFi parameter context update request: %v", err)
+			if shouldMarkParameterContextNotReady(instance, "UpdateRequestCreateFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markParameterContextNotReady(ctx, r.Client, instance, "UpdateRequestCreateFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		status := parameterContextUpdateRequestStatus(request)
+		if status.FailureReason != "" {
+			if shouldMarkParameterContextNotReady(instance, "UpdateRequestFailed", status.FailureReason) {
+				instance.Status.LatestUpdateRequest = status
+				return ctrl.Result{}, markParameterContextNotReady(ctx, r.Client, instance, "UpdateRequestFailed", status.FailureReason)
+			}
+			return ctrl.Result{}, nil
+		}
+		if !status.Complete {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, markParameterContextUpdateRunning(ctx, r.Client, instance, status)
+		}
+		instance.Status.LatestUpdateRequest = status
+		return r.markParameterContextReadyFromNiFi(ctx, instance, endpoint, pcClient, nifiID, existing.Revision.Version)
+	}
+
+	if !parameterContextStatusMatches(instance, nifiID, existing.Revision.Version) {
+		return ctrl.Result{}, markParameterContextReady(ctx, r.Client, instance, nifiID, existing.Revision.Version)
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *NiFiParameterContextReconciler) markParameterContextReadyFromNiFi(ctx context.Context, instance *nifiv1alpha1.NiFiParameterContext, endpoint string, pcClient nifi.ParameterContextClient, nifiID string, fallbackRevision int64) (ctrl.Result, error) {
+	revision := fallbackRevision
+	current, err := pcClient.GetParameterContext(ctx, endpoint, nifiID)
+	if err != nil {
+		message := fmt.Sprintf("Failed to refresh NiFi parameter context after update: %v", err)
+		if shouldMarkParameterContextNotReady(instance, "NiFiRefreshFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markParameterContextNotReady(ctx, r.Client, instance, "NiFiRefreshFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	if current != nil {
+		revision = current.Revision.Version
+	}
+	return ctrl.Result{}, markParameterContextReady(ctx, r.Client, instance, nifiID, revision)
 }
 
 func (r *NiFiParameterContextReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -342,6 +464,58 @@ func parameterContextEntityID(entity nifi.ParameterContextEntity) string {
 		return entity.ID
 	}
 	return entity.Component.ID
+}
+
+func parameterContextUpdateRequestStatus(entity *nifi.ParameterContextUpdateRequestEntity) *nifiv1alpha1.ParameterContextUpdateRequestStatus {
+	if entity == nil {
+		return &nifiv1alpha1.ParameterContextUpdateRequestStatus{}
+	}
+	request := entity.Request
+	return &nifiv1alpha1.ParameterContextUpdateRequestStatus{
+		ID:               request.RequestID,
+		URI:              request.URI,
+		SubmissionTime:   request.SubmissionTime,
+		LastUpdated:      request.LastUpdated,
+		Complete:         request.Complete,
+		FailureReason:    request.FailureReason,
+		PercentCompleted: request.PercentCompleted,
+		State:            request.State,
+	}
+}
+
+func parameterContextNeedsUpdate(desired nifi.ParameterContextEntity, existing nifi.ParameterContextEntity) bool {
+	if desired.Component.Name != existing.Component.Name || desired.Component.Description != existing.Component.Description {
+		return true
+	}
+	if len(desired.Component.Parameters) != len(existing.Component.Parameters) {
+		return true
+	}
+
+	existingParameters := make(map[string]nifi.Parameter, len(existing.Component.Parameters))
+	for _, parameterEntity := range existing.Component.Parameters {
+		existingParameters[parameterEntity.Parameter.Name] = parameterEntity.Parameter
+	}
+	for _, desiredEntity := range desired.Component.Parameters {
+		desiredParameter := desiredEntity.Parameter
+		existingParameter, ok := existingParameters[desiredParameter.Name]
+		if !ok {
+			return true
+		}
+		if desiredParameter.Description != existingParameter.Description || desiredParameter.Sensitive != existingParameter.Sensitive {
+			return true
+		}
+		if !desiredParameter.Sensitive && parameterValue(desiredParameter) != parameterValue(existingParameter) {
+			return true
+		}
+	}
+	return false
+}
+
+func parameterValue(parameter nifi.Parameter) string {
+	if parameter.Value == nil {
+		return ""
+	}
+	return *parameter.Value
 }
 
 func parameterContextAdoptionAllowed(policy nifiv1alpha1.AdoptionPolicy) bool {
