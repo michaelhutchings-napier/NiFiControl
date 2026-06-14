@@ -1,0 +1,12 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiFlowBundle
+metadata:
+  name: payments
+spec:
+  version: 1.0.0
+  source:
+    git:
+      url: https://github.com/example/nifi-flows.git
+      ref: main
+      path: flows/payments
+

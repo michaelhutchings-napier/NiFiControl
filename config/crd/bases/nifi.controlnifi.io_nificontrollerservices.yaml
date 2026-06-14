@@ -40,6 +40,12 @@ spec:
               adoptionPolicy:
                 properties:
                   mode:
+                    default: Never
+                    enum:
+                    - Never
+                    - IfExists
+                    - AdoptById
+                    - AdoptByName
                     type: string
                   nifiId:
                     type: string
@@ -60,6 +66,7 @@ spec:
               clusterRef:
                 properties:
                   name:
+                    minLength: 1
                     type: string
                   namespace:
                     type: string
@@ -67,6 +74,10 @@ spec:
                 - name
                 type: object
               deletionPolicy:
+                default: Orphan
+                enum:
+                - Delete
+                - Orphan
                 type: string
               driftPolicy:
                 properties:
@@ -75,11 +86,18 @@ spec:
                       type: string
                     type: array
                   mode:
+                    default: Warn
+                    enum:
+                    - Ignore
+                    - Warn
+                    - Reconcile
+                    - Fail
                     type: string
                 type: object
               parameterContextRef:
                 properties:
                   name:
+                    minLength: 1
                     type: string
                   namespace:
                     type: string
@@ -133,8 +151,13 @@ spec:
                   type: object
                 type: object
               state:
+                default: Disabled
+                enum:
+                - Enabled
+                - Disabled
                 type: string
               type:
+                minLength: 1
                 type: string
             required:
             - type

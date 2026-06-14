@@ -14,6 +14,8 @@ type FlowDeploymentTarget struct {
 }
 
 type RolloutStrategy struct {
+	// +kubebuilder:validation:Enum=ApplyOnly;StopAllThenApply;ChangedOnly;Rolling;BlueGreen
+	// +kubebuilder:default=ApplyOnly
 	Strategy string `json:"strategy,omitempty"`
 }
 
@@ -23,6 +25,8 @@ type RollbackStrategy struct {
 }
 
 type OwnershipPolicy struct {
+	// +kubebuilder:validation:Enum=Managed;InventoryOnly;Hybrid
+	// +kubebuilder:default=Managed
 	Mode  string `json:"mode,omitempty"`
 	Prune bool   `json:"prune,omitempty"`
 }
@@ -35,10 +39,12 @@ type NiFiFlowDeploymentSpec struct {
 	Rollout             RolloutStrategy       `json:"rollout,omitempty"`
 	Rollback            RollbackStrategy      `json:"rollback,omitempty"`
 	Ownership           OwnershipPolicy       `json:"ownership,omitempty"`
-	DeletionPolicy      DeletionPolicy        `json:"deletionPolicy,omitempty"`
-	DriftPolicy         DriftPolicy           `json:"driftPolicy,omitempty"`
-	AdoptionPolicy      AdoptionPolicy        `json:"adoptionPolicy,omitempty"`
-	Reconciliation      ReconciliationPolicy  `json:"reconciliation,omitempty"`
+	// +kubebuilder:validation:Enum=Delete;Orphan
+	// +kubebuilder:default=Orphan
+	DeletionPolicy DeletionPolicy       `json:"deletionPolicy,omitempty"`
+	DriftPolicy    DriftPolicy          `json:"driftPolicy,omitempty"`
+	AdoptionPolicy AdoptionPolicy       `json:"adoptionPolicy,omitempty"`
+	Reconciliation ReconciliationPolicy `json:"reconciliation,omitempty"`
 }
 
 type NiFiFlowDeploymentStatus struct {

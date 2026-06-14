@@ -1,0 +1,11 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiRegistryClient
+metadata:
+  name: platform-flows
+spec:
+  clusterRef:
+    name: production
+  type: NiFiRegistry
+  uri: https://registry.example.com/nifi-registry
+  description: Shared flow registry
+

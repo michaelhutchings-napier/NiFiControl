@@ -1,0 +1,19 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiControllerService
+metadata:
+  name: dbcp-payments
+spec:
+  clusterRef:
+    name: production
+  parentProcessGroupRef:
+    root: true
+  type: org.apache.nifi.dbcp.DBCPConnectionPool
+  properties:
+    Database Connection URL: jdbc:postgresql://postgres/payments
+  sensitiveProperties:
+    Password:
+      secretKeyRef:
+        name: payments-db
+        key: password
+  state: Disabled
+

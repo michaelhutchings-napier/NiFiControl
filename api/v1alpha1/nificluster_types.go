@@ -10,9 +10,14 @@ const (
 )
 
 type NiFiClusterSpec struct {
-	Mode           ClusterMode          `json:"mode,omitempty"`
-	Image          string               `json:"image,omitempty"`
-	Replicas       int32                `json:"replicas,omitempty"`
+	// +kubebuilder:validation:Enum=Internal;External
+	// +kubebuilder:default=Internal
+	Mode  ClusterMode `json:"mode,omitempty"`
+	Image string      `json:"image,omitempty"`
+	// +kubebuilder:validation:Minimum=0
+	Replicas int32 `json:"replicas,omitempty"`
+	// +kubebuilder:validation:Enum=Delete;Orphan
+	// +kubebuilder:default=Orphan
 	DeletionPolicy DeletionPolicy       `json:"deletionPolicy,omitempty"`
 	DriftPolicy    DriftPolicy          `json:"driftPolicy,omitempty"`
 	AdoptionPolicy AdoptionPolicy       `json:"adoptionPolicy,omitempty"`

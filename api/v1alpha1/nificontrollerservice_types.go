@@ -3,18 +3,23 @@ package v1alpha1
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 type NiFiControllerServiceSpec struct {
-	ClusterRef            ClusterReference                   `json:"clusterRef,omitempty"`
-	ParentProcessGroupRef ProcessGroupReference              `json:"parentProcessGroupRef,omitempty"`
-	Type                  string                             `json:"type"`
-	Bundle                *ComponentBundle                   `json:"bundle,omitempty"`
-	Properties            map[string]string                  `json:"properties,omitempty"`
-	SensitiveProperties   map[string]SensitivePropertySource `json:"sensitiveProperties,omitempty"`
-	ParameterContextRef   *LocalObjectReference              `json:"parameterContextRef,omitempty"`
-	State                 RuntimeState                       `json:"state,omitempty"`
-	DeletionPolicy        DeletionPolicy                     `json:"deletionPolicy,omitempty"`
-	DriftPolicy           DriftPolicy                        `json:"driftPolicy,omitempty"`
-	AdoptionPolicy        AdoptionPolicy                     `json:"adoptionPolicy,omitempty"`
-	Reconciliation        ReconciliationPolicy               `json:"reconciliation,omitempty"`
+	ClusterRef            ClusterReference      `json:"clusterRef,omitempty"`
+	ParentProcessGroupRef ProcessGroupReference `json:"parentProcessGroupRef,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	Type                string                             `json:"type"`
+	Bundle              *ComponentBundle                   `json:"bundle,omitempty"`
+	Properties          map[string]string                  `json:"properties,omitempty"`
+	SensitiveProperties map[string]SensitivePropertySource `json:"sensitiveProperties,omitempty"`
+	ParameterContextRef *LocalObjectReference              `json:"parameterContextRef,omitempty"`
+	// +kubebuilder:validation:Enum=Enabled;Disabled
+	// +kubebuilder:default=Disabled
+	State RuntimeState `json:"state,omitempty"`
+	// +kubebuilder:validation:Enum=Delete;Orphan
+	// +kubebuilder:default=Orphan
+	DeletionPolicy DeletionPolicy       `json:"deletionPolicy,omitempty"`
+	DriftPolicy    DriftPolicy          `json:"driftPolicy,omitempty"`
+	AdoptionPolicy AdoptionPolicy       `json:"adoptionPolicy,omitempty"`
+	Reconciliation ReconciliationPolicy `json:"reconciliation,omitempty"`
 }
 
 type NiFiControllerServiceStatus struct {

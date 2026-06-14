@@ -42,6 +42,16 @@ func (r *NiFiClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 		return ctrl.Result{}, err
 	}
+	if !instance.DeletionTimestamp.IsZero() {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	if instance.Status.ObservedGeneration != instance.Generation {
+		return ctrl.Result{}, markClusterAccepted(ctx, r.Client, instance)
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -61,6 +71,16 @@ func (r *NiFiRegistryClientReconciler) Reconcile(ctx context.Context, req ctrl.R
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
+	}
+	if !instance.DeletionTimestamp.IsZero() {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	if instance.Status.ObservedGeneration != instance.Generation {
+		return ctrl.Result{}, markRegistryClientAccepted(ctx, r.Client, instance)
 	}
 	return ctrl.Result{}, nil
 }
@@ -82,6 +102,16 @@ func (r *NiFiParameterContextReconciler) Reconcile(ctx context.Context, req ctrl
 		}
 		return ctrl.Result{}, err
 	}
+	if !instance.DeletionTimestamp.IsZero() {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	if instance.Status.ObservedGeneration != instance.Generation {
+		return ctrl.Result{}, markParameterContextAccepted(ctx, r.Client, instance)
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -101,6 +131,16 @@ func (r *NiFiControllerServiceReconciler) Reconcile(ctx context.Context, req ctr
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
+	}
+	if !instance.DeletionTimestamp.IsZero() {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	if instance.Status.ObservedGeneration != instance.Generation {
+		return ctrl.Result{}, markControllerServiceAccepted(ctx, r.Client, instance)
 	}
 	return ctrl.Result{}, nil
 }
@@ -122,6 +162,16 @@ func (r *NiFiFlowBundleReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		return ctrl.Result{}, err
 	}
+	if !instance.DeletionTimestamp.IsZero() {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	if instance.Status.ObservedGeneration != instance.Generation {
+		return ctrl.Result{}, markFlowBundleAccepted(ctx, r.Client, instance)
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -141,6 +191,16 @@ func (r *NiFiFlowDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.R
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
+	}
+	if !instance.DeletionTimestamp.IsZero() {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	if instance.Status.ObservedGeneration != instance.Generation {
+		return ctrl.Result{}, markFlowDeploymentAccepted(ctx, r.Client, instance)
 	}
 	return ctrl.Result{}, nil
 }

@@ -40,6 +40,12 @@ spec:
               adoptionPolicy:
                 properties:
                   mode:
+                    default: Never
+                    enum:
+                    - Never
+                    - IfExists
+                    - AdoptById
+                    - AdoptByName
                     type: string
                   nifiId:
                     type: string
@@ -49,6 +55,10 @@ spec:
                     type: boolean
                 type: object
               deletionPolicy:
+                default: Orphan
+                enum:
+                - Delete
+                - Orphan
                 type: string
               driftPolicy:
                 properties:
@@ -57,11 +67,21 @@ spec:
                       type: string
                     type: array
                   mode:
+                    default: Warn
+                    enum:
+                    - Ignore
+                    - Warn
+                    - Reconcile
+                    - Fail
                     type: string
                 type: object
               image:
                 type: string
               mode:
+                default: Internal
+                enum:
+                - Internal
+                - External
                 type: string
               reconciliation:
                 properties:
@@ -70,6 +90,7 @@ spec:
                 type: object
               replicas:
                 format: int32
+                minimum: 0
                 type: integer
             type: object
           status:

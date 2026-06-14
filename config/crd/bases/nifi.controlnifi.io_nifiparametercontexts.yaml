@@ -40,6 +40,12 @@ spec:
               adoptionPolicy:
                 properties:
                   mode:
+                    default: Never
+                    enum:
+                    - Never
+                    - IfExists
+                    - AdoptById
+                    - AdoptByName
                     type: string
                   nifiId:
                     type: string
@@ -51,6 +57,7 @@ spec:
               clusterRef:
                 properties:
                   name:
+                    minLength: 1
                     type: string
                   namespace:
                     type: string
@@ -58,6 +65,10 @@ spec:
                 - name
                 type: object
               deletionPolicy:
+                default: Orphan
+                enum:
+                - Delete
+                - Orphan
                 type: string
               description:
                 type: string
@@ -68,12 +79,19 @@ spec:
                       type: string
                     type: array
                   mode:
+                    default: Warn
+                    enum:
+                    - Ignore
+                    - Warn
+                    - Reconcile
+                    - Fail
                     type: string
                 type: object
               inheritedRefs:
                 items:
                   properties:
                     name:
+                      minLength: 1
                       type: string
                     namespace:
                       type: string
@@ -87,6 +105,7 @@ spec:
                     description:
                       type: string
                     name:
+                      minLength: 1
                       type: string
                     sensitiveValueFrom:
                       properties:

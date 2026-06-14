@@ -1,0 +1,17 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiParameterContext
+metadata:
+  name: payments-prod
+spec:
+  clusterRef:
+    name: production
+  description: Payments production parameters
+  parameters:
+    - name: kafka.bootstrap.servers
+      value: kafka:9092
+    - name: db.password
+      sensitiveValueFrom:
+        secretKeyRef:
+          name: payments-db
+          key: password
+

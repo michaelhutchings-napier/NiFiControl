@@ -9,6 +9,7 @@ type DeletionPolicy string
 type DriftPolicyMode string
 type AdoptionPolicyMode string
 type RuntimeState string
+type ConditionType string
 
 const (
 	DeletionPolicyDelete DeletionPolicy = "Delete"
@@ -28,14 +29,25 @@ const (
 	RuntimeStateStopped  RuntimeState = "Stopped"
 	RuntimeStateEnabled  RuntimeState = "Enabled"
 	RuntimeStateDisabled RuntimeState = "Disabled"
+
+	ConditionReady             ConditionType = "Ready"
+	ConditionReconciling       ConditionType = "Reconciling"
+	ConditionClusterReachable  ConditionType = "ClusterReachable"
+	ConditionDependenciesReady ConditionType = "DependenciesReady"
+	ConditionInSync            ConditionType = "InSync"
+	ConditionDriftDetected     ConditionType = "DriftDetected"
+	ConditionPaused            ConditionType = "Paused"
+	ConditionError             ConditionType = "Error"
 )
 
 type LocalObjectReference struct {
+	// +kubebuilder:validation:MinLength=1
 	Name      string `json:"name"`
 	Namespace string `json:"namespace,omitempty"`
 }
 
 type ClusterReference struct {
+	// +kubebuilder:validation:MinLength=1
 	Name      string `json:"name"`
 	Namespace string `json:"namespace,omitempty"`
 }
@@ -51,11 +63,15 @@ type SecretKeyRef struct {
 }
 
 type DriftPolicy struct {
+	// +kubebuilder:validation:Enum=Ignore;Warn;Reconcile;Fail
+	// +kubebuilder:default=Warn
 	Mode         DriftPolicyMode `json:"mode,omitempty"`
 	IgnoreFields []string        `json:"ignoreFields,omitempty"`
 }
 
 type AdoptionPolicy struct {
+	// +kubebuilder:validation:Enum=Never;IfExists;AdoptById;AdoptByName
+	// +kubebuilder:default=Never
 	Mode               AdoptionPolicyMode `json:"mode,omitempty"`
 	NiFiID             string             `json:"nifiId,omitempty"`
 	RequireAnnotation  bool               `json:"requireAnnotation,omitempty"`
@@ -97,6 +113,50 @@ type CommonStatus struct {
 	Dependencies       DependencyStatus   `json:"dependencies,omitempty"`
 	Drift              DriftStatus        `json:"drift,omitempty"`
 	Sync               SyncStatus         `json:"sync,omitempty"`
+}
+
+func (s *CommonStatus) SetCondition(conditionType ConditionType, status metav1.ConditionStatus, reason, message string, observedGeneration int64) {
+	condition := metav1.Condition{
+		Type:               string(conditionType),
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: observedGeneration,
+	}
+	metaSetStatusCondition(&s.Conditions, condition)
+}
+
+func (s *CommonStatus) MarkAccepted(observedGeneration int64) {
+	s.ObservedGeneration = observedGeneration
+	s.Ready = false
+	s.Dependencies.Ready = false
+	s.Drift.Status = "Unknown"
+	s.SetCondition(ConditionReady, metav1.ConditionFalse, "ReconciliationPending", "NiFi-side reconciliation has not been implemented yet.", observedGeneration)
+	s.SetCondition(ConditionReconciling, metav1.ConditionTrue, "Accepted", "The resource has been accepted by the NiFiControl controller.", observedGeneration)
+}
+
+func (s *CommonStatus) MarkDeleting(observedGeneration int64) {
+	s.ObservedGeneration = observedGeneration
+	s.Ready = false
+	s.SetCondition(ConditionReady, metav1.ConditionFalse, "Deleting", "The resource is being deleted.", observedGeneration)
+	s.SetCondition(ConditionReconciling, metav1.ConditionFalse, "Deleting", "The controller is removing finalizers.", observedGeneration)
+}
+
+func metaSetStatusCondition(conditions *[]metav1.Condition, newCondition metav1.Condition) {
+	now := metav1.Now()
+	newCondition.LastTransitionTime = now
+	for i := range *conditions {
+		existing := &(*conditions)[i]
+		if existing.Type != newCondition.Type {
+			continue
+		}
+		if existing.Status == newCondition.Status {
+			newCondition.LastTransitionTime = existing.LastTransitionTime
+		}
+		*existing = newCondition
+		return
+	}
+	*conditions = append(*conditions, newCondition)
 }
 
 type Position struct {

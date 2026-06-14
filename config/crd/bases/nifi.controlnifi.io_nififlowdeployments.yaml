@@ -40,6 +40,12 @@ spec:
               adoptionPolicy:
                 properties:
                   mode:
+                    default: Never
+                    enum:
+                    - Never
+                    - IfExists
+                    - AdoptById
+                    - AdoptByName
                     type: string
                   nifiId:
                     type: string
@@ -51,6 +57,7 @@ spec:
               clusterRef:
                 properties:
                   name:
+                    minLength: 1
                     type: string
                   namespace:
                     type: string
@@ -58,6 +65,10 @@ spec:
                 - name
                 type: object
               deletionPolicy:
+                default: Orphan
+                enum:
+                - Delete
+                - Orphan
                 type: string
               driftPolicy:
                 properties:
@@ -66,11 +77,22 @@ spec:
                       type: string
                     type: array
                   mode:
+                    default: Warn
+                    enum:
+                    - Ignore
+                    - Warn
+                    - Reconcile
+                    - Fail
                     type: string
                 type: object
               ownership:
                 properties:
                   mode:
+                    default: Managed
+                    enum:
+                    - Managed
+                    - InventoryOnly
+                    - Hybrid
                     type: string
                   prune:
                     type: boolean
@@ -78,6 +100,7 @@ spec:
               parameterContextRef:
                 properties:
                   name:
+                    minLength: 1
                     type: string
                   namespace:
                     type: string
@@ -99,6 +122,13 @@ spec:
               rollout:
                 properties:
                   strategy:
+                    default: ApplyOnly
+                    enum:
+                    - ApplyOnly
+                    - StopAllThenApply
+                    - ChangedOnly
+                    - Rolling
+                    - BlueGreen
                     type: string
                 type: object
               source:
@@ -106,6 +136,7 @@ spec:
                   bundleRef:
                     properties:
                       name:
+                        minLength: 1
                         type: string
                       namespace:
                         type: string
@@ -121,6 +152,7 @@ spec:
                           ref:
                             type: string
                           url:
+                            minLength: 1
                             type: string
                         required:
                         - url
@@ -130,6 +162,7 @@ spec:
                           digest:
                             type: string
                           image:
+                            minLength: 1
                             type: string
                         required:
                         - image
@@ -137,12 +170,15 @@ spec:
                       registry:
                         properties:
                           bucketId:
+                            minLength: 1
                             type: string
                           flowId:
+                            minLength: 1
                             type: string
                           registryClientRef:
                             properties:
                               name:
+                                minLength: 1
                                 type: string
                               namespace:
                                 type: string

@@ -1,0 +1,28 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiFlowDeployment
+metadata:
+  name: payments-prod
+spec:
+  clusterRef:
+    name: production
+  source:
+    bundleRef:
+      name: payments
+    version: 1.0.0
+  target:
+    parentProcessGroupRef:
+      root: true
+    processGroupName: payments
+  parameterContextRef:
+    name: payments-prod
+  rollout:
+    strategy: ApplyOnly
+  rollback:
+    enabled: true
+    onFailure: PreviousSuccessful
+  ownership:
+    mode: Managed
+    prune: true
+  driftPolicy:
+    mode: Warn
+

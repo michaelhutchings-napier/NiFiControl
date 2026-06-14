@@ -11,10 +11,14 @@ const (
 )
 
 type NiFiRegistryClientSpec struct {
-	ClusterRef     ClusterReference     `json:"clusterRef,omitempty"`
-	Type           RegistryClientType   `json:"type,omitempty"`
-	Description    string               `json:"description,omitempty"`
-	URI            string               `json:"uri,omitempty"`
+	ClusterRef ClusterReference `json:"clusterRef,omitempty"`
+	// +kubebuilder:validation:Enum=NiFiRegistry;GitHub;GitLab
+	// +kubebuilder:default=NiFiRegistry
+	Type        RegistryClientType `json:"type,omitempty"`
+	Description string             `json:"description,omitempty"`
+	URI         string             `json:"uri,omitempty"`
+	// +kubebuilder:validation:Enum=Delete;Orphan
+	// +kubebuilder:default=Orphan
 	DeletionPolicy DeletionPolicy       `json:"deletionPolicy,omitempty"`
 	DriftPolicy    DriftPolicy          `json:"driftPolicy,omitempty"`
 	AdoptionPolicy AdoptionPolicy       `json:"adoptionPolicy,omitempty"`

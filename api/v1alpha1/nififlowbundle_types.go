@@ -9,21 +9,25 @@ type FlowBundleSource struct {
 }
 
 type GitSource struct {
+	// +kubebuilder:validation:MinLength=1
 	URL  string `json:"url"`
 	Ref  string `json:"ref,omitempty"`
 	Path string `json:"path,omitempty"`
 }
 
 type OCISource struct {
+	// +kubebuilder:validation:MinLength=1
 	Image  string `json:"image"`
 	Digest string `json:"digest,omitempty"`
 }
 
 type RegistryFlowSource struct {
 	RegistryClientRef LocalObjectReference `json:"registryClientRef"`
-	BucketID          string               `json:"bucketId"`
-	FlowID            string               `json:"flowId"`
-	Version           string               `json:"version,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	BucketID string `json:"bucketId"`
+	// +kubebuilder:validation:MinLength=1
+	FlowID  string `json:"flowId"`
+	Version string `json:"version,omitempty"`
 }
 
 type NiFiFlowBundleSpec struct {
