@@ -178,3 +178,102 @@ func TestHTTPParameterContextClientGetParameterContextUpdateRequest(t *testing.T
 		t.Fatalf("request = %#v, want complete update-1", request.Request)
 	}
 }
+
+func TestHTTPRegistryClientClientCreateRegistryClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/controller/registry-clients" {
+			t.Fatalf("path = %s, want /nifi-api/controller/registry-clients", r.URL.Path)
+		}
+		var got RegistryClientEntity
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Component.Name != "platform-flows" {
+			t.Fatalf("name = %q, want platform-flows", got.Component.Name)
+		}
+		_ = json.NewEncoder(w).Encode(RegistryClientEntity{
+			ID:       "registry-1",
+			Revision: Revision{Version: 0},
+			Component: RegistryClientComponent{
+				ID:   "registry-1",
+				Name: got.Component.Name,
+			},
+		})
+	}))
+	defer server.Close()
+
+	created, err := (HTTPRegistryClientClient{}).CreateRegistryClient(t.Context(), server.URL, RegistryClientEntity{
+		Component: RegistryClientComponent{Name: "platform-flows"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID != "registry-1" {
+		t.Fatalf("created id = %q, want registry-1", created.ID)
+	}
+}
+
+func TestHTTPRegistryClientClientGetRegistryClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/controller/registry-clients/registry-1" {
+			t.Fatalf("path = %s, want /nifi-api/controller/registry-clients/registry-1", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(RegistryClientEntity{ID: "registry-1"})
+	}))
+	defer server.Close()
+
+	got, err := (HTTPRegistryClientClient{}).GetRegistryClient(t.Context(), server.URL, "registry-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "registry-1" {
+		t.Fatalf("id = %q, want registry-1", got.ID)
+	}
+}
+
+func TestHTTPRegistryClientClientUpdateRegistryClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Fatalf("method = %s, want PUT", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/controller/registry-clients/registry-1" {
+			t.Fatalf("path = %s, want /nifi-api/controller/registry-clients/registry-1", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(RegistryClientEntity{ID: "registry-1", Revision: Revision{Version: 2}})
+	}))
+	defer server.Close()
+
+	got, err := (HTTPRegistryClientClient{}).UpdateRegistryClient(t.Context(), server.URL, RegistryClientEntity{ID: "registry-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Revision.Version != 2 {
+		t.Fatalf("revision = %d, want 2", got.Revision.Version)
+	}
+}
+
+func TestHTTPRegistryClientClientDeleteRegistryClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Fatalf("method = %s, want DELETE", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/controller/registry-clients/registry-1" {
+			t.Fatalf("path = %s, want /nifi-api/controller/registry-clients/registry-1", r.URL.Path)
+		}
+		if r.URL.Query().Get("version") != "12" {
+			t.Fatalf("version = %q, want 12", r.URL.Query().Get("version"))
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	if err := (HTTPRegistryClientClient{}).DeleteRegistryClient(t.Context(), server.URL, "registry-1", 12); err != nil {
+		t.Fatal(err)
+	}
+}

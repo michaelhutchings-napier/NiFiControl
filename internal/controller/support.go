@@ -60,6 +60,23 @@ func markRegistryClientAccepted(ctx context.Context, c client.Client, obj *nifiv
 	return c.Status().Update(ctx, obj)
 }
 
+func markRegistryClientReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiRegistryClient, nifiID string, revisionVersion int64, resolvedType string) error {
+	obj.Status.CommonStatus.MarkReady(obj.Generation, "RegistryClientReady", "The NiFi registry client is reconciled.")
+	obj.Status.NiFiID = nifiID
+	obj.Status.Revision.Version = revisionVersion
+	obj.Status.ResolvedType = resolvedType
+	obj.Status.Sync.LastError = ""
+	return c.Status().Update(ctx, obj)
+}
+
+func markRegistryClientNotReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiRegistryClient, reason, message string) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, reason, message)
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.Sync.LastError = message
+	return c.Status().Update(ctx, obj)
+}
+
 func markRegistryClientWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiRegistryClient, waitingFor []string) error {
 	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
 	return c.Status().Update(ctx, obj)

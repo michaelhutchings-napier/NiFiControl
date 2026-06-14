@@ -31,7 +31,18 @@ type ParameterContextClient interface {
 	GetParameterContextUpdateRequest(ctx context.Context, baseURI string, contextID string, requestID string) (*ParameterContextUpdateRequestEntity, error)
 }
 
+type RegistryClientClient interface {
+	GetRegistryClient(ctx context.Context, baseURI string, id string) (*RegistryClientEntity, error)
+	CreateRegistryClient(ctx context.Context, baseURI string, entity RegistryClientEntity) (*RegistryClientEntity, error)
+	UpdateRegistryClient(ctx context.Context, baseURI string, entity RegistryClientEntity) (*RegistryClientEntity, error)
+	DeleteRegistryClient(ctx context.Context, baseURI string, id string, revisionVersion int64) error
+}
+
 type HTTPParameterContextClient struct {
+	Client *http.Client
+}
+
+type HTTPRegistryClientClient struct {
 	Client *http.Client
 }
 
@@ -80,6 +91,20 @@ type ParameterContextUpdateRequest struct {
 	FailureReason    string `json:"failureReason,omitempty"`
 	PercentCompleted int32  `json:"percentCompleted,omitempty"`
 	State            string `json:"state,omitempty"`
+}
+
+type RegistryClientEntity struct {
+	ID        string                  `json:"id,omitempty"`
+	Revision  Revision                `json:"revision,omitempty"`
+	Component RegistryClientComponent `json:"component,omitempty"`
+}
+
+type RegistryClientComponent struct {
+	ID          string            `json:"id,omitempty"`
+	Name        string            `json:"name,omitempty"`
+	Type        string            `json:"type,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Properties  map[string]string `json:"properties,omitempty"`
 }
 
 func (c HTTPReachabilityChecker) CheckReachable(ctx context.Context, baseURI string, timeout time.Duration) error {
@@ -193,7 +218,82 @@ func (c HTTPParameterContextClient) GetParameterContextUpdateRequest(ctx context
 	return &response, nil
 }
 
+func (c HTTPRegistryClientClient) GetRegistryClient(ctx context.Context, baseURI string, id string) (*RegistryClientEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/controller/registry-clients/%s", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response RegistryClientEntity
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPRegistryClientClient) CreateRegistryClient(ctx context.Context, baseURI string, entity RegistryClientEntity) (*RegistryClientEntity, error) {
+	endpoint, err := apiURL(baseURI, "/controller/registry-clients")
+	if err != nil {
+		return nil, err
+	}
+
+	var response RegistryClientEntity
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPRegistryClientClient) UpdateRegistryClient(ctx context.Context, baseURI string, entity RegistryClientEntity) (*RegistryClientEntity, error) {
+	id := entity.ID
+	if id == "" {
+		id = entity.Component.ID
+	}
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/controller/registry-clients/%s", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response RegistryClientEntity
+	if err := c.doJSON(ctx, http.MethodPut, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPRegistryClientClient) DeleteRegistryClient(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/controller/registry-clients/%s", url.PathEscape(id)))
+	if err != nil {
+		return err
+	}
+	endpoint += fmt.Sprintf("?version=%d", revisionVersion)
+
+	return c.doJSON(ctx, http.MethodDelete, endpoint, nil, nil)
+}
+
 func (c HTTPParameterContextClient) doJSON(ctx context.Context, method, endpoint string, body any, out any) error {
+	return doJSON(ctx, c.Client, method, endpoint, body, out)
+}
+
+func (c HTTPRegistryClientClient) doJSON(ctx context.Context, method, endpoint string, body any, out any) error {
+	return doJSON(ctx, c.Client, method, endpoint, body, out)
+}
+
+func apiURL(baseURI string, apiPath string) (string, error) {
+	parsed, err := url.Parse(strings.TrimRight(baseURI, "/"))
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("nifi api uri must include scheme and host")
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/nifi-api/" + strings.TrimLeft(apiPath, "/")
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String(), nil
+}
+
+func doJSON(ctx context.Context, client *http.Client, method, endpoint string, body any, out any) error {
 	var reader io.Reader
 	if body != nil {
 		payload, err := json.Marshal(body)
@@ -212,7 +312,6 @@ func (c HTTPParameterContextClient) doJSON(ctx context.Context, method, endpoint
 	}
 	req.Header.Set("Accept", "application/json")
 
-	client := c.Client
 	if client == nil {
 		client = &http.Client{Timeout: defaultTimeout}
 	}
@@ -234,18 +333,4 @@ func (c HTTPParameterContextClient) doJSON(ctx context.Context, method, endpoint
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
-}
-
-func apiURL(baseURI string, apiPath string) (string, error) {
-	parsed, err := url.Parse(strings.TrimRight(baseURI, "/"))
-	if err != nil {
-		return "", err
-	}
-	if parsed.Scheme == "" || parsed.Host == "" {
-		return "", fmt.Errorf("nifi api uri must include scheme and host")
-	}
-	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/nifi-api/" + strings.TrimLeft(apiPath, "/")
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	return parsed.String(), nil
 }

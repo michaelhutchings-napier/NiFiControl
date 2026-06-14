@@ -90,7 +90,8 @@ func (r *NiFiClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 type NiFiRegistryClientReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme               *runtime.Scheme
+	RegistryClientClient nifi.RegistryClientClient
 }
 
 func (r *NiFiRegistryClientReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -102,13 +103,12 @@ func (r *NiFiRegistryClientReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, err
 	}
 	if !instance.DeletionTimestamp.IsZero() {
-		_, err := removeFinalizer(ctx, r.Client, instance)
-		return ctrl.Result{}, err
+		return r.reconcileRegistryClientDelete(ctx, instance)
 	}
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
 	}
-	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -118,10 +118,209 @@ func (r *NiFiRegistryClientReconciler) Reconcile(ctx context.Context, req ctrl.R
 		}
 		return ctrl.Result{}, nil
 	}
-	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
-		return ctrl.Result{}, markRegistryClientAccepted(ctx, r.Client, instance)
+
+	entity, resolvedType, supported := desiredRegistryClient(instance)
+	if !supported {
+		message := fmt.Sprintf("Registry client type %q is not implemented yet.", instance.Spec.Type)
+		if shouldMarkRegistryClientNotReady(instance, "RegistryClientTypeUnsupported", message) {
+			return ctrl.Result{}, markRegistryClientNotReady(ctx, r.Client, instance, "RegistryClientTypeUnsupported", message)
+		}
+		return ctrl.Result{}, nil
+	}
+
+	endpoint := cluster.Status.Endpoint
+	if endpoint == "" && cluster.Spec.API != nil {
+		endpoint = cluster.Spec.API.URI
+	}
+	if endpoint == "" {
+		message := "Referenced NiFiCluster is ready but does not expose a NiFi API endpoint."
+		if shouldMarkRegistryClientNotReady(instance, "ClusterEndpointMissing", message) {
+			return ctrl.Result{}, markRegistryClientNotReady(ctx, r.Client, instance, "ClusterEndpointMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	registryClient := r.RegistryClientClient
+	if registryClient == nil {
+		registryClient = nifi.HTTPRegistryClientClient{}
+	}
+
+	if instance.Status.NiFiID != "" {
+		existing, err := registryClient.GetRegistryClient(ctx, endpoint, instance.Status.NiFiID)
+		if err != nil {
+			message := fmt.Sprintf("Failed to get NiFi registry client: %v", err)
+			if shouldMarkRegistryClientNotReady(instance, "NiFiGetFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markRegistryClientNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		return r.reconcileExistingRegistryClient(ctx, instance, endpoint, registryClient, entity, existing, resolvedType)
+	}
+
+	if instance.Spec.AdoptionPolicy.Mode == nifiv1alpha1.AdoptionPolicyAdoptByID && instance.Spec.AdoptionPolicy.NiFiID != "" {
+		existing, err := registryClient.GetRegistryClient(ctx, endpoint, instance.Spec.AdoptionPolicy.NiFiID)
+		if err != nil {
+			message := fmt.Sprintf("Failed to adopt NiFi registry client: %v", err)
+			if shouldMarkRegistryClientNotReady(instance, "AdoptionFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markRegistryClientNotReady(ctx, r.Client, instance, "AdoptionFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		return r.reconcileExistingRegistryClient(ctx, instance, endpoint, registryClient, entity, existing, resolvedType)
+	}
+
+	created, err := registryClient.CreateRegistryClient(ctx, endpoint, entity)
+	if err != nil {
+		message := fmt.Sprintf("Failed to create NiFi registry client: %v", err)
+		if shouldMarkRegistryClientNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markRegistryClientNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	if created == nil {
+		message := "NiFi returned an empty registry client response."
+		if shouldMarkRegistryClientNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markRegistryClientNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	nifiID := registryClientEntityID(*created)
+	if !registryClientStatusMatches(instance, nifiID, created.Revision.Version, resolvedType) {
+		return ctrl.Result{}, markRegistryClientReady(ctx, r.Client, instance, nifiID, created.Revision.Version, resolvedType)
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *NiFiRegistryClientReconciler) reconcileRegistryClientDelete(ctx context.Context, instance *nifiv1alpha1.NiFiRegistryClient) (ctrl.Result, error) {
+	if instance.Spec.DeletionPolicy != nifiv1alpha1.DeletionPolicyDelete || instance.Status.NiFiID == "" {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	endpoint := cluster.Status.Endpoint
+	if endpoint == "" && cluster.Spec.API != nil {
+		endpoint = cluster.Spec.API.URI
+	}
+	if endpoint == "" {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	registryClient := r.RegistryClientClient
+	if registryClient == nil {
+		registryClient = nifi.HTTPRegistryClientClient{}
+	}
+	if err := registryClient.DeleteRegistryClient(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	_, err = removeFinalizer(ctx, r.Client, instance)
+	return ctrl.Result{}, err
+}
+
+func (r *NiFiRegistryClientReconciler) reconcileExistingRegistryClient(ctx context.Context, instance *nifiv1alpha1.NiFiRegistryClient, endpoint string, registryClient nifi.RegistryClientClient, desired nifi.RegistryClientEntity, existing *nifi.RegistryClientEntity, resolvedType string) (ctrl.Result, error) {
+	if existing == nil {
+		message := "NiFi returned an empty registry client response."
+		if shouldMarkRegistryClientNotReady(instance, "NiFiGetFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markRegistryClientNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	nifiID := registryClientEntityID(*existing)
+	if registryClientNeedsUpdate(desired, *existing) {
+		updateEntity := desired
+		updateEntity.ID = nifiID
+		updateEntity.Component.ID = nifiID
+		updateEntity.Revision.Version = existing.Revision.Version
+		updated, err := registryClient.UpdateRegistryClient(ctx, endpoint, updateEntity)
+		if err != nil {
+			message := fmt.Sprintf("Failed to update NiFi registry client: %v", err)
+			if shouldMarkRegistryClientNotReady(instance, "NiFiUpdateFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markRegistryClientNotReady(ctx, r.Client, instance, "NiFiUpdateFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if updated != nil {
+			nifiID = registryClientEntityID(*updated)
+			return ctrl.Result{}, markRegistryClientReady(ctx, r.Client, instance, nifiID, updated.Revision.Version, resolvedType)
+		}
+	}
+
+	if !registryClientStatusMatches(instance, nifiID, existing.Revision.Version, resolvedType) {
+		return ctrl.Result{}, markRegistryClientReady(ctx, r.Client, instance, nifiID, existing.Revision.Version, resolvedType)
+	}
+	return ctrl.Result{}, nil
+}
+
+func desiredRegistryClient(instance *nifiv1alpha1.NiFiRegistryClient) (nifi.RegistryClientEntity, string, bool) {
+	resolvedType := registryClientType(instance.Spec.Type)
+	if instance.Spec.Type != "" && instance.Spec.Type != nifiv1alpha1.RegistryClientTypeNiFiRegistry {
+		return nifi.RegistryClientEntity{}, resolvedType, false
+	}
+	return nifi.RegistryClientEntity{
+		Revision: nifi.Revision{Version: 0},
+		Component: nifi.RegistryClientComponent{
+			Name:        instance.Name,
+			Type:        resolvedType,
+			Description: instance.Spec.Description,
+			Properties: map[string]string{
+				"url": instance.Spec.URI,
+			},
+		},
+	}, resolvedType, true
+}
+
+func registryClientType(registryType nifiv1alpha1.RegistryClientType) string {
+	switch registryType {
+	case nifiv1alpha1.RegistryClientTypeGitHub:
+		return "org.apache.nifi.github.GitHubFlowRegistryClient"
+	case nifiv1alpha1.RegistryClientTypeGitLab:
+		return "org.apache.nifi.gitlab.GitLabFlowRegistryClient"
+	default:
+		return "org.apache.nifi.registry.flow.NifiRegistryFlowRegistryClient"
+	}
+}
+
+func registryClientEntityID(entity nifi.RegistryClientEntity) string {
+	if entity.ID != "" {
+		return entity.ID
+	}
+	return entity.Component.ID
+}
+
+func registryClientNeedsUpdate(desired nifi.RegistryClientEntity, existing nifi.RegistryClientEntity) bool {
+	if desired.Component.Name != existing.Component.Name ||
+		desired.Component.Type != existing.Component.Type ||
+		desired.Component.Description != existing.Component.Description {
+		return true
+	}
+	return desired.Component.Properties["url"] != existing.Component.Properties["url"]
+}
+
+func registryClientStatusMatches(instance *nifiv1alpha1.NiFiRegistryClient, nifiID string, revisionVersion int64, resolvedType string) bool {
+	return instance.Status.ObservedGeneration == instance.Generation &&
+		instance.Status.Ready &&
+		instance.Status.Dependencies.Ready &&
+		instance.Status.NiFiID == nifiID &&
+		instance.Status.Revision.Version == revisionVersion &&
+		instance.Status.ResolvedType == resolvedType
+}
+
+func shouldMarkRegistryClientNotReady(instance *nifiv1alpha1.NiFiRegistryClient, reason, message string) bool {
+	if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Ready || instance.Status.Sync.LastError != message {
+		return true
+	}
+	for _, condition := range instance.Status.Conditions {
+		if condition.Type == string(nifiv1alpha1.ConditionReady) {
+			return condition.Reason != reason
+		}
+	}
+	return true
 }
 
 func (r *NiFiRegistryClientReconciler) SetupWithManager(mgr ctrl.Manager) error {
