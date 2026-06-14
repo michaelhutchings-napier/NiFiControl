@@ -101,6 +101,8 @@ spec:
                 type: string
               uri:
                 type: string
+            required:
+            - clusterRef
             type: object
           status:
             properties:

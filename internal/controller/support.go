@@ -2,8 +2,11 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
@@ -36,13 +39,28 @@ func markRegistryClientAccepted(ctx context.Context, c client.Client, obj *nifiv
 	return c.Status().Update(ctx, obj)
 }
 
+func markRegistryClientWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiRegistryClient, waitingFor []string) error {
+	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
+	return c.Status().Update(ctx, obj)
+}
+
 func markParameterContextAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiParameterContext) error {
 	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
 	return c.Status().Update(ctx, obj)
 }
 
+func markParameterContextWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiParameterContext, waitingFor []string) error {
+	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
+	return c.Status().Update(ctx, obj)
+}
+
 func markControllerServiceAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiControllerService) error {
 	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+	return c.Status().Update(ctx, obj)
+}
+
+func markControllerServiceWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiControllerService, waitingFor []string) error {
+	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
 	return c.Status().Update(ctx, obj)
 }
 
@@ -54,4 +72,46 @@ func markFlowBundleAccepted(ctx context.Context, c client.Client, obj *nifiv1alp
 func markFlowDeploymentAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFlowDeployment) error {
 	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
 	return c.Status().Update(ctx, obj)
+}
+
+func markFlowDeploymentWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFlowDeployment, waitingFor []string) error {
+	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
+	return c.Status().Update(ctx, obj)
+}
+
+func clusterDependencyWaitingFor(ctx context.Context, c client.Client, namespace string, ref nifiv1alpha1.ClusterReference) ([]string, error) {
+	if ref.Name == "" {
+		return []string{"clusterRef.name"}, nil
+	}
+
+	refNamespace := ref.Namespace
+	if refNamespace == "" {
+		refNamespace = namespace
+	}
+
+	cluster := &nifiv1alpha1.NiFiCluster{}
+	key := types.NamespacedName{Name: ref.Name, Namespace: refNamespace}
+	if err := c.Get(ctx, key, cluster); err != nil {
+		if apierrors.IsNotFound(err) {
+			return []string{fmt.Sprintf("NiFiCluster/%s/%s", refNamespace, ref.Name)}, nil
+		}
+		return nil, err
+	}
+	if !cluster.Status.Ready {
+		return []string{fmt.Sprintf("NiFiCluster/%s/%s:Ready", refNamespace, ref.Name)}, nil
+	}
+
+	return nil, nil
+}
+
+func waitingForChanged(current []string, desired []string) bool {
+	if len(current) != len(desired) {
+		return true
+	}
+	for i := range current {
+		if current[i] != desired[i] {
+			return true
+		}
+	}
+	return false
 }

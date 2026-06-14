@@ -32,7 +32,7 @@ type OwnershipPolicy struct {
 }
 
 type NiFiFlowDeploymentSpec struct {
-	ClusterRef          ClusterReference      `json:"clusterRef,omitempty"`
+	ClusterRef          ClusterReference      `json:"clusterRef"`
 	Source              FlowDeploymentSource  `json:"source"`
 	Target              FlowDeploymentTarget  `json:"target"`
 	ParameterContextRef *LocalObjectReference `json:"parameterContextRef,omitempty"`

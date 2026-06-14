@@ -144,6 +144,8 @@ spec:
                   paused:
                     type: boolean
                 type: object
+            required:
+            - clusterRef
             type: object
           status:
             properties:

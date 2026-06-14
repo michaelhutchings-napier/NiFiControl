@@ -11,7 +11,7 @@ const (
 )
 
 type NiFiRegistryClientSpec struct {
-	ClusterRef ClusterReference `json:"clusterRef,omitempty"`
+	ClusterRef ClusterReference `json:"clusterRef"`
 	// +kubebuilder:validation:Enum=NiFiRegistry;GitHub;GitLab
 	// +kubebuilder:default=NiFiRegistry
 	Type        RegistryClientType `json:"type,omitempty"`

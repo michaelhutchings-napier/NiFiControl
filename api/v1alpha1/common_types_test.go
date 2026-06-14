@@ -17,8 +17,34 @@ func TestCommonStatusMarkAccepted(t *testing.T) {
 	if status.Ready {
 		t.Fatal("ready = true, want false while NiFi reconciliation is not implemented")
 	}
+	if !status.Dependencies.Ready {
+		t.Fatal("dependencies.ready = false, want true after dependencies pass")
+	}
 	assertCondition(t, status.Conditions, ConditionReady, metav1.ConditionFalse, "ReconciliationPending")
 	assertCondition(t, status.Conditions, ConditionReconciling, metav1.ConditionTrue, "Accepted")
+	assertCondition(t, status.Conditions, ConditionDependenciesReady, metav1.ConditionTrue, "DependenciesReady")
+}
+
+func TestCommonStatusMarkWaitingForDependencies(t *testing.T) {
+	status := CommonStatus{}
+
+	status.MarkWaitingForDependencies(8, []string{"NiFiCluster/default/production:Ready"})
+
+	if status.ObservedGeneration != 8 {
+		t.Fatalf("observedGeneration = %d, want 8", status.ObservedGeneration)
+	}
+	if status.Ready {
+		t.Fatal("ready = true, want false while waiting for dependencies")
+	}
+	if status.Dependencies.Ready {
+		t.Fatal("dependencies.ready = true, want false")
+	}
+	if len(status.Dependencies.WaitingFor) != 1 || status.Dependencies.WaitingFor[0] != "NiFiCluster/default/production:Ready" {
+		t.Fatalf("waitingFor = %#v, want cluster readiness dependency", status.Dependencies.WaitingFor)
+	}
+	assertCondition(t, status.Conditions, ConditionDependenciesReady, metav1.ConditionFalse, "DependenciesNotReady")
+	assertCondition(t, status.Conditions, ConditionReady, metav1.ConditionFalse, "DependenciesNotReady")
+	assertCondition(t, status.Conditions, ConditionReconciling, metav1.ConditionTrue, "WaitingForDependencies")
 }
 
 func TestSetConditionPreservesTransitionTimeWhenStatusDoesNotChange(t *testing.T) {

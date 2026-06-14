@@ -79,7 +79,17 @@ func (r *NiFiRegistryClientReconciler) Reconcile(ctx context.Context, req ctrl.R
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
 	}
-	if instance.Status.ObservedGeneration != instance.Generation {
+	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markRegistryClientWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
 		return ctrl.Result{}, markRegistryClientAccepted(ctx, r.Client, instance)
 	}
 	return ctrl.Result{}, nil
@@ -109,7 +119,17 @@ func (r *NiFiParameterContextReconciler) Reconcile(ctx context.Context, req ctrl
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
 	}
-	if instance.Status.ObservedGeneration != instance.Generation {
+	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markParameterContextWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
 		return ctrl.Result{}, markParameterContextAccepted(ctx, r.Client, instance)
 	}
 	return ctrl.Result{}, nil
@@ -139,7 +159,17 @@ func (r *NiFiControllerServiceReconciler) Reconcile(ctx context.Context, req ctr
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
 	}
-	if instance.Status.ObservedGeneration != instance.Generation {
+	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markControllerServiceWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
 		return ctrl.Result{}, markControllerServiceAccepted(ctx, r.Client, instance)
 	}
 	return ctrl.Result{}, nil
@@ -199,7 +229,17 @@ func (r *NiFiFlowDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.R
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
 	}
-	if instance.Status.ObservedGeneration != instance.Generation {
+	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markFlowDeploymentWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
 		return ctrl.Result{}, markFlowDeploymentAccepted(ctx, r.Client, instance)
 	}
 	return ctrl.Result{}, nil

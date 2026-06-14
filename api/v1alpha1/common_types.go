@@ -129,10 +129,22 @@ func (s *CommonStatus) SetCondition(conditionType ConditionType, status metav1.C
 func (s *CommonStatus) MarkAccepted(observedGeneration int64) {
 	s.ObservedGeneration = observedGeneration
 	s.Ready = false
-	s.Dependencies.Ready = false
+	s.Dependencies.Ready = true
+	s.Dependencies.WaitingFor = nil
 	s.Drift.Status = "Unknown"
+	s.SetCondition(ConditionDependenciesReady, metav1.ConditionTrue, "DependenciesReady", "All declared dependencies are ready.", observedGeneration)
 	s.SetCondition(ConditionReady, metav1.ConditionFalse, "ReconciliationPending", "NiFi-side reconciliation has not been implemented yet.", observedGeneration)
 	s.SetCondition(ConditionReconciling, metav1.ConditionTrue, "Accepted", "The resource has been accepted by the NiFiControl controller.", observedGeneration)
+}
+
+func (s *CommonStatus) MarkWaitingForDependencies(observedGeneration int64, waitingFor []string) {
+	s.ObservedGeneration = observedGeneration
+	s.Ready = false
+	s.Dependencies.Ready = false
+	s.Dependencies.WaitingFor = waitingFor
+	s.SetCondition(ConditionDependenciesReady, metav1.ConditionFalse, "DependenciesNotReady", "One or more dependencies are not ready.", observedGeneration)
+	s.SetCondition(ConditionReady, metav1.ConditionFalse, "DependenciesNotReady", "The resource is waiting for dependencies.", observedGeneration)
+	s.SetCondition(ConditionReconciling, metav1.ConditionTrue, "WaitingForDependencies", "The controller is waiting for dependencies before reconciling NiFi state.", observedGeneration)
 }
 
 func (s *CommonStatus) MarkDeleting(observedGeneration int64) {

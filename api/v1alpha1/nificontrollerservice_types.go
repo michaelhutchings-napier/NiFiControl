@@ -3,7 +3,7 @@ package v1alpha1
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 type NiFiControllerServiceSpec struct {
-	ClusterRef            ClusterReference      `json:"clusterRef,omitempty"`
+	ClusterRef            ClusterReference      `json:"clusterRef"`
 	ParentProcessGroupRef ProcessGroupReference `json:"parentProcessGroupRef,omitempty"`
 	// +kubebuilder:validation:MinLength=1
 	Type                string                             `json:"type"`

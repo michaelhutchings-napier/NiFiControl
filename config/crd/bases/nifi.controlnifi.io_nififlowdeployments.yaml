@@ -211,6 +211,7 @@ spec:
                     type: string
                 type: object
             required:
+            - clusterRef
             - source
             - target
             type: object

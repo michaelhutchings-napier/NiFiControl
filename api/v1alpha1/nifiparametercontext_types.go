@@ -11,7 +11,7 @@ type Parameter struct {
 }
 
 type NiFiParameterContextSpec struct {
-	ClusterRef    ClusterReference       `json:"clusterRef,omitempty"`
+	ClusterRef    ClusterReference       `json:"clusterRef"`
 	Description   string                 `json:"description,omitempty"`
 	Parameters    []Parameter            `json:"parameters,omitempty"`
 	InheritedRefs []LocalObjectReference `json:"inheritedRefs,omitempty"`
