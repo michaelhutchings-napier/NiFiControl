@@ -3,8 +3,10 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
+	"github.com/michaelhutchings-napier/NiFiControl/pkg/nifi"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -35,7 +37,8 @@ import (
 
 type NiFiClusterReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme              *runtime.Scheme
+	ReachabilityChecker nifi.ReachabilityChecker
 }
 
 func (r *NiFiClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -52,6 +55,26 @@ func (r *NiFiClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
+	}
+	if instance.Spec.API != nil && instance.Spec.API.URI != "" {
+		timeout := time.Duration(0)
+		if instance.Spec.API.Timeout != nil {
+			timeout = instance.Spec.API.Timeout.Duration
+		}
+		checker := r.ReachabilityChecker
+		if checker == nil {
+			checker = nifi.HTTPReachabilityChecker{}
+		}
+		if err := checker.CheckReachable(ctx, instance.Spec.API.URI, timeout); err != nil {
+			if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Ready {
+				return ctrl.Result{}, markClusterUnreachable(ctx, r.Client, instance, err.Error())
+			}
+			return ctrl.Result{}, nil
+		}
+		if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Ready || instance.Status.Endpoint != instance.Spec.API.URI {
+			return ctrl.Result{}, markClusterReachable(ctx, r.Client, instance)
+		}
+		return ctrl.Result{}, nil
 	}
 	if instance.Status.ObservedGeneration != instance.Generation {
 		return ctrl.Result{}, markClusterAccepted(ctx, r.Client, instance)

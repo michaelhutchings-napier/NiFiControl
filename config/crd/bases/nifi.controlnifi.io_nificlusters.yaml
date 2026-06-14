@@ -54,6 +54,16 @@ spec:
                   reviewBeforeMutate:
                     type: boolean
                 type: object
+              api:
+                properties:
+                  timeout:
+                    type: string
+                  uri:
+                    minLength: 1
+                    type: string
+                required:
+                - uri
+                type: object
               deletionPolicy:
                 default: Orphan
                 enum:

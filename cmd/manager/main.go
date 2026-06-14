@@ -6,6 +6,7 @@ import (
 
 	"github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	"github.com/michaelhutchings-napier/NiFiControl/internal/controller"
+	"github.com/michaelhutchings-napier/NiFiControl/pkg/nifi"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -38,7 +39,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.NiFiClusterReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.NiFiClusterReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), ReachabilityChecker: nifi.HTTPReachabilityChecker{}}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
 	if err := (&controller.NiFiRegistryClientReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr); err != nil {

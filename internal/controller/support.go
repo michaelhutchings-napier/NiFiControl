@@ -6,6 +6,7 @@ import (
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -33,6 +34,24 @@ func removeFinalizer(ctx context.Context, c client.Client, obj client.Object) (b
 
 func markClusterAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiCluster) error {
 	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+	return c.Status().Update(ctx, obj)
+}
+
+func markClusterReachable(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiCluster) error {
+	obj.Status.CommonStatus.MarkReady(obj.Generation, "ClusterReachable", "The NiFi API endpoint is reachable.")
+	obj.Status.CommonStatus.SetCondition(nifiv1alpha1.ConditionClusterReachable, metav1.ConditionTrue, "ClusterReachable", "The NiFi API endpoint is reachable.", obj.Generation)
+	if obj.Spec.API != nil {
+		obj.Status.Endpoint = obj.Spec.API.URI
+	}
+	return c.Status().Update(ctx, obj)
+}
+
+func markClusterUnreachable(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiCluster, message string) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, "ClusterUnreachable", message)
+	obj.Status.CommonStatus.SetCondition(nifiv1alpha1.ConditionClusterReachable, metav1.ConditionFalse, "ClusterUnreachable", message, obj.Generation)
+	if obj.Spec.API != nil {
+		obj.Status.Endpoint = obj.Spec.API.URI
+	}
 	return c.Status().Update(ctx, obj)
 }
 

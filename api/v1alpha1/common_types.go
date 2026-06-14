@@ -137,6 +137,24 @@ func (s *CommonStatus) MarkAccepted(observedGeneration int64) {
 	s.SetCondition(ConditionReconciling, metav1.ConditionTrue, "Accepted", "The resource has been accepted by the NiFiControl controller.", observedGeneration)
 }
 
+func (s *CommonStatus) MarkReady(observedGeneration int64, reason, message string) {
+	s.ObservedGeneration = observedGeneration
+	s.Ready = true
+	s.Dependencies.Ready = true
+	s.Dependencies.WaitingFor = nil
+	s.Drift.Status = "Unknown"
+	s.SetCondition(ConditionDependenciesReady, metav1.ConditionTrue, "DependenciesReady", "All declared dependencies are ready.", observedGeneration)
+	s.SetCondition(ConditionReady, metav1.ConditionTrue, reason, message, observedGeneration)
+	s.SetCondition(ConditionReconciling, metav1.ConditionFalse, reason, message, observedGeneration)
+}
+
+func (s *CommonStatus) MarkNotReady(observedGeneration int64, reason, message string) {
+	s.ObservedGeneration = observedGeneration
+	s.Ready = false
+	s.SetCondition(ConditionReady, metav1.ConditionFalse, reason, message, observedGeneration)
+	s.SetCondition(ConditionReconciling, metav1.ConditionTrue, reason, message, observedGeneration)
+}
+
 func (s *CommonStatus) MarkWaitingForDependencies(observedGeneration int64, waitingFor []string) {
 	s.ObservedGeneration = observedGeneration
 	s.Ready = false

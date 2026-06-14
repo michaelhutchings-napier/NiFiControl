@@ -15,13 +15,20 @@ type NiFiClusterSpec struct {
 	Mode  ClusterMode `json:"mode,omitempty"`
 	Image string      `json:"image,omitempty"`
 	// +kubebuilder:validation:Minimum=0
-	Replicas int32 `json:"replicas,omitempty"`
+	Replicas int32               `json:"replicas,omitempty"`
+	API      *NiFiClusterAPISpec `json:"api,omitempty"`
 	// +kubebuilder:validation:Enum=Delete;Orphan
 	// +kubebuilder:default=Orphan
 	DeletionPolicy DeletionPolicy       `json:"deletionPolicy,omitempty"`
 	DriftPolicy    DriftPolicy          `json:"driftPolicy,omitempty"`
 	AdoptionPolicy AdoptionPolicy       `json:"adoptionPolicy,omitempty"`
 	Reconciliation ReconciliationPolicy `json:"reconciliation,omitempty"`
+}
+
+type NiFiClusterAPISpec struct {
+	// +kubebuilder:validation:MinLength=1
+	URI     string           `json:"uri"`
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
 }
 
 type NiFiClusterStatus struct {

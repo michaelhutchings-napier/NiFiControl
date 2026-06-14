@@ -36,3 +36,12 @@ services, and flow deployments are requeued.
 This keeps dependency status fresh without requiring users to touch dependent
 objects after a cluster becomes ready.
 
+## NiFi API Reachability
+
+`NiFiCluster` supports an initial `spec.api.uri` field. When set, the controller
+checks `GET /nifi-api/flow/about` and marks the cluster ready if the endpoint
+responds with a 2xx or 3xx status code.
+
+This is intentionally narrow. Authentication, TLS trust configuration, and rich
+cluster discovery should be added before using the checker as the full NiFi
+client implementation.

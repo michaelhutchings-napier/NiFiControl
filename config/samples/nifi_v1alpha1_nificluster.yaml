@@ -6,6 +6,8 @@ spec:
   mode: Internal
   image: apache/nifi:2.0.0
   replicas: 3
+  api:
+    uri: https://nifi.example.com
   deletionPolicy: Orphan
   driftPolicy:
     mode: Warn
