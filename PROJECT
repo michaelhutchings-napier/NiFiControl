@@ -1,0 +1,56 @@
+domain: controlnifi.io
+layout:
+- go.kubebuilder.io/v4
+projectName: NiFiControl
+repo: github.com/michaelhutchings-napier/NiFiControl
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: controlnifi.io
+  group: nifi
+  kind: NiFiCluster
+  path: github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: controlnifi.io
+  group: nifi
+  kind: NiFiRegistryClient
+  path: github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: controlnifi.io
+  group: nifi
+  kind: NiFiParameterContext
+  path: github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: controlnifi.io
+  group: nifi
+  kind: NiFiControllerService
+  path: github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: controlnifi.io
+  group: nifi
+  kind: NiFiFlowBundle
+  path: github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: controlnifi.io
+  group: nifi
+  kind: NiFiFlowDeployment
+  path: github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1
+  version: v1alpha1
+version: "3"
+

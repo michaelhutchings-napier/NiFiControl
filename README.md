@@ -11,6 +11,7 @@ contexts, controller services, and high-level flow deployments.
 - Phase 1 API types compile.
 - Controller manager starts with stub reconcilers.
 - No NiFi-side reconciliation is implemented yet.
+- CRD and RBAC manifests are generated with `controller-gen`.
 
 ## Module
 
@@ -18,3 +19,16 @@ contexts, controller services, and high-level flow deployments.
 github.com/michaelhutchings-napier/NiFiControl
 ```
 
+## Development
+
+```bash
+make generate
+make manifests
+go test ./...
+```
+
+Install the CRDs and controller manifests with:
+
+```bash
+kubectl apply -k config/default
+```

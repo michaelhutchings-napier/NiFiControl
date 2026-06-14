@@ -49,6 +49,8 @@ type NiFiFlowDeploymentStatus struct {
 	SyncState       string `json:"syncState,omitempty"`
 }
 
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 type NiFiFlowDeployment struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -56,6 +58,7 @@ type NiFiFlowDeployment struct {
 	Status            NiFiFlowDeploymentStatus `json:"status,omitempty"`
 }
 
+// +kubebuilder:object:root=true
 type NiFiFlowDeploymentList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

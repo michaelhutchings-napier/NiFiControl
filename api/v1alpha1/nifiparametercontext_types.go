@@ -24,6 +24,8 @@ type NiFiParameterContextStatus struct {
 	CommonStatus `json:",inline"`
 }
 
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 type NiFiParameterContext struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -31,6 +33,7 @@ type NiFiParameterContext struct {
 	Status            NiFiParameterContextStatus `json:"status,omitempty"`
 }
 
+// +kubebuilder:object:root=true
 type NiFiParameterContextList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

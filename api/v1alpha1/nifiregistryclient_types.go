@@ -26,6 +26,8 @@ type NiFiRegistryClientStatus struct {
 	ResolvedType string `json:"resolvedType,omitempty"`
 }
 
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 type NiFiRegistryClient struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -33,6 +35,7 @@ type NiFiRegistryClient struct {
 	Status            NiFiRegistryClientStatus `json:"status,omitempty"`
 }
 
+// +kubebuilder:object:root=true
 type NiFiRegistryClientList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

@@ -22,6 +22,8 @@ type NiFiControllerServiceStatus struct {
 	ValidationStatus string `json:"validationStatus,omitempty"`
 }
 
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 type NiFiControllerService struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -29,6 +31,7 @@ type NiFiControllerService struct {
 	Status            NiFiControllerServiceStatus `json:"status,omitempty"`
 }
 
+// +kubebuilder:object:root=true
 type NiFiControllerServiceList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

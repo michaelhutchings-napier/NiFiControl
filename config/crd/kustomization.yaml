@@ -1,0 +1,8 @@
+resources:
+  - bases/nifi.controlnifi.io_nificlusters.yaml
+  - bases/nifi.controlnifi.io_nificontrollerservices.yaml
+  - bases/nifi.controlnifi.io_nififlowbundles.yaml
+  - bases/nifi.controlnifi.io_nififlowdeployments.yaml
+  - bases/nifi.controlnifi.io_nifiparametercontexts.yaml
+  - bases/nifi.controlnifi.io_nifiregistryclients.yaml
+

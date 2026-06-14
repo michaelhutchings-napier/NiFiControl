@@ -1,0 +1,13 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nificontrol-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nificontrol-manager-role
+subjects:
+  - kind: ServiceAccount
+    name: nificontrol-controller-manager
+    namespace: nificontrol-system
+

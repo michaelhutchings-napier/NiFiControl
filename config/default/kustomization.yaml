@@ -1,0 +1,8 @@
+resources:
+  - namespace.yaml
+  - ../crd
+  - ../rbac
+  - service_account.yaml
+  - role_binding.yaml
+  - ../manager
+

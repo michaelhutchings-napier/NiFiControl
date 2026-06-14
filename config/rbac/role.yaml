@@ -1,0 +1,47 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nificontrol-manager-role
+rules:
+- apiGroups:
+  - nifi.controlnifi.io
+  resources:
+  - nificlusters
+  - nificontrollerservices
+  - nififlowbundles
+  - nififlowdeployments
+  - nifiparametercontexts
+  - nifiregistryclients
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - nifi.controlnifi.io
+  resources:
+  - nificlusters/finalizers
+  - nificontrollerservices/finalizers
+  - nififlowbundles/finalizers
+  - nififlowdeployments/finalizers
+  - nifiparametercontexts/finalizers
+  - nifiregistryclients/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - nifi.controlnifi.io
+  resources:
+  - nificlusters/status
+  - nificontrollerservices/status
+  - nififlowbundles/status
+  - nififlowdeployments/status
+  - nifiparametercontexts/status
+  - nifiregistryclients/status
+  verbs:
+  - get
+  - patch
+  - update
