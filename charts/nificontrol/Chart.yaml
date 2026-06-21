@@ -1,0 +1,18 @@
+apiVersion: v2
+name: nificontrol
+description: A declarative Kubernetes control plane for Apache NiFi
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/michaelhutchings-napier/NiFiControl
+sources:
+  - https://github.com/michaelhutchings-napier/NiFiControl
+maintainers:
+  - name: Michael Hutchings
+    url: https://github.com/michaelhutchings-napier
+keywords:
+  - apache-nifi
+  - kubernetes-operator
+  - dataflow
+  - gitops

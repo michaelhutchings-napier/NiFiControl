@@ -1,0 +1,85 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/michaelhutchings-napier/nificontrol
+  pullPolicy: IfNotPresent
+  tag: latest
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automountServiceAccountToken: true
+  annotations: {}
+  name: ""
+
+rbac:
+  create: true
+
+leaderElection:
+  enabled: true
+
+metrics:
+  bindAddress: ":8080"
+  port: 8080
+  service:
+    enabled: true
+    type: ClusterIP
+    port: 8080
+    annotations: {}
+
+healthProbe:
+  bindAddress: ":8081"
+  port: 8081
+  liveness:
+    initialDelaySeconds: 15
+    periodSeconds: 20
+    timeoutSeconds: 1
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 1
+    failureThreshold: 3
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+revisionHistoryLimit: 10
+terminationGracePeriodSeconds: 10
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+priorityClassName: ""
+
+extraArgs: []
+extraEnv: []
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1

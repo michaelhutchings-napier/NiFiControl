@@ -1,0 +1,9 @@
+NiFiControl has been installed in namespace {{ .Release.Namespace }}.
+
+Check the controller:
+  kubectl get deployment {{ include "nificontrol.fullname" . }} -n {{ .Release.Namespace }}
+
+List the installed NiFi CRDs:
+  kubectl get crd | grep nifi.controlnifi.io
+
+Create a NiFiCluster resource to point NiFiControl at an existing NiFi API.
