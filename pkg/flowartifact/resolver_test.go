@@ -1,17 +1,26 @@
 package flowartifact
 
 import (
+	"archive/tar"
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/registry"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/mutate"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 )
 
@@ -84,6 +93,59 @@ func TestDefaultResolverFetchesLatestRegistrySnapshot(t *testing.T) {
 	}
 	if artifact.Revision != "7" {
 		t.Fatalf("revision = %q, want 7", artifact.Revision)
+	}
+}
+
+func TestDefaultResolverResolvesOCIImageSnapshot(t *testing.T) {
+	server := httptest.NewServer(registry.New())
+	defer server.Close()
+	reference, err := name.ParseReference(strings.TrimPrefix(server.URL, "http://")+"/flows/payments:v1", name.Insecure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var layerContents bytes.Buffer
+	tarWriter := tar.NewWriter(&layerContents)
+	payload := []byte("flowContents:\n  name: Payments\n  processors: []\n")
+	if err := tarWriter.WriteHeader(&tar.Header{Name: "flows/payments.yaml", Mode: 0o600, Size: int64(len(payload))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tarWriter.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	layer, err := tarball.LayerFromReader(bytes.NewReader(layerContents.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := mutate.AppendLayers(empty.Image, layer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.Write(reference, image); err != nil {
+		t.Fatal(err)
+	}
+	wantDigest, err := image.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	artifact, err := (DefaultResolver{AllowInsecureOCI: true}).Resolve(t.Context(), Request{Source: nifiv1alpha1.FlowBundleSource{OCI: &nifiv1alpha1.OCISource{
+		Image: reference.Name(), Path: "flows/payments.yaml",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Revision != wantDigest.String() {
+		t.Fatalf("revision = %q, want %q", artifact.Revision, wantDigest)
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(artifact.Snapshot.Raw, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot["flowContents"].(map[string]any)["name"] != "Payments" {
+		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }
 

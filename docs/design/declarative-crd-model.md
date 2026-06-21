@@ -1177,8 +1177,9 @@ Current implementation: `source.snapshot` accepts a native NiFi
 `RegisteredFlowSnapshot`. NiFiControl validates `flowContents`, computes a
 stable SHA-256 digest from canonical JSON, and makes the snapshot available to
 referencing deployments. Public Git sources fetch JSON or YAML from the pinned
-ref and path, and NiFi Registry sources fetch pinned or latest flow versions.
-OCI and authenticated source fetching remain pending.
+ref and path, OCI sources fetch a snapshot from an image filesystem, and NiFi
+Registry sources fetch pinned or latest flow versions. Authenticated source
+fetching remains pending.
 
 Dependencies: Git, OCI, NiFi Registry, or embedded artifact source.
 

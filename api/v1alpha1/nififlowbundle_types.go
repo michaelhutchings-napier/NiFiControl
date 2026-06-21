@@ -27,6 +27,8 @@ type OCISource struct {
 	// +kubebuilder:validation:MinLength=1
 	Image  string `json:"image"`
 	Digest string `json:"digest,omitempty"`
+	// Path is the snapshot file in the OCI image filesystem and defaults to flow.json.
+	Path string `json:"path,omitempty"`
 }
 
 type RegistryFlowSource struct {

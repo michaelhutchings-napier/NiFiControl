@@ -1,6 +1,7 @@
 package flowartifact
 
 import (
+	"archive/tar"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -17,6 +19,8 @@ import (
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/yaml"
@@ -43,7 +47,9 @@ type Resolver interface {
 }
 
 type DefaultResolver struct {
-	HTTPClient *http.Client
+	HTTPClient       *http.Client
+	AllowInsecureOCI bool
+	RemoteOptions    []remote.Option
 }
 
 func (r DefaultResolver) Resolve(ctx context.Context, request Request) (*Artifact, error) {
@@ -55,10 +61,57 @@ func (r DefaultResolver) Resolve(ctx context.Context, request Request) (*Artifac
 	case request.Source.Registry != nil:
 		return r.resolveRegistry(ctx, request.RegistryURI, *request.Source.Registry)
 	case request.Source.OCI != nil:
-		return nil, fmt.Errorf("OCI flow artifact fetching is not implemented")
+		return r.resolveOCI(ctx, *request.Source.OCI)
 	default:
 		return nil, fmt.Errorf("flow artifact source is not configured")
 	}
+}
+
+func (r DefaultResolver) resolveOCI(ctx context.Context, source nifiv1alpha1.OCISource) (*Artifact, error) {
+	nameOptions := []name.Option{}
+	if r.AllowInsecureOCI {
+		nameOptions = append(nameOptions, name.Insecure)
+	}
+	reference, err := name.ParseReference(source.Image, nameOptions...)
+	if err != nil {
+		return nil, fmt.Errorf("parse OCI flow artifact reference: %w", err)
+	}
+	if source.Digest != "" {
+		reference = reference.Context().Digest(source.Digest)
+	}
+	remoteOptions := append([]remote.Option{}, r.RemoteOptions...)
+	remoteOptions = append(remoteOptions, remote.WithContext(ctx))
+	image, err := remote.Image(reference, remoteOptions...)
+	if err != nil {
+		return nil, fmt.Errorf("fetch OCI flow artifact: %w", err)
+	}
+	digest, err := image.Digest()
+	if err != nil {
+		return nil, fmt.Errorf("resolve OCI flow artifact digest: %w", err)
+	}
+	snapshotPath, err := secureOCISnapshotPath(source.Path)
+	if err != nil {
+		return nil, err
+	}
+	layers, err := image.Layers()
+	if err != nil {
+		return nil, fmt.Errorf("list OCI flow artifact layers: %w", err)
+	}
+	for index := len(layers) - 1; index >= 0; index-- {
+		payload, found, err := snapshotFromLayer(layers[index], snapshotPath)
+		if err != nil {
+			return nil, fmt.Errorf("read OCI flow artifact layer: %w", err)
+		}
+		if !found {
+			continue
+		}
+		normalized, err := normalizeSnapshot(payload)
+		if err != nil {
+			return nil, fmt.Errorf("decode OCI flow snapshot %q: %w", snapshotPath, err)
+		}
+		return &Artifact{Snapshot: runtime.RawExtension{Raw: normalized}, Revision: digest.String()}, nil
+	}
+	return nil, fmt.Errorf("OCI flow artifact does not contain %q", snapshotPath)
 }
 
 func (r DefaultResolver) resolveGit(ctx context.Context, source nifiv1alpha1.GitSource) (*Artifact, error) {
@@ -187,6 +240,43 @@ func secureSnapshotPath(root string, configured string) (string, error) {
 		return "", fmt.Errorf("flow snapshot path %q escapes the Git repository", configured)
 	}
 	return filepath.Join(root, clean), nil
+}
+
+func secureOCISnapshotPath(configured string) (string, error) {
+	if configured == "" {
+		configured = defaultSnapshotPath
+	}
+	clean := path.Clean(strings.TrimPrefix(configured, "./"))
+	if path.IsAbs(configured) || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", fmt.Errorf("flow snapshot path %q escapes the OCI image", configured)
+	}
+	return clean, nil
+}
+
+func snapshotFromLayer(layer interface{ Uncompressed() (io.ReadCloser, error) }, snapshotPath string) ([]byte, bool, error) {
+	reader, err := layer.Uncompressed()
+	if err != nil {
+		return nil, false, err
+	}
+	defer reader.Close()
+	tarReader := tar.NewReader(reader)
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			return nil, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+			continue
+		}
+		if path.Clean(strings.TrimPrefix(header.Name, "./")) != snapshotPath {
+			continue
+		}
+		payload, err := readBounded(tarReader)
+		return payload, true, err
+	}
 }
 
 func readBoundedFile(path string) ([]byte, error) {

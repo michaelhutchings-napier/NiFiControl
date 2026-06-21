@@ -58,6 +58,10 @@ spec:
                       image:
                         minLength: 1
                         type: string
+                      path:
+                        description: Path is the snapshot file in the OCI image filesystem
+                          and defaults to flow.json.
+                        type: string
                     required:
                     - image
                     type: object

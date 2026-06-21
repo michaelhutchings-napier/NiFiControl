@@ -13,9 +13,9 @@ services, and high-level flow deployments.
   processors, ports, connections, funnels, and labels reconcile against NiFi.
 - Flow deployments import complete embedded NiFi `RegisteredFlowSnapshot`
   contents and use NiFi's asynchronous replace requests for updates.
-- Public Git repositories and NiFi Registry sources fetch and materialize full
-  snapshots. OCI artifact fetching and authenticated source credentials remain
-  under development.
+- Public Git repositories, OCI images, and NiFi Registry sources fetch and
+  materialize full snapshots. Authenticated source credentials remain under
+  development.
 
 ## Full Flow Snapshots
 
@@ -34,6 +34,10 @@ Git sources read `path` as JSON or YAML (`flow.json` by default) and record the
 resolved commit SHA. NiFi Registry sources use the referenced
 `NiFiRegistryClient.spec.uri` and fetch either the pinned integer version or the
 latest version when `source.registry.version` is omitted.
+
+OCI sources read `path` from the image filesystem (`flow.json` by default) and
+record the resolved manifest digest. Set `source.oci.digest` to pin retrieval;
+otherwise `source.oci.image` may contain a tag that is periodically refreshed.
 
 ## Module
 
