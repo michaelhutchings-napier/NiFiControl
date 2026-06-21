@@ -27,7 +27,7 @@ import (
 const (
 	managedClusterAnnotation = "nifi.controlnifi.io/cluster-name"
 	managedClusterLabel      = "nifi.controlnifi.io/cluster"
-	defaultNiFiImage         = "apache/nifi:1.28.0"
+	defaultNiFiImage         = "apache/nifi:2.10.0"
 	defaultNiFiWebPort       = int32(8080)
 	defaultClusterPort       = int32(11443)
 	managedDataVolume        = "data"

@@ -54,7 +54,7 @@ client implementation.
 NiFi configuration and repositories share a per-node persistent volume, with an
 init container copying the image's initial configuration before NiFi starts.
 
-The first managed runtime targets Apache NiFi 1.28 in internal HTTP mode so all
-existing API reconcilers can operate end to end. Multiple replicas require a
-user-supplied ZooKeeper connect string. HTTPS trust, NiFi 2 token
+The managed runtime targets Apache NiFi 2.10.0 in internal HTTP mode so all API
+reconcilers can operate end to end during development. Multiple replicas
+require a user-supplied ZooKeeper connect string. HTTPS trust, token
 authentication, ingress, and operator-managed ZooKeeper remain follow-up work.

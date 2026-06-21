@@ -19,11 +19,10 @@ helm upgrade --install production ./charts/nifi-cluster \
   --create-namespace
 ```
 
-The default release is a one-node NiFi 1.28.0 instance with a 10 Gi persistent
-data volume. NiFi 1.28 is pinned because its official container supports the
-internal HTTP mode needed for end-to-end reconciliation today. Do not expose
-this initial unsecured mode publicly. NiFi 2 support requires the upcoming
-HTTPS trust and token-authentication layer.
+The default release is a one-node NiFi 2.10.0 instance with a 10 Gi persistent
+data volume. The current managed runtime uses internal HTTP for development and
+must not be exposed publicly. HTTPS trust and token authentication remain
+required before production use.
 
 For multiple NiFi nodes, provide an existing ZooKeeper ensemble:
 

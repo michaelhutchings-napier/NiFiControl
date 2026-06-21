@@ -24,7 +24,7 @@ spec:
             bundle:
               group: org.apache.nifi
               artifact: nifi-standard-nar
-              version: 1.28.0
+              version: 2.10.0
             properties:
               Custom Text: '{"paymentId":"${UUID()}","amount":42}'
               File Size: 0B
@@ -44,7 +44,7 @@ spec:
             bundle:
               group: org.apache.nifi
               artifact: nifi-standard-nar
-              version: 1.28.0
+              version: 2.10.0
             properties:
               Log Level: info
             schedulingStrategy: TIMER_DRIVEN

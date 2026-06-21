@@ -19,7 +19,7 @@ type NiFiClusterSpec struct {
 	// +kubebuilder:validation:Enum=Internal;External
 	// +kubebuilder:default=Internal
 	Mode ClusterMode `json:"mode,omitempty"`
-	// +kubebuilder:default="apache/nifi:1.28.0"
+	// +kubebuilder:default="apache/nifi:2.10.0"
 	Image string `json:"image,omitempty"`
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
 	// +kubebuilder:default=IfNotPresent

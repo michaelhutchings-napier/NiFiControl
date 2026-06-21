@@ -118,7 +118,7 @@ func TestNiFiClusterReconcileCreatesManagedWorkload(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: "default", Generation: 1},
 		Spec: nifiv1alpha1.NiFiClusterSpec{
 			Mode:     nifiv1alpha1.ClusterModeInternal,
-			Image:    "apache/nifi:1.28.0",
+			Image:    "apache/nifi:2.10.0",
 			Replicas: 1,
 			Storage:  nifiv1alpha1.NiFiClusterStorageSpec{Enabled: &storageEnabled},
 		},
@@ -146,7 +146,7 @@ func TestNiFiClusterReconcileCreatesManagedWorkload(t *testing.T) {
 	if statefulSet.Spec.Replicas == nil || *statefulSet.Spec.Replicas != 1 {
 		t.Fatalf("statefulset replicas = %#v, want 1", statefulSet.Spec.Replicas)
 	}
-	if statefulSet.Spec.Template.Spec.Containers[0].Image != "apache/nifi:1.28.0" {
+	if statefulSet.Spec.Template.Spec.Containers[0].Image != "apache/nifi:2.10.0" {
 		t.Fatalf("image = %q", statefulSet.Spec.Template.Spec.Containers[0].Image)
 	}
 	if len(statefulSet.Spec.Template.Spec.Volumes) != 1 || statefulSet.Spec.Template.Spec.Volumes[0].EmptyDir == nil {

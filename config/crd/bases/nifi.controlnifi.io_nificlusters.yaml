@@ -257,7 +257,7 @@ spec:
                     type: string
                 type: object
               image:
-                default: apache/nifi:1.28.0
+                default: apache/nifi:2.10.0
                 type: string
               imagePullPolicy:
                 default: IfNotPresent

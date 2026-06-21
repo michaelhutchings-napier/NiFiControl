@@ -3,7 +3,7 @@ fullnameOverride: ""
 
 image:
   repository: apache/nifi
-  tag: 1.28.0
+  tag: 2.10.0
   pullPolicy: IfNotPresent
 
 replicas: 1

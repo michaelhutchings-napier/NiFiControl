@@ -3,7 +3,7 @@ name: nifi-cluster
 description: Deploy an operator-managed Apache NiFi cluster with NiFiControl
 type: application
 version: 0.1.0
-appVersion: "1.28.0"
+appVersion: "2.10.0"
 kubeVersion: ">=1.27.0-0"
 home: https://github.com/michaelhutchings-napier/NiFiControl
 sources:
