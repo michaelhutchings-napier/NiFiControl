@@ -40,7 +40,7 @@ import (
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiprocessgroups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiprocessgroups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiprocessgroups/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nificontrollerservices,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nificontrollerservices/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nificontrollerservices/finalizers,verbs=update
@@ -96,6 +96,9 @@ func (r *NiFiClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return r.reconcileManagedCluster(ctx, instance)
 	}
 	if instance.Spec.API != nil && instance.Spec.API.URI != "" {
+		if err := configureClusterHTTPClient(ctx, r.Client, instance); err != nil {
+			return ctrl.Result{}, err
+		}
 		timeout := time.Duration(0)
 		if instance.Spec.API.Timeout != nil {
 			timeout = instance.Spec.API.Timeout.Duration
@@ -126,6 +129,7 @@ func (r *NiFiClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&nifiv1alpha1.NiFiCluster{}).
 		Watches(&appsv1.StatefulSet{}, handler.EnqueueRequestsFromMapFunc(r.requestsForManagedClusterResource)).
 		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(r.requestsForManagedClusterResource)).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.requestsForAPISecret)).
 		Complete(r)
 }
 
@@ -1302,6 +1306,7 @@ func (r *NiFiFlowBundleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&nifiv1alpha1.NiFiFlowBundle{}).
 		Watches(&nifiv1alpha1.NiFiRegistryClient{}, handler.EnqueueRequestsFromMapFunc(r.requestsForRegistryClient)).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCredentialSecret)).
 		Complete(r)
 }
 
@@ -1432,6 +1437,7 @@ func (r *NiFiFlowDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		Watches(&nifiv1alpha1.NiFiFlowBundle{}, handler.EnqueueRequestsFromMapFunc(r.requestsForFlowBundle)).
 		Watches(&nifiv1alpha1.NiFiParameterContext{}, handler.EnqueueRequestsFromMapFunc(r.requestsForParameterContext)).
 		Watches(&nifiv1alpha1.NiFiProcessGroup{}, handler.EnqueueRequestsFromMapFunc(r.requestsForProcessGroup)).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCredentialSecret)).
 		Complete(r)
 }
 
@@ -2894,6 +2900,91 @@ func (r *NiFiFlowBundleReconciler) requestsForRegistryClient(ctx context.Context
 		}
 	}
 	return requests
+}
+
+func (r *NiFiClusterReconciler) requestsForAPISecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiClusterList{}
+	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	requests := []reconcile.Request{}
+	for _, item := range list.Items {
+		if clusterAPIReferencesSecret(&item, obj.GetName()) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
+func (r *NiFiFlowBundleReconciler) requestsForCredentialSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiFlowBundleList{}
+	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	requests := []reconcile.Request{}
+	for _, item := range list.Items {
+		if flowSourceReferencesSecret(&item.Spec.Source, obj.GetName()) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
+func (r *NiFiFlowDeploymentReconciler) requestsForCredentialSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiFlowDeploymentList{}
+	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	requests := []reconcile.Request{}
+	for _, item := range list.Items {
+		if item.Spec.Source.Inline != nil && flowSourceReferencesSecret(item.Spec.Source.Inline, obj.GetName()) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
+func clusterAPIReferencesSecret(cluster *nifiv1alpha1.NiFiCluster, secretName string) bool {
+	if cluster.Spec.API == nil {
+		return false
+	}
+	refs := []*nifiv1alpha1.SecretKeyRef{}
+	if cluster.Spec.API.TLS != nil {
+		refs = append(refs, cluster.Spec.API.TLS.CASecretKeyRef)
+	}
+	if cluster.Spec.API.Auth != nil {
+		refs = append(refs, cluster.Spec.API.Auth.BearerTokenSecretKeyRef, cluster.Spec.API.Auth.UsernameSecretKeyRef, cluster.Spec.API.Auth.PasswordSecretKeyRef)
+	}
+	return secretRefsContainName(refs, secretName)
+}
+
+func flowSourceReferencesSecret(source *nifiv1alpha1.FlowBundleSource, secretName string) bool {
+	var credentials *nifiv1alpha1.FlowArtifactCredentials
+	switch {
+	case source == nil:
+		return false
+	case source.Git != nil:
+		credentials = source.Git.Credentials
+	case source.OCI != nil:
+		credentials = source.OCI.Credentials
+	case source.Registry != nil:
+		credentials = source.Registry.Credentials
+	}
+	if credentials == nil {
+		return false
+	}
+	return secretRefsContainName([]*nifiv1alpha1.SecretKeyRef{
+		credentials.UsernameSecretKeyRef, credentials.PasswordSecretKeyRef, credentials.TokenSecretKeyRef, credentials.CASecretKeyRef,
+	}, secretName)
+}
+
+func secretRefsContainName(refs []*nifiv1alpha1.SecretKeyRef, name string) bool {
+	for _, ref := range refs {
+		if ref != nil && ref.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *NiFiFlowDeploymentReconciler) requestsForFlowBundle(ctx context.Context, obj client.Object) []reconcile.Request {

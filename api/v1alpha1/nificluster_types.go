@@ -46,6 +46,22 @@ type NiFiClusterAPISpec struct {
 	// +kubebuilder:validation:MinLength=1
 	URI     string           `json:"uri"`
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
+	TLS     *NiFiAPITLSSpec  `json:"tls,omitempty"`
+	Auth    *NiFiAPIAuthSpec `json:"auth,omitempty"`
+}
+
+type NiFiAPITLSSpec struct {
+	CASecretKeyRef     *SecretKeyRef `json:"caSecretKeyRef,omitempty"`
+	ServerName         string        `json:"serverName,omitempty"`
+	InsecureSkipVerify bool          `json:"insecureSkipVerify,omitempty"`
+}
+
+// +kubebuilder:validation:XValidation:rule="has(self.bearerTokenSecretKeyRef) || (has(self.usernameSecretKeyRef) && has(self.passwordSecretKeyRef))",message="configure a bearer token or both username and password"
+// +kubebuilder:validation:XValidation:rule="!(has(self.bearerTokenSecretKeyRef) && (has(self.usernameSecretKeyRef) || has(self.passwordSecretKeyRef)))",message="bearer token and username/password authentication are mutually exclusive"
+type NiFiAPIAuthSpec struct {
+	BearerTokenSecretKeyRef *SecretKeyRef `json:"bearerTokenSecretKeyRef,omitempty"`
+	UsernameSecretKeyRef    *SecretKeyRef `json:"usernameSecretKeyRef,omitempty"`
+	PasswordSecretKeyRef    *SecretKeyRef `json:"passwordSecretKeyRef,omitempty"`
 }
 
 type NiFiClusterServiceSpec struct {

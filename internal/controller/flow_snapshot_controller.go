@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
@@ -83,6 +84,7 @@ func resolvedFlowBundleArtifact(ctx context.Context, c client.Client, resolver f
 func resolvedFlowDeploymentSnapshot(ctx context.Context, c client.Client, resolver flowartifact.Resolver, deployment *nifiv1alpha1.NiFiFlowDeployment) (json.RawMessage, string, string, error) {
 	version := deployment.Spec.Source.Version
 	var source *nifiv1alpha1.FlowBundleSource
+	sourceNamespace := deployment.Namespace
 	expectedDigest := ""
 	if deployment.Spec.Source.BundleRef != nil {
 		ref := *deployment.Spec.Source.BundleRef
@@ -92,6 +94,7 @@ func resolvedFlowDeploymentSnapshot(ctx context.Context, c client.Client, resolv
 			return nil, "", "", err
 		}
 		source = &bundle.Spec.Source
+		sourceNamespace = bundle.Namespace
 		expectedDigest = bundle.Status.ArtifactDigest
 		if version == "" {
 			version = bundle.Status.ResolvedRevision
@@ -105,7 +108,7 @@ func resolvedFlowDeploymentSnapshot(ctx context.Context, c client.Client, resolv
 	if source == nil {
 		return nil, "", "", nil
 	}
-	snapshot, artifactRevision, digest, err := resolvedFlowArtifact(ctx, c, resolver, deployment.Namespace, source, deployment.Spec.Target.ProcessGroupName)
+	snapshot, artifactRevision, digest, err := resolvedFlowArtifact(ctx, c, resolver, sourceNamespace, source, deployment.Spec.Target.ProcessGroupName)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -144,7 +147,11 @@ func resolvedFlowArtifact(ctx context.Context, c client.Client, resolver flowart
 	if resolver == nil {
 		resolver = flowartifact.DefaultResolver{}
 	}
-	artifact, err := resolver.Resolve(ctx, flowartifact.Request{Source: *source, RegistryURI: registryURI})
+	credentials, err := resolvedFlowArtifactCredentials(ctx, c, namespace, source)
+	if err != nil {
+		return nil, "", "", err
+	}
+	artifact, err := resolver.Resolve(ctx, flowartifact.Request{Source: *source, RegistryURI: registryURI, Credentials: credentials})
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -156,6 +163,52 @@ func resolvedFlowArtifact(ctx context.Context, c client.Client, resolver flowart
 		return nil, "", "", err
 	}
 	return snapshot, artifact.Revision, digest, nil
+}
+
+func resolvedFlowArtifactCredentials(ctx context.Context, c client.Client, namespace string, source *nifiv1alpha1.FlowBundleSource) (flowartifact.Credentials, error) {
+	var declared *nifiv1alpha1.FlowArtifactCredentials
+	switch {
+	case source.Git != nil:
+		declared = source.Git.Credentials
+	case source.OCI != nil:
+		declared = source.OCI.Credentials
+	case source.Registry != nil:
+		declared = source.Registry.Credentials
+	}
+	if declared == nil {
+		return flowartifact.Credentials{}, nil
+	}
+	resolved := flowartifact.Credentials{InsecureSkipVerify: declared.InsecureSkipVerify}
+	values := []struct {
+		ref    *nifiv1alpha1.SecretKeyRef
+		target *string
+		trim   bool
+	}{
+		{declared.UsernameSecretKeyRef, &resolved.Username, false},
+		{declared.PasswordSecretKeyRef, &resolved.Password, false},
+		{declared.TokenSecretKeyRef, &resolved.Token, true},
+	}
+	for _, value := range values {
+		if value.ref == nil {
+			continue
+		}
+		data, err := secretKeyValue(ctx, c, namespace, value.ref)
+		if err != nil {
+			return flowartifact.Credentials{}, err
+		}
+		*value.target = string(data)
+		if value.trim {
+			*value.target = strings.TrimSpace(*value.target)
+		}
+	}
+	if declared.CASecretKeyRef != nil {
+		data, err := secretKeyValue(ctx, c, namespace, declared.CASecretKeyRef)
+		if err != nil {
+			return flowartifact.Credentials{}, err
+		}
+		resolved.CAData = data
+	}
+	return resolved, nil
 }
 
 func (r *NiFiFlowDeploymentReconciler) reconcileSnapshotFlowDeployment(ctx context.Context, deployment *nifiv1alpha1.NiFiFlowDeployment, endpoint string, parentID string, snapshot json.RawMessage, version string, digest string) (ctrl.Result, error) {

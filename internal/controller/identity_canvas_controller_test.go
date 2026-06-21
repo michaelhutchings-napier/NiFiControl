@@ -6,6 +6,7 @@ import (
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/flowartifact"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -17,6 +18,74 @@ import (
 type fakeFlowArtifactResolver struct {
 	artifact *flowartifact.Artifact
 	err      error
+}
+
+type flowArtifactResolverFunc func(context.Context, flowartifact.Request) (*flowartifact.Artifact, error)
+
+func (f flowArtifactResolverFunc) Resolve(ctx context.Context, request flowartifact.Request) (*flowartifact.Artifact, error) {
+	return f(ctx, request)
+}
+
+func TestResolvedFlowArtifactCredentialsReadsSecretKeys(t *testing.T) {
+	scheme := testScheme()
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "git-auth", Namespace: "default"},
+		Data:       map[string][]byte{"username": []byte("git-user"), "password": []byte("git-password"), "ca.crt": []byte("test-ca")},
+	}
+	k8sClient := newIdentityCanvasTestClient(scheme, secret)
+	source := &nifiv1alpha1.FlowBundleSource{Git: &nifiv1alpha1.GitSource{Credentials: &nifiv1alpha1.FlowArtifactCredentials{
+		UsernameSecretKeyRef: testSecretKeyRef("git-auth", "username"),
+		PasswordSecretKeyRef: testSecretKeyRef("git-auth", "password"),
+		CASecretKeyRef:       testSecretKeyRef("git-auth", "ca.crt"),
+	}}}
+
+	credentials, err := resolvedFlowArtifactCredentials(t.Context(), k8sClient, "default", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credentials.Username != "git-user" || credentials.Password != "git-password" || string(credentials.CAData) != "test-ca" {
+		t.Fatalf("credentials = %#v", credentials)
+	}
+}
+
+func TestResolvedFlowDeploymentUsesBundleNamespaceForCredentials(t *testing.T) {
+	scheme := testScheme()
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "git-auth", Namespace: "flow-catalog"},
+		Data:       map[string][]byte{"token": []byte("catalog-token\n")},
+	}
+	bundle := &nifiv1alpha1.NiFiFlowBundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "flow-catalog"},
+		Spec: nifiv1alpha1.NiFiFlowBundleSpec{Source: nifiv1alpha1.FlowBundleSource{Git: &nifiv1alpha1.GitSource{
+			URL: "https://example.test/flows.git",
+			Credentials: &nifiv1alpha1.FlowArtifactCredentials{
+				TokenSecretKeyRef: testSecretKeyRef("git-auth", "token"),
+			},
+		}}},
+	}
+	deployment := &nifiv1alpha1.NiFiFlowDeployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "applications"},
+		Spec: nifiv1alpha1.NiFiFlowDeploymentSpec{Source: nifiv1alpha1.FlowDeploymentSource{
+			BundleRef: &nifiv1alpha1.LocalObjectReference{Name: bundle.Name, Namespace: bundle.Namespace},
+		}},
+	}
+	k8sClient := newIdentityCanvasTestClient(scheme, secret, bundle)
+	resolver := flowArtifactResolverFunc(func(_ context.Context, request flowartifact.Request) (*flowartifact.Artifact, error) {
+		if request.Credentials.Token != "catalog-token" {
+			t.Fatalf("token = %q, want bundle namespace credential", request.Credentials.Token)
+		}
+		return &flowartifact.Artifact{Snapshot: *testFlowSnapshot("Payments", "Generate"), Revision: "commit-1"}, nil
+	})
+
+	if _, _, _, err := resolvedFlowDeploymentSnapshot(t.Context(), k8sClient, resolver, deployment); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testSecretKeyRef(name string, key string) *nifiv1alpha1.SecretKeyRef {
+	return &nifiv1alpha1.SecretKeyRef{SecretKeySelector: corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{Name: name}, Key: key,
+	}}
 }
 
 func (f fakeFlowArtifactResolver) Resolve(ctx context.Context, request flowartifact.Request) (*flowartifact.Artifact, error) {

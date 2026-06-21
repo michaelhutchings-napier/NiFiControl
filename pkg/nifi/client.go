@@ -407,9 +407,11 @@ func (c HTTPReachabilityChecker) CheckReachable(ctx context.Context, baseURI str
 		return err
 	}
 
-	client := c.Client
-	if client == nil {
-		client = &http.Client{Timeout: timeout}
+	client := clientForEndpoint(c.Client, endpoint)
+	if c.Client == nil {
+		configured := *client
+		configured.Timeout = timeout
+		client = &configured
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -1114,9 +1116,7 @@ func doJSON(ctx context.Context, client *http.Client, method, endpoint string, b
 	}
 	req.Header.Set("Accept", "application/json")
 
-	if client == nil {
-		client = &http.Client{Timeout: defaultTimeout}
-	}
+	client = clientForEndpoint(client, endpoint)
 
 	resp, err := client.Do(req)
 	if err != nil {

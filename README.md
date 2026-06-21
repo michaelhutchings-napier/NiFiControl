@@ -39,6 +39,39 @@ OCI sources read `path` from the image filesystem (`flow.json` by default) and
 record the resolved manifest digest. Set `source.oci.digest` to pin retrieval;
 otherwise `source.oci.image` may contain a tag that is periodically refreshed.
 
+## TLS And Credentials
+
+Secure external NiFi 2 APIs can use a custom CA and automatic token exchange:
+
+```yaml
+spec:
+  mode: External
+  api:
+    uri: https://nifi.example.com:8443
+    tls:
+      caSecretKeyRef:
+        name: nifi-api-tls
+        key: ca.crt
+      serverName: nifi.example.com
+    auth:
+      usernameSecretKeyRef:
+        name: nifi-api-auth
+        key: username
+      passwordSecretKeyRef:
+        name: nifi-api-auth
+        key: password
+```
+
+Use `auth.bearerTokenSecretKeyRef` instead when a token is managed externally.
+Username/password authentication exchanges credentials at NiFi's
+`/nifi-api/access/token` endpoint and caches the returned JWT until refresh.
+
+Git, OCI, and NiFi Registry sources accept `credentials` with
+`usernameSecretKeyRef`, `passwordSecretKeyRef`, `tokenSecretKeyRef`, and
+`caSecretKeyRef`. Configure either a token or a username/password pair.
+`insecureSkipVerify` is available for controlled development environments.
+Referenced Secret changes automatically trigger reconciliation.
+
 ## Module
 
 ```text

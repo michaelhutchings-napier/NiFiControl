@@ -3,6 +3,8 @@ package flowartifact
 import (
 	"archive/tar"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,7 +20,10 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	gittransport "github.com/go-git/go-git/v5/plumbing/transport"
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
@@ -35,6 +40,15 @@ const (
 type Request struct {
 	Source      nifiv1alpha1.FlowBundleSource
 	RegistryURI string
+	Credentials Credentials
+}
+
+type Credentials struct {
+	Username           string
+	Password           string
+	Token              string
+	CAData             []byte
+	InsecureSkipVerify bool
 }
 
 type Artifact struct {
@@ -57,17 +71,17 @@ func (r DefaultResolver) Resolve(ctx context.Context, request Request) (*Artifac
 	case request.Source.Snapshot != nil:
 		return &Artifact{Snapshot: *request.Source.Snapshot.DeepCopy()}, nil
 	case request.Source.Git != nil:
-		return r.resolveGit(ctx, *request.Source.Git)
+		return r.resolveGit(ctx, *request.Source.Git, request.Credentials)
 	case request.Source.Registry != nil:
-		return r.resolveRegistry(ctx, request.RegistryURI, *request.Source.Registry)
+		return r.resolveRegistry(ctx, request.RegistryURI, *request.Source.Registry, request.Credentials)
 	case request.Source.OCI != nil:
-		return r.resolveOCI(ctx, *request.Source.OCI)
+		return r.resolveOCI(ctx, *request.Source.OCI, request.Credentials)
 	default:
 		return nil, fmt.Errorf("flow artifact source is not configured")
 	}
 }
 
-func (r DefaultResolver) resolveOCI(ctx context.Context, source nifiv1alpha1.OCISource) (*Artifact, error) {
+func (r DefaultResolver) resolveOCI(ctx context.Context, source nifiv1alpha1.OCISource, credentials Credentials) (*Artifact, error) {
 	nameOptions := []name.Option{}
 	if r.AllowInsecureOCI {
 		nameOptions = append(nameOptions, name.Insecure)
@@ -81,6 +95,18 @@ func (r DefaultResolver) resolveOCI(ctx context.Context, source nifiv1alpha1.OCI
 	}
 	remoteOptions := append([]remote.Option{}, r.RemoteOptions...)
 	remoteOptions = append(remoteOptions, remote.WithContext(ctx))
+	if credentials.Token != "" || credentials.Username != "" || credentials.Password != "" {
+		remoteOptions = append(remoteOptions, remote.WithAuth(authn.FromConfig(authn.AuthConfig{
+			Username: credentials.Username, Password: credentials.Password, RegistryToken: credentials.Token,
+		})))
+	}
+	if len(credentials.CAData) > 0 || credentials.InsecureSkipVerify {
+		transport, err := sourceHTTPTransport(credentials)
+		if err != nil {
+			return nil, err
+		}
+		remoteOptions = append(remoteOptions, remote.WithTransport(transport))
+	}
 	image, err := remote.Image(reference, remoteOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("fetch OCI flow artifact: %w", err)
@@ -114,8 +140,9 @@ func (r DefaultResolver) resolveOCI(ctx context.Context, source nifiv1alpha1.OCI
 	return nil, fmt.Errorf("OCI flow artifact does not contain %q", snapshotPath)
 }
 
-func (r DefaultResolver) resolveGit(ctx context.Context, source nifiv1alpha1.GitSource) (*Artifact, error) {
-	referenceName, err := resolveRemoteReference(ctx, source.URL, source.Ref)
+func (r DefaultResolver) resolveGit(ctx context.Context, source nifiv1alpha1.GitSource, credentials Credentials) (*Artifact, error) {
+	auth := gitAuthentication(credentials)
+	referenceName, err := resolveRemoteReference(ctx, source.URL, source.Ref, auth, credentials)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +152,10 @@ func (r DefaultResolver) resolveGit(ctx context.Context, source nifiv1alpha1.Git
 	}
 	defer os.RemoveAll(directory)
 
-	options := &git.CloneOptions{URL: source.URL, Depth: 1}
+	options := &git.CloneOptions{
+		URL: source.URL, Depth: 1, Auth: auth,
+		CABundle: credentials.CAData, InsecureSkipTLS: credentials.InsecureSkipVerify,
+	}
 	if referenceName != "" {
 		options.ReferenceName = referenceName
 		options.SingleBranch = true
@@ -157,7 +187,7 @@ func (r DefaultResolver) resolveGit(ctx context.Context, source nifiv1alpha1.Git
 	return &Artifact{Snapshot: runtime.RawExtension{Raw: normalized}, Revision: head.Hash().String()}, nil
 }
 
-func (r DefaultResolver) resolveRegistry(ctx context.Context, registryURI string, source nifiv1alpha1.RegistryFlowSource) (*Artifact, error) {
+func (r DefaultResolver) resolveRegistry(ctx context.Context, registryURI string, source nifiv1alpha1.RegistryFlowSource, credentials Credentials) (*Artifact, error) {
 	endpoint, err := registrySnapshotURL(registryURI, source)
 	if err != nil {
 		return nil, err
@@ -167,9 +197,18 @@ func (r DefaultResolver) resolveRegistry(ctx context.Context, registryURI string
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
+	if credentials.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+credentials.Token)
+	} else if credentials.Username != "" || credentials.Password != "" {
+		req.SetBasicAuth(credentials.Username, credentials.Password)
+	}
 	client := r.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: defaultHTTPTimeout}
+		transport, err := sourceHTTPTransport(credentials)
+		if err != nil {
+			return nil, err
+		}
+		client = &http.Client{Timeout: defaultHTTPTimeout, Transport: transport}
 	}
 	response, err := client.Do(req)
 	if err != nil {
@@ -200,12 +239,14 @@ func (r DefaultResolver) resolveRegistry(ctx context.Context, registryURI string
 	return &Artifact{Snapshot: runtime.RawExtension{Raw: normalized}, Revision: revision}, nil
 }
 
-func resolveRemoteReference(ctx context.Context, repositoryURL string, requested string) (plumbing.ReferenceName, error) {
+func resolveRemoteReference(ctx context.Context, repositoryURL string, requested string, auth gittransport.AuthMethod, credentials Credentials) (plumbing.ReferenceName, error) {
 	if requested == "" {
 		return "", nil
 	}
 	remote := git.NewRemote(memory.NewStorage(), &config.RemoteConfig{Name: "origin", URLs: []string{repositoryURL}})
-	references, err := remote.ListContext(ctx, &git.ListOptions{})
+	references, err := remote.ListContext(ctx, &git.ListOptions{
+		Auth: auth, CABundle: credentials.CAData, InsecureSkipTLS: credentials.InsecureSkipVerify,
+	})
 	if err != nil {
 		return "", fmt.Errorf("list Git flow source references: %w", err)
 	}
@@ -229,6 +270,36 @@ func resolveRemoteReference(ctx context.Context, repositoryURL string, requested
 		}
 	}
 	return "", fmt.Errorf("Git flow source ref %q was not found", requested)
+}
+
+func gitAuthentication(credentials Credentials) gittransport.AuthMethod {
+	password := credentials.Password
+	username := credentials.Username
+	if credentials.Token != "" {
+		password = credentials.Token
+		if username == "" {
+			username = "oauth2"
+		}
+	}
+	if username == "" && password == "" {
+		return nil
+	}
+	return &githttp.BasicAuth{Username: username, Password: password}
+}
+
+func sourceHTTPTransport(credentials Credentials) (*http.Transport, error) {
+	roots, err := x509.SystemCertPool()
+	if err != nil || roots == nil {
+		roots = x509.NewCertPool()
+	}
+	if len(credentials.CAData) > 0 && !roots.AppendCertsFromPEM(credentials.CAData) {
+		return nil, fmt.Errorf("source CA data does not contain a PEM certificate")
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{
+		RootCAs: roots, InsecureSkipVerify: credentials.InsecureSkipVerify, // #nosec G402 -- explicitly configured by the source owner.
+	}
+	return transport, nil
 }
 
 func secureSnapshotPath(root string, configured string) (string, error) {

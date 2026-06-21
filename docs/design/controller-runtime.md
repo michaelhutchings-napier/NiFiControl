@@ -56,5 +56,12 @@ init container copying the image's initial configuration before NiFi starts.
 
 The managed runtime targets Apache NiFi 2.10.0 in internal HTTP mode so all API
 reconcilers can operate end to end during development. Multiple replicas
-require a user-supplied ZooKeeper connect string. HTTPS trust, token
-authentication, ingress, and operator-managed ZooKeeper remain follow-up work.
+require a user-supplied ZooKeeper connect string. Operator-managed certificates
+for internal workloads, ingress, and operator-managed ZooKeeper remain
+follow-up work.
+
+External NiFi 2 endpoints support custom CA trust, TLS server-name validation,
+static bearer tokens, and username/password JWT exchange. Credentials and CA
+bundles are read from namespaced Kubernetes Secret key selectors and refreshed
+when those Secrets change. The internal managed runtime remains intentionally
+HTTP-only and cluster-private for development.

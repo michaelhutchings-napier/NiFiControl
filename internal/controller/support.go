@@ -3,8 +3,11 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
+	"github.com/michaelhutchings-napier/NiFiControl/pkg/nifi"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -476,8 +479,80 @@ func clusterDependency(ctx context.Context, c client.Client, namespace string, r
 	if !cluster.Status.Ready {
 		return nil, []string{fmt.Sprintf("NiFiCluster/%s/%s:Ready", refNamespace, ref.Name)}, nil
 	}
+	if err := configureClusterHTTPClient(ctx, c, cluster); err != nil {
+		return nil, nil, err
+	}
 
 	return cluster, nil, nil
+}
+
+func configureClusterHTTPClient(ctx context.Context, c client.Client, cluster *nifiv1alpha1.NiFiCluster) error {
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" && resolvedClusterMode(cluster) == nifiv1alpha1.ClusterModeInternal {
+		endpoint = managedClusterEndpoint(cluster)
+	}
+	if endpoint == "" {
+		return nil
+	}
+	config := nifi.HTTPClientConfig{BaseURI: endpoint}
+	if api := cluster.Spec.API; api != nil {
+		if api.Timeout != nil {
+			config.Timeout = api.Timeout.Duration
+		}
+		if api.TLS != nil {
+			config.ServerName = api.TLS.ServerName
+			config.InsecureSkipVerify = api.TLS.InsecureSkipVerify
+			if api.TLS.CASecretKeyRef != nil {
+				value, err := secretKeyValue(ctx, c, cluster.Namespace, api.TLS.CASecretKeyRef)
+				if err != nil {
+					return fmt.Errorf("resolve NiFi API CA: %w", err)
+				}
+				config.CAData = value
+			}
+		}
+		if api.Auth != nil {
+			var err error
+			if api.Auth.BearerTokenSecretKeyRef != nil {
+				value, valueErr := secretKeyValue(ctx, c, cluster.Namespace, api.Auth.BearerTokenSecretKeyRef)
+				err = valueErr
+				config.BearerToken = strings.TrimSpace(string(value))
+			} else {
+				username, usernameErr := secretKeyValue(ctx, c, cluster.Namespace, api.Auth.UsernameSecretKeyRef)
+				password, passwordErr := secretKeyValue(ctx, c, cluster.Namespace, api.Auth.PasswordSecretKeyRef)
+				if usernameErr != nil {
+					err = usernameErr
+				} else {
+					err = passwordErr
+				}
+				config.Username = string(username)
+				config.Password = string(password)
+			}
+			if err != nil {
+				return fmt.Errorf("resolve NiFi API credentials: %w", err)
+			}
+		}
+	}
+	httpClient, err := nifi.NewHTTPClient(config)
+	if err != nil {
+		return err
+	}
+	return nifi.RegisterHTTPClient(endpoint, httpClient)
+}
+
+func secretKeyValue(ctx context.Context, c client.Client, namespace string, ref *nifiv1alpha1.SecretKeyRef) ([]byte, error) {
+	if ref == nil {
+		return nil, fmt.Errorf("secret key reference is not configured")
+	}
+	secret := &corev1.Secret{}
+	key := types.NamespacedName{Name: ref.Name, Namespace: namespace}
+	if err := c.Get(ctx, key, secret); err != nil {
+		return nil, err
+	}
+	value, ok := secret.Data[ref.Key]
+	if !ok {
+		return nil, fmt.Errorf("Secret %s does not contain key %q", key.String(), ref.Key)
+	}
+	return value, nil
 }
 
 func clusterRefIndexValue(namespace string, ref nifiv1alpha1.ClusterReference) string {

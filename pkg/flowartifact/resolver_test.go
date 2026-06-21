@@ -15,6 +15,7 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
@@ -166,6 +167,39 @@ func TestDefaultResolverFetchesPinnedRegistrySnapshot(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDefaultResolverAuthenticatesRegistryRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "registry-user" || password != "registry-password" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"snapshotMetadata":{"version":4},"flowContents":{"name":"Payments"}}`))
+	}))
+	defer server.Close()
+
+	_, err := (DefaultResolver{}).Resolve(t.Context(), Request{
+		RegistryURI: server.URL,
+		Credentials: Credentials{Username: "registry-user", Password: "registry-password"},
+		Source: nifiv1alpha1.FlowBundleSource{Registry: &nifiv1alpha1.RegistryFlowSource{
+			BucketID: "bucket-1", FlowID: "flow-1", Version: "4",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGitAuthenticationUsesTokenAsPassword(t *testing.T) {
+	auth, ok := gitAuthentication(Credentials{Token: "git-token"}).(*githttp.BasicAuth)
+	if !ok {
+		t.Fatalf("auth type = %T", auth)
+	}
+	if auth.Username != "oauth2" || auth.Password != "git-token" {
+		t.Fatalf("auth = %#v", auth)
 	}
 }
 

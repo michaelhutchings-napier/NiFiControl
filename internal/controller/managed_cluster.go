@@ -104,6 +104,9 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 	}
 
 	endpoint := managedClusterEndpoint(cluster)
+	if err := configureClusterHTTPClient(ctx, r.Client, cluster); err != nil {
+		return r.managedClusterReconcileFailed(ctx, cluster, "APIClientConfigurationFailed", err)
+	}
 	workload := &nifiv1alpha1.NiFiClusterWorkloadStatus{
 		StatefulSetName: statefulSet.Name,
 		ServiceName:     managedClusterResourceName(cluster),

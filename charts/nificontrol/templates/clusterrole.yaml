@@ -49,6 +49,8 @@ rules:
       - secrets
     verbs:
       - get
+      - list
+      - watch
   - apiGroups:
       - nifi.controlnifi.io
     resources:
