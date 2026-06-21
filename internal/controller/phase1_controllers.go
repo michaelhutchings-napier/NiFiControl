@@ -1278,7 +1278,14 @@ func (r *NiFiFlowBundleReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		return ctrl.Result{}, nil
 	}
-	artifactDigest, resolvedRevision := flowBundleResolvedMetadata(instance)
+	artifactDigest, resolvedRevision, err := flowBundleResolvedMetadata(instance)
+	if err != nil {
+		message := fmt.Sprintf("Invalid flow bundle source: %v", err)
+		if shouldMarkFlowBundleNotReady(instance, "InvalidFlowSnapshot", message) {
+			return ctrl.Result{}, markFlowBundleNotReady(ctx, r.Client, instance, "InvalidFlowSnapshot", message)
+		}
+		return ctrl.Result{}, nil
+	}
 	if !flowBundleStatusMatches(instance, artifactDigest, resolvedRevision) {
 		return ctrl.Result{}, markFlowBundleReady(ctx, r.Client, instance, artifactDigest, resolvedRevision)
 	}
@@ -1296,6 +1303,7 @@ type NiFiFlowDeploymentReconciler struct {
 	client.Client
 	Scheme             *runtime.Scheme
 	ProcessGroupClient nifi.ProcessGroupClient
+	FlowSnapshotClient nifi.FlowSnapshotClient
 }
 
 func (r *NiFiFlowDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -1342,6 +1350,17 @@ func (r *NiFiFlowDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.R
 			return ctrl.Result{}, markFlowDeploymentNotReady(ctx, r.Client, instance, "ParentProcessGroupIDMissing", message)
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	snapshot, snapshotVersion, snapshotDigest, err := resolvedFlowDeploymentSnapshot(ctx, r.Client, instance)
+	if err != nil {
+		message := fmt.Sprintf("Failed to resolve flow snapshot: %v", err)
+		if shouldMarkFlowDeploymentNotReady(instance, "InvalidFlowSnapshot", message) {
+			return ctrl.Result{}, markFlowDeploymentNotReady(ctx, r.Client, instance, "InvalidFlowSnapshot", message)
+		}
+		return ctrl.Result{}, nil
+	}
+	if len(snapshot) > 0 {
+		return r.reconcileSnapshotFlowDeployment(ctx, instance, endpoint, parentID, snapshot, snapshotVersion, snapshotDigest)
 	}
 	entity, deployedVersion, artifactDigest, err := desiredFlowDeploymentProcessGroup(ctx, r.Client, instance, parentID)
 	if err != nil {
@@ -3335,10 +3354,19 @@ func flowBundleDependenciesWaitingFor(ctx context.Context, c client.Client, flow
 	return registryClientDependencyWaitingFor(ctx, c, flowBundle.Namespace, flowBundle.Spec.Source.Registry.RegistryClientRef, "source.registry.registryClientRef")
 }
 
-func flowBundleResolvedMetadata(flowBundle *nifiv1alpha1.NiFiFlowBundle) (string, string) {
+func flowBundleResolvedMetadata(flowBundle *nifiv1alpha1.NiFiFlowBundle) (string, string, error) {
 	resolvedRevision := flowBundle.Spec.Version
 	artifactDigest := ""
 	switch {
+	case flowBundle.Spec.Source.Snapshot != nil:
+		_, digest, err := canonicalFlowSnapshot(flowBundle.Spec.Source.Snapshot, "")
+		if err != nil {
+			return "", "", err
+		}
+		artifactDigest = digest
+		if resolvedRevision == "" {
+			resolvedRevision = digest
+		}
 	case flowBundle.Spec.Source.Git != nil:
 		source := flowBundle.Spec.Source.Git
 		if resolvedRevision == "" {
@@ -3362,7 +3390,7 @@ func flowBundleResolvedMetadata(flowBundle *nifiv1alpha1.NiFiFlowBundle) (string
 			resolvedRevision = source.FlowID
 		}
 	}
-	return artifactDigest, resolvedRevision
+	return artifactDigest, resolvedRevision, nil
 }
 
 func flowBundleStatusMatches(instance *nifiv1alpha1.NiFiFlowBundle, artifactDigest string, resolvedRevision string) bool {
@@ -3371,6 +3399,18 @@ func flowBundleStatusMatches(instance *nifiv1alpha1.NiFiFlowBundle, artifactDige
 		instance.Status.Dependencies.Ready &&
 		instance.Status.ArtifactDigest == artifactDigest &&
 		instance.Status.ResolvedRevision == resolvedRevision
+}
+
+func shouldMarkFlowBundleNotReady(instance *nifiv1alpha1.NiFiFlowBundle, reason string, message string) bool {
+	if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Ready || instance.Status.Sync.LastError != message {
+		return true
+	}
+	for _, condition := range instance.Status.Conditions {
+		if condition.Type == string(nifiv1alpha1.ConditionReady) {
+			return condition.Reason != reason
+		}
+	}
+	return true
 }
 
 func flowDeploymentDependenciesWaitingFor(ctx context.Context, c client.Client, flowDeployment *nifiv1alpha1.NiFiFlowDeployment) []string {

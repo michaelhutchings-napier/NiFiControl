@@ -204,6 +204,14 @@ func markFlowBundleReady(ctx context.Context, c client.Client, obj *nifiv1alpha1
 	return c.Status().Update(ctx, obj)
 }
 
+func markFlowBundleNotReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFlowBundle, reason string, message string) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, reason, message)
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.Sync.LastError = message
+	return c.Status().Update(ctx, obj)
+}
+
 func markFlowBundleWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFlowBundle, waitingFor []string) error {
 	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
 	return c.Status().Update(ctx, obj)
@@ -226,11 +234,36 @@ func markFlowDeploymentReady(ctx context.Context, c client.Client, obj *nifiv1al
 	return c.Status().Update(ctx, obj)
 }
 
+func markFlowDeploymentSnapshotImported(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFlowDeployment, processGroupID string, revisionVersion int64, deployedVersion string, artifactDigest string) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, "SnapshotMetadataPending", "The full flow snapshot is imported; target metadata is pending reconciliation.")
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.NiFiID = processGroupID
+	obj.Status.Revision.Version = revisionVersion
+	obj.Status.ProcessGroupID = processGroupID
+	obj.Status.DeployedVersion = deployedVersion
+	obj.Status.ArtifactDigest = artifactDigest
+	obj.Status.SyncState = "MetadataPending"
+	obj.Status.LatestReplaceRequest = nil
+	obj.Status.Sync.LastError = ""
+	return c.Status().Update(ctx, obj)
+}
+
 func markFlowDeploymentNotReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFlowDeployment, reason, message string) error {
 	obj.Status.CommonStatus.MarkNotReady(obj.Generation, reason, message)
 	obj.Status.Dependencies.Ready = true
 	obj.Status.Dependencies.WaitingFor = nil
 	obj.Status.Sync.LastError = message
+	return c.Status().Update(ctx, obj)
+}
+
+func markFlowDeploymentReplaceRunning(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFlowDeployment, request *nifiv1alpha1.FlowReplaceRequestStatus) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, "FlowReplaceRunning", "NiFi is replacing the deployed flow contents.")
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.LatestReplaceRequest = request
+	obj.Status.SyncState = "Replacing"
+	obj.Status.Sync.LastError = ""
 	return c.Status().Update(ctx, obj)
 }
 

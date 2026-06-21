@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,23 @@ import (
 )
 
 const defaultTimeout = 10 * time.Second
+
+type HTTPStatusError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *HTTPStatusError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("nifi api returned HTTP %d: %s", e.StatusCode, e.Message)
+	}
+	return fmt.Sprintf("nifi api returned HTTP %d", e.StatusCode)
+}
+
+func IsNotFound(err error) bool {
+	var statusErr *HTTPStatusError
+	return errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusNotFound
+}
 
 type ReachabilityChecker interface {
 	CheckReachable(ctx context.Context, baseURI string, timeout time.Duration) error
@@ -43,6 +61,13 @@ type ProcessGroupClient interface {
 	CreateProcessGroup(ctx context.Context, baseURI string, parentID string, entity ProcessGroupEntity) (*ProcessGroupEntity, error)
 	UpdateProcessGroup(ctx context.Context, baseURI string, entity ProcessGroupEntity) (*ProcessGroupEntity, error)
 	DeleteProcessGroup(ctx context.Context, baseURI string, id string, revisionVersion int64) error
+}
+
+type FlowSnapshotClient interface {
+	ImportProcessGroup(ctx context.Context, baseURI string, parentID string, snapshot json.RawMessage) (*ProcessGroupEntity, error)
+	CreateProcessGroupReplaceRequest(ctx context.Context, baseURI string, processGroupID string, revisionVersion int64, snapshot json.RawMessage) (*ProcessGroupReplaceRequestEntity, error)
+	GetProcessGroupReplaceRequest(ctx context.Context, baseURI string, requestID string) (*ProcessGroupReplaceRequestEntity, error)
+	DeleteProcessGroupReplaceRequest(ctx context.Context, baseURI string, requestID string) error
 }
 
 type ControllerServiceClient interface {
@@ -103,6 +128,10 @@ type HTTPRegistryClientClient struct {
 }
 
 type HTTPProcessGroupClient struct {
+	Client *http.Client
+}
+
+type HTTPFlowSnapshotClient struct {
 	Client *http.Client
 }
 
@@ -223,6 +252,29 @@ type ProcessGroupComponent struct {
 	Comments         string              `json:"comments,omitempty"`
 	Position         *Position           `json:"position,omitempty"`
 	ParameterContext *ComponentReference `json:"parameterContext,omitempty"`
+}
+
+type ProcessGroupImportEntity struct {
+	ProcessGroupRevision         *Revision       `json:"processGroupRevision,omitempty"`
+	DisconnectedNodeAcknowledged bool            `json:"disconnectedNodeAcknowledged,omitempty"`
+	VersionedFlowSnapshot        json.RawMessage `json:"versionedFlowSnapshot"`
+}
+
+type ProcessGroupReplaceRequestEntity struct {
+	ProcessGroupRevision  *Revision                  `json:"processGroupRevision,omitempty"`
+	Request               ProcessGroupReplaceRequest `json:"request,omitempty"`
+	VersionedFlowSnapshot json.RawMessage            `json:"versionedFlowSnapshot,omitempty"`
+}
+
+type ProcessGroupReplaceRequest struct {
+	RequestID        string `json:"requestId,omitempty"`
+	ProcessGroupID   string `json:"processGroupId,omitempty"`
+	URI              string `json:"uri,omitempty"`
+	LastUpdated      string `json:"lastUpdated,omitempty"`
+	Complete         bool   `json:"complete,omitempty"`
+	FailureReason    string `json:"failureReason,omitempty"`
+	PercentCompleted int32  `json:"percentCompleted,omitempty"`
+	State            string `json:"state,omitempty"`
 }
 
 type ControllerServiceEntity struct {
@@ -553,6 +605,59 @@ func (c HTTPProcessGroupClient) DeleteProcessGroup(ctx context.Context, baseURI 
 	endpoint += fmt.Sprintf("?version=%d", revisionVersion)
 
 	return c.doJSON(ctx, http.MethodDelete, endpoint, nil, nil)
+}
+
+func (c HTTPFlowSnapshotClient) ImportProcessGroup(ctx context.Context, baseURI string, parentID string, snapshot json.RawMessage) (*ProcessGroupEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/%s/process-groups/import", url.PathEscape(parentID)))
+	if err != nil {
+		return nil, err
+	}
+	body := ProcessGroupImportEntity{VersionedFlowSnapshot: snapshot}
+	var response ProcessGroupEntity
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, body, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPFlowSnapshotClient) CreateProcessGroupReplaceRequest(ctx context.Context, baseURI string, processGroupID string, revisionVersion int64, snapshot json.RawMessage) (*ProcessGroupReplaceRequestEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/%s/replace-requests", url.PathEscape(processGroupID)))
+	if err != nil {
+		return nil, err
+	}
+	body := ProcessGroupImportEntity{
+		ProcessGroupRevision:  &Revision{Version: revisionVersion},
+		VersionedFlowSnapshot: snapshot,
+	}
+	var response ProcessGroupReplaceRequestEntity
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, body, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPFlowSnapshotClient) GetProcessGroupReplaceRequest(ctx context.Context, baseURI string, requestID string) (*ProcessGroupReplaceRequestEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/replace-requests/%s", url.PathEscape(requestID)))
+	if err != nil {
+		return nil, err
+	}
+	var response ProcessGroupReplaceRequestEntity
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPFlowSnapshotClient) DeleteProcessGroupReplaceRequest(ctx context.Context, baseURI string, requestID string) error {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/replace-requests/%s", url.PathEscape(requestID)))
+	if err != nil {
+		return err
+	}
+	err = c.doJSON(ctx, http.MethodDelete, endpoint, nil, nil)
+	if IsNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 func (c HTTPControllerServiceClient) GetControllerService(ctx context.Context, baseURI string, id string) (*ControllerServiceEntity, error) {
@@ -933,6 +1038,10 @@ func (c HTTPProcessGroupClient) doJSON(ctx context.Context, method, endpoint str
 	return doJSON(ctx, c.Client, method, endpoint, body, out)
 }
 
+func (c HTTPFlowSnapshotClient) doJSON(ctx context.Context, method, endpoint string, body any, out any) error {
+	return doJSON(ctx, c.Client, method, endpoint, body, out)
+}
+
 func (c HTTPControllerServiceClient) doJSON(ctx context.Context, method, endpoint string, body any, out any) error {
 	return doJSON(ctx, c.Client, method, endpoint, body, out)
 }
@@ -1002,10 +1111,7 @@ func doJSON(ctx context.Context, client *http.Client, method, endpoint string, b
 
 	if resp.StatusCode < 200 || resp.StatusCode > 399 {
 		message, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		if len(message) > 0 {
-			return fmt.Errorf("nifi api returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(message)))
-		}
-		return fmt.Errorf("nifi api returned HTTP %d", resp.StatusCode)
+		return &HTTPStatusError{StatusCode: resp.StatusCode, Message: strings.TrimSpace(string(message))}
 	}
 	if out == nil || resp.StatusCode == http.StatusNoContent {
 		return nil

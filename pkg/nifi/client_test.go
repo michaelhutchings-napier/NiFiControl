@@ -377,6 +377,93 @@ func TestHTTPProcessGroupClientDeleteProcessGroup(t *testing.T) {
 	}
 }
 
+func TestHTTPFlowSnapshotClientImportProcessGroup(t *testing.T) {
+	snapshot := json.RawMessage(`{"flowContents":{"name":"Payments","processors":[{"name":"Generate"}]}}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/process-groups/root/process-groups/import" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		var got ProcessGroupImportEntity
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if string(got.VersionedFlowSnapshot) != string(snapshot) {
+			t.Fatalf("snapshot = %s, want %s", got.VersionedFlowSnapshot, snapshot)
+		}
+		_ = json.NewEncoder(w).Encode(ProcessGroupEntity{ID: "pg-imported", Revision: Revision{Version: 3}})
+	}))
+	defer server.Close()
+
+	imported, err := (HTTPFlowSnapshotClient{}).ImportProcessGroup(t.Context(), server.URL, "root", snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imported.ID != "pg-imported" || imported.Revision.Version != 3 {
+		t.Fatalf("imported = %#v", imported)
+	}
+}
+
+func TestHTTPFlowSnapshotClientReplaceRequestLifecycle(t *testing.T) {
+	snapshot := json.RawMessage(`{"flowContents":{"name":"Payments"}}`)
+	requestCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/nifi-api/process-groups/pg-1/replace-requests":
+			requestCalls++
+			var got ProcessGroupImportEntity
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got.ProcessGroupRevision == nil || got.ProcessGroupRevision.Version != 12 {
+				t.Fatalf("revision = %#v, want 12", got.ProcessGroupRevision)
+			}
+			_ = json.NewEncoder(w).Encode(ProcessGroupReplaceRequestEntity{Request: ProcessGroupReplaceRequest{RequestID: "replace-1", State: "Running"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/nifi-api/process-groups/replace-requests/replace-1":
+			requestCalls++
+			_ = json.NewEncoder(w).Encode(ProcessGroupReplaceRequestEntity{Request: ProcessGroupReplaceRequest{RequestID: "replace-1", State: "Complete", Complete: true, PercentCompleted: 100}})
+		case r.Method == http.MethodDelete && r.URL.Path == "/nifi-api/process-groups/replace-requests/replace-1":
+			requestCalls++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := HTTPFlowSnapshotClient{}
+	created, err := client.CreateProcessGroupReplaceRequest(t.Context(), server.URL, "pg-1", 12, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, err := client.GetProcessGroupReplaceRequest(t.Context(), server.URL, created.Request.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !observed.Request.Complete || observed.Request.PercentCompleted != 100 {
+		t.Fatalf("observed request = %#v", observed.Request)
+	}
+	if err := client.DeleteProcessGroupReplaceRequest(t.Context(), server.URL, created.Request.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	if requestCalls != 3 {
+		t.Fatalf("request calls = %d, want 3", requestCalls)
+	}
+}
+
+func TestHTTPFlowSnapshotClientDeleteMissingReplaceRequestIsIdempotent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "request no longer exists", http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	if err := (HTTPFlowSnapshotClient{}).DeleteProcessGroupReplaceRequest(t.Context(), server.URL, "replace-1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHTTPControllerServiceClientCreateControllerService(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

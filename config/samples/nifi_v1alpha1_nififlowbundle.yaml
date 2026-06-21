@@ -5,8 +5,88 @@ metadata:
 spec:
   version: 1.0.0
   source:
-    git:
-      url: https://github.com/example/nifi-flows.git
-      ref: main
-      path: flows/payments
-
+    snapshot:
+      snapshotMetadata:
+        version: 1
+        author: platform-team
+        comments: Payments flow managed by NiFiControl
+      flowContents:
+        identifier: payments-flow
+        name: payments
+        comments: Generates and logs a sample payment event.
+        position:
+          x: 0
+          y: 0
+        processors:
+          - identifier: generate-payment
+            name: Generate payment
+            type: org.apache.nifi.processors.standard.GenerateFlowFile
+            bundle:
+              group: org.apache.nifi
+              artifact: nifi-standard-nar
+              version: 1.28.0
+            properties:
+              Custom Text: '{"paymentId":"${UUID()}","amount":42}'
+              File Size: 0B
+            schedulingStrategy: TIMER_DRIVEN
+            schedulingPeriod: 30 sec
+            executionNode: ALL
+            concurrentlySchedulableTaskCount: 1
+            penaltyDuration: 30 sec
+            yieldDuration: 1 sec
+            bulletinLevel: WARN
+            scheduledState: ENABLED
+            autoTerminatedRelationships:
+              - failure
+          - identifier: log-payment
+            name: Log payment
+            type: org.apache.nifi.processors.standard.LogAttribute
+            bundle:
+              group: org.apache.nifi
+              artifact: nifi-standard-nar
+              version: 1.28.0
+            properties:
+              Log Level: info
+            schedulingStrategy: TIMER_DRIVEN
+            schedulingPeriod: 0 sec
+            executionNode: ALL
+            concurrentlySchedulableTaskCount: 1
+            penaltyDuration: 30 sec
+            yieldDuration: 1 sec
+            bulletinLevel: WARN
+            scheduledState: ENABLED
+            autoTerminatedRelationships:
+              - success
+        connections:
+          - identifier: generated-to-log
+            name: generated payments
+            source:
+              id: generate-payment
+              groupId: payments-flow
+              type: PROCESSOR
+            destination:
+              id: log-payment
+              groupId: payments-flow
+              type: PROCESSOR
+            selectedRelationships:
+              - success
+            backPressureObjectThreshold: 10000
+            backPressureDataSizeThreshold: 1 GB
+            flowFileExpiration: 0 sec
+            loadBalanceStrategy: DO_NOT_LOAD_BALANCE
+        controllerServices: []
+        inputPorts: []
+        outputPorts: []
+        funnels: []
+        labels:
+          - identifier: payments-label
+            label: Payments sample
+            width: 260
+            height: 48
+            position:
+              x: 0
+              y: -100
+            style:
+              font-size: 20px
+        processGroups: []
+        remoteProcessGroups: []

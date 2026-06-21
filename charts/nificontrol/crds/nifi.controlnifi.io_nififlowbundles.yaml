@@ -86,7 +86,17 @@ spec:
                     - flowId
                     - registryClientRef
                     type: object
+                  snapshot:
+                    description: |-
+                      Snapshot contains a NiFi RegisteredFlowSnapshot, such as the JSON
+                      returned by downloading a versioned process group.
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
                 type: object
+                x-kubernetes-validations:
+                - message: exactly one flow bundle source must be configured
+                  rule: '(has(self.git) ? 1 : 0) + (has(self.oci) ? 1 : 0) + (has(self.registry)
+                    ? 1 : 0) + (has(self.snapshot) ? 1 : 0) == 1'
               version:
                 type: string
             required:

@@ -2,6 +2,7 @@ package v1alpha1
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+// +kubebuilder:validation:XValidation:rule="(has(self.bundleRef) ? 1 : 0) + (has(self.inline) ? 1 : 0) == 1",message="exactly one flow deployment source must be configured"
 type FlowDeploymentSource struct {
 	BundleRef *LocalObjectReference `json:"bundleRef,omitempty"`
 	Version   string                `json:"version,omitempty"`
@@ -48,11 +49,22 @@ type NiFiFlowDeploymentSpec struct {
 }
 
 type NiFiFlowDeploymentStatus struct {
-	CommonStatus    `json:",inline"`
-	DeployedVersion string `json:"deployedVersion,omitempty"`
-	ArtifactDigest  string `json:"artifactDigest,omitempty"`
-	ProcessGroupID  string `json:"processGroupId,omitempty"`
-	SyncState       string `json:"syncState,omitempty"`
+	CommonStatus         `json:",inline"`
+	DeployedVersion      string                    `json:"deployedVersion,omitempty"`
+	ArtifactDigest       string                    `json:"artifactDigest,omitempty"`
+	ProcessGroupID       string                    `json:"processGroupId,omitempty"`
+	SyncState            string                    `json:"syncState,omitempty"`
+	LatestReplaceRequest *FlowReplaceRequestStatus `json:"latestReplaceRequest,omitempty"`
+}
+
+type FlowReplaceRequestStatus struct {
+	ID               string `json:"id,omitempty"`
+	State            string `json:"state,omitempty"`
+	Complete         bool   `json:"complete,omitempty"`
+	FailureReason    string `json:"failureReason,omitempty"`
+	PercentCompleted int32  `json:"percentCompleted,omitempty"`
+	TargetDigest     string `json:"targetDigest,omitempty"`
+	TargetVersion    string `json:"targetVersion,omitempty"`
 }
 
 // +kubebuilder:object:root=true

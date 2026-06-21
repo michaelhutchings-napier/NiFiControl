@@ -1173,6 +1173,12 @@ Key spec fields: `source`, `version`, `parameters.schema`, `validation`,
 Key status fields: common status without NiFi ID, `artifactDigest`,
 `resolvedRevision`, `validated`, `inventory`.
 
+Current implementation: `source.snapshot` accepts a native NiFi
+`RegisteredFlowSnapshot`. NiFiControl validates `flowContents`, computes a
+stable SHA-256 digest from canonical JSON, and makes the snapshot available to
+referencing deployments. Git, OCI, and Registry sources currently resolve
+metadata but do not fetch the remote snapshot payload.
+
 Dependencies: Git, OCI, NiFi Registry, or embedded artifact source.
 
 Deletion behavior: Kubernetes-only; no NiFi resources owned directly.
@@ -1231,6 +1237,11 @@ Key spec fields: `clusterRef`, `source`, `target`, `parameterContextRef`,
 Key status fields: common status, `deployedVersion`, `artifactDigest`,
 `processGroupId`, `componentInventory`, `lastSuccessfulDeployment`,
 `rolloutHistory`, `syncState`.
+
+Current implementation: embedded snapshots are imported with NiFi's native
+process-group import API. Updates use asynchronous process-group replace
+requests, checkpoint request progress in `latestReplaceRequest`, and reconcile
+the target name and parameter context after NiFi finishes replacing the graph.
 
 Dependencies: `NiFiCluster`, source provider or `NiFiFlowBundle`,
 `NiFiRegistryClient`, target `NiFiProcessGroup`, `NiFiParameterContext`,

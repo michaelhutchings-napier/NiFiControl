@@ -192,10 +192,24 @@ spec:
                         - flowId
                         - registryClientRef
                         type: object
+                      snapshot:
+                        description: |-
+                          Snapshot contains a NiFi RegisteredFlowSnapshot, such as the JSON
+                          returned by downloading a versioned process group.
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
                     type: object
+                    x-kubernetes-validations:
+                    - message: exactly one flow bundle source must be configured
+                      rule: '(has(self.git) ? 1 : 0) + (has(self.oci) ? 1 : 0) + (has(self.registry)
+                        ? 1 : 0) + (has(self.snapshot) ? 1 : 0) == 1'
                   version:
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: exactly one flow deployment source must be configured
+                  rule: '(has(self.bundleRef) ? 1 : 0) + (has(self.inline) ? 1 : 0)
+                    == 1'
               target:
                 properties:
                   parentProcessGroupRef:
@@ -296,6 +310,24 @@ spec:
                     format: date-time
                     type: string
                   status:
+                    type: string
+                type: object
+              latestReplaceRequest:
+                properties:
+                  complete:
+                    type: boolean
+                  failureReason:
+                    type: string
+                  id:
+                    type: string
+                  percentCompleted:
+                    format: int32
+                    type: integer
+                  state:
+                    type: string
+                  targetDigest:
+                    type: string
+                  targetVersion:
                     type: string
                 type: object
               nifiId:

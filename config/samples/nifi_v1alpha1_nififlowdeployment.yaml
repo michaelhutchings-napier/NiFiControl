@@ -12,7 +12,7 @@ spec:
   target:
     parentProcessGroupRef:
       root: true
-    processGroupName: payments
+    processGroupName: payments-release
   parameterContextRef:
     name: payments-prod
   rollout:
@@ -25,4 +25,3 @@ spec:
     prune: true
   driftPolicy:
     mode: Warn
-

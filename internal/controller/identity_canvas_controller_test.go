@@ -190,6 +190,67 @@ func TestNiFiFlowBundleReconcileMarksGitBundleReady(t *testing.T) {
 	}
 }
 
+func TestNiFiFlowBundleReconcileResolvesEmbeddedSnapshot(t *testing.T) {
+	scheme := testScheme()
+	snapshot := testFlowSnapshot("Payments", "Generate")
+	_, wantDigest, err := canonicalFlowSnapshot(snapshot, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	flowBundle := &nifiv1alpha1.NiFiFlowBundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiFlowBundleSpec{
+			Source:  nifiv1alpha1.FlowBundleSource{Snapshot: snapshot},
+			Version: "release-1",
+		},
+	}
+	k8sClient := newIdentityCanvasTestClient(scheme, flowBundle)
+	reconciler := &NiFiFlowBundleReconciler{Client: k8sClient, Scheme: scheme}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: flowBundle.Name, Namespace: flowBundle.Namespace}}
+
+	reconcileFlowBundleTwice(t, reconciler, request)
+
+	current := &nifiv1alpha1.NiFiFlowBundle{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if !current.Status.Ready || current.Status.ArtifactDigest != wantDigest || current.Status.ResolvedRevision != "release-1" {
+		t.Fatalf("status ready/digest/revision = %v/%q/%q", current.Status.Ready, current.Status.ArtifactDigest, current.Status.ResolvedRevision)
+	}
+}
+
+func TestNiFiFlowBundleReconcileRejectsInvalidSnapshot(t *testing.T) {
+	scheme := testScheme()
+	flowBundle := &nifiv1alpha1.NiFiFlowBundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "invalid", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiFlowBundleSpec{
+			Source: nifiv1alpha1.FlowBundleSource{Snapshot: &runtime.RawExtension{Raw: []byte(`{"notFlowContents":{}}`)}},
+		},
+	}
+	k8sClient := newIdentityCanvasTestClient(scheme, flowBundle)
+	reconciler := &NiFiFlowBundleReconciler{Client: k8sClient, Scheme: scheme}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: flowBundle.Name, Namespace: flowBundle.Namespace}}
+
+	reconcileFlowBundleTwice(t, reconciler, request)
+
+	current := &nifiv1alpha1.NiFiFlowBundle{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if current.Status.Ready || current.Status.Sync.LastError == "" {
+		t.Fatalf("status ready/error = %v/%q", current.Status.Ready, current.Status.Sync.LastError)
+	}
+	readyReason := ""
+	for _, condition := range current.Status.Conditions {
+		if condition.Type == string(nifiv1alpha1.ConditionReady) {
+			readyReason = condition.Reason
+		}
+	}
+	if readyReason != "InvalidFlowSnapshot" {
+		t.Fatalf("ready condition reason = %q", readyReason)
+	}
+}
+
 func TestNiFiFlowDeploymentReconcileWaitsForBundleAndParameterContext(t *testing.T) {
 	scheme := testScheme()
 	cluster := readyTestCluster()
