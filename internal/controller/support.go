@@ -177,6 +177,56 @@ func markFlowDeploymentWaitingForDependencies(ctx context.Context, c client.Clie
 	return c.Status().Update(ctx, obj)
 }
 
+func markProcessorAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiProcessor) error {
+	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+	return c.Status().Update(ctx, obj)
+}
+
+func markProcessorWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiProcessor, waitingFor []string) error {
+	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
+	return c.Status().Update(ctx, obj)
+}
+
+func markInputPortAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiInputPort) error {
+	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+	return c.Status().Update(ctx, obj)
+}
+
+func markInputPortWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiInputPort, waitingFor []string) error {
+	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
+	return c.Status().Update(ctx, obj)
+}
+
+func markOutputPortAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiOutputPort) error {
+	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+	return c.Status().Update(ctx, obj)
+}
+
+func markOutputPortWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiOutputPort, waitingFor []string) error {
+	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
+	return c.Status().Update(ctx, obj)
+}
+
+func markConnectionAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiConnection) error {
+	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+	return c.Status().Update(ctx, obj)
+}
+
+func markConnectionWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiConnection, waitingFor []string) error {
+	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
+	return c.Status().Update(ctx, obj)
+}
+
+func markReportingTaskAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiReportingTask) error {
+	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+	return c.Status().Update(ctx, obj)
+}
+
+func markReportingTaskWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiReportingTask, waitingFor []string) error {
+	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
+	return c.Status().Update(ctx, obj)
+}
+
 func clusterDependencyWaitingFor(ctx context.Context, c client.Client, namespace string, ref nifiv1alpha1.ClusterReference) ([]string, error) {
 	cluster, waitingFor, err := clusterDependency(ctx, c, namespace, ref)
 	if err != nil || cluster == nil {

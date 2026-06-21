@@ -1,0 +1,24 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiProcessor
+metadata:
+  name: generate-payments
+spec:
+  clusterRef:
+    name: production
+  parentProcessGroupRef:
+    name: payments
+  type: org.apache.nifi.processors.standard.GenerateFlowFile
+  displayName: Generate Payments
+  position:
+    x: 200
+    y: 120
+  properties:
+    File Size: 1 KB
+    Batch Size: "1"
+  autoTerminatedRelationships:
+    - success
+  scheduling:
+    strategy: TIMER_DRIVEN
+    period: 1 min
+    concurrentlySchedulableTaskCount: 1
+  state: Stopped

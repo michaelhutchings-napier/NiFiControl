@@ -1,0 +1,14 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiInputPort
+metadata:
+  name: payments-in
+spec:
+  clusterRef:
+    name: production
+  parentProcessGroupRef:
+    name: payments
+  displayName: Payments In
+  position:
+    x: 0
+    y: 200
+  state: Stopped

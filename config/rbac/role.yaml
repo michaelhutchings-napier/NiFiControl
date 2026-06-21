@@ -14,12 +14,17 @@ rules:
   - nifi.controlnifi.io
   resources:
   - nificlusters
+  - nificonnections
   - nificontrollerservices
   - nififlowbundles
   - nififlowdeployments
+  - nifiinputports
+  - nifioutputports
   - nifiparametercontexts
   - nifiprocessgroups
+  - nifiprocessors
   - nifiregistryclients
+  - nifireportingtasks
   - nifiusergroups
   - nifiusers
   verbs:
@@ -34,12 +39,17 @@ rules:
   - nifi.controlnifi.io
   resources:
   - nificlusters/finalizers
+  - nificonnections/finalizers
   - nificontrollerservices/finalizers
   - nififlowbundles/finalizers
   - nififlowdeployments/finalizers
+  - nifiinputports/finalizers
+  - nifioutputports/finalizers
   - nifiparametercontexts/finalizers
   - nifiprocessgroups/finalizers
+  - nifiprocessors/finalizers
   - nifiregistryclients/finalizers
+  - nifireportingtasks/finalizers
   - nifiusergroups/finalizers
   - nifiusers/finalizers
   verbs:
@@ -48,12 +58,17 @@ rules:
   - nifi.controlnifi.io
   resources:
   - nificlusters/status
+  - nificonnections/status
   - nificontrollerservices/status
   - nififlowbundles/status
   - nififlowdeployments/status
+  - nifiinputports/status
+  - nifioutputports/status
   - nifiparametercontexts/status
   - nifiprocessgroups/status
+  - nifiprocessors/status
   - nifiregistryclients/status
+  - nifireportingtasks/status
   - nifiusergroups/status
   - nifiusers/status
   verbs:

@@ -45,6 +45,21 @@ import (
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nififlowdeployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nififlowdeployments/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nififlowdeployments/finalizers,verbs=update
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiprocessors,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiprocessors/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiprocessors/finalizers,verbs=update
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiinputports,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiinputports/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiinputports/finalizers,verbs=update
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifioutputports,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifioutputports/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifioutputports/finalizers,verbs=update
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nificonnections,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nificonnections/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nificonnections/finalizers,verbs=update
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifireportingtasks,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifireportingtasks/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifireportingtasks/finalizers,verbs=update
 
 type NiFiClusterReconciler struct {
 	client.Client
@@ -1036,6 +1051,247 @@ func (r *NiFiFlowDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		Complete(r)
 }
 
+type NiFiProcessorReconciler struct {
+	client.Client
+	Scheme *runtime.Scheme
+}
+
+func (r *NiFiProcessorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	instance := &nifiv1alpha1.NiFiProcessor{}
+	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	if !instance.DeletionTimestamp.IsZero() {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	waitingFor = append(waitingFor, processorDependenciesWaitingFor(ctx, r.Client, instance)...)
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markProcessorWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
+		return ctrl.Result{}, markProcessorAccepted(ctx, r.Client, instance)
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *NiFiProcessorReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &nifiv1alpha1.NiFiProcessor{}, clusterRefIndexField, indexProcessorClusterRef); err != nil {
+		return err
+	}
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&nifiv1alpha1.NiFiProcessor{}).
+		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCluster)).
+		Watches(&nifiv1alpha1.NiFiProcessGroup{}, handler.EnqueueRequestsFromMapFunc(r.requestsForProcessGroup)).
+		Complete(r)
+}
+
+type NiFiInputPortReconciler struct {
+	client.Client
+	Scheme *runtime.Scheme
+}
+
+func (r *NiFiInputPortReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	instance := &nifiv1alpha1.NiFiInputPort{}
+	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	if !instance.DeletionTimestamp.IsZero() {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	waitingFor = append(waitingFor, inputPortDependenciesWaitingFor(ctx, r.Client, instance)...)
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markInputPortWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
+		return ctrl.Result{}, markInputPortAccepted(ctx, r.Client, instance)
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *NiFiInputPortReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &nifiv1alpha1.NiFiInputPort{}, clusterRefIndexField, indexInputPortClusterRef); err != nil {
+		return err
+	}
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&nifiv1alpha1.NiFiInputPort{}).
+		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCluster)).
+		Watches(&nifiv1alpha1.NiFiProcessGroup{}, handler.EnqueueRequestsFromMapFunc(r.requestsForProcessGroup)).
+		Complete(r)
+}
+
+type NiFiOutputPortReconciler struct {
+	client.Client
+	Scheme *runtime.Scheme
+}
+
+func (r *NiFiOutputPortReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	instance := &nifiv1alpha1.NiFiOutputPort{}
+	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	if !instance.DeletionTimestamp.IsZero() {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	waitingFor = append(waitingFor, outputPortDependenciesWaitingFor(ctx, r.Client, instance)...)
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markOutputPortWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
+		return ctrl.Result{}, markOutputPortAccepted(ctx, r.Client, instance)
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *NiFiOutputPortReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &nifiv1alpha1.NiFiOutputPort{}, clusterRefIndexField, indexOutputPortClusterRef); err != nil {
+		return err
+	}
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&nifiv1alpha1.NiFiOutputPort{}).
+		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCluster)).
+		Watches(&nifiv1alpha1.NiFiProcessGroup{}, handler.EnqueueRequestsFromMapFunc(r.requestsForProcessGroup)).
+		Complete(r)
+}
+
+type NiFiConnectionReconciler struct {
+	client.Client
+	Scheme *runtime.Scheme
+}
+
+func (r *NiFiConnectionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	instance := &nifiv1alpha1.NiFiConnection{}
+	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	if !instance.DeletionTimestamp.IsZero() {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	waitingFor = append(waitingFor, connectionDependenciesWaitingFor(ctx, r.Client, instance)...)
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markConnectionWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
+		return ctrl.Result{}, markConnectionAccepted(ctx, r.Client, instance)
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *NiFiConnectionReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &nifiv1alpha1.NiFiConnection{}, clusterRefIndexField, indexConnectionClusterRef); err != nil {
+		return err
+	}
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&nifiv1alpha1.NiFiConnection{}).
+		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCluster)).
+		Watches(&nifiv1alpha1.NiFiProcessGroup{}, handler.EnqueueRequestsFromMapFunc(r.requestsForProcessGroup)).
+		Watches(&nifiv1alpha1.NiFiProcessor{}, handler.EnqueueRequestsFromMapFunc(r.requestsForProcessor)).
+		Watches(&nifiv1alpha1.NiFiInputPort{}, handler.EnqueueRequestsFromMapFunc(r.requestsForInputPort)).
+		Watches(&nifiv1alpha1.NiFiOutputPort{}, handler.EnqueueRequestsFromMapFunc(r.requestsForOutputPort)).
+		Complete(r)
+}
+
+type NiFiReportingTaskReconciler struct {
+	client.Client
+	Scheme *runtime.Scheme
+}
+
+func (r *NiFiReportingTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	instance := &nifiv1alpha1.NiFiReportingTask{}
+	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	if !instance.DeletionTimestamp.IsZero() {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markReportingTaskWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
+		return ctrl.Result{}, markReportingTaskAccepted(ctx, r.Client, instance)
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *NiFiReportingTaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &nifiv1alpha1.NiFiReportingTask{}, clusterRefIndexField, indexReportingTaskClusterRef); err != nil {
+		return err
+	}
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&nifiv1alpha1.NiFiReportingTask{}).
+		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCluster)).
+		Complete(r)
+}
+
 func indexRegistryClientClusterRef(obj client.Object) []string {
 	registryClient, ok := obj.(*nifiv1alpha1.NiFiRegistryClient)
 	if !ok {
@@ -1090,6 +1346,46 @@ func indexFlowDeploymentClusterRef(obj client.Object) []string {
 		return nil
 	}
 	return indexClusterRef(flowDeployment.Namespace, flowDeployment.Spec.ClusterRef)
+}
+
+func indexProcessorClusterRef(obj client.Object) []string {
+	processor, ok := obj.(*nifiv1alpha1.NiFiProcessor)
+	if !ok {
+		return nil
+	}
+	return indexClusterRef(processor.Namespace, processor.Spec.ClusterRef)
+}
+
+func indexInputPortClusterRef(obj client.Object) []string {
+	inputPort, ok := obj.(*nifiv1alpha1.NiFiInputPort)
+	if !ok {
+		return nil
+	}
+	return indexClusterRef(inputPort.Namespace, inputPort.Spec.ClusterRef)
+}
+
+func indexOutputPortClusterRef(obj client.Object) []string {
+	outputPort, ok := obj.(*nifiv1alpha1.NiFiOutputPort)
+	if !ok {
+		return nil
+	}
+	return indexClusterRef(outputPort.Namespace, outputPort.Spec.ClusterRef)
+}
+
+func indexConnectionClusterRef(obj client.Object) []string {
+	connection, ok := obj.(*nifiv1alpha1.NiFiConnection)
+	if !ok {
+		return nil
+	}
+	return indexClusterRef(connection.Namespace, connection.Spec.ClusterRef)
+}
+
+func indexReportingTaskClusterRef(obj client.Object) []string {
+	reportingTask, ok := obj.(*nifiv1alpha1.NiFiReportingTask)
+	if !ok {
+		return nil
+	}
+	return indexClusterRef(reportingTask.Namespace, reportingTask.Spec.ClusterRef)
 }
 
 func indexClusterRef(namespace string, ref nifiv1alpha1.ClusterReference) []string {
@@ -1174,6 +1470,66 @@ func (r *NiFiControllerServiceReconciler) requestsForCluster(ctx context.Context
 
 func (r *NiFiFlowDeploymentReconciler) requestsForCluster(ctx context.Context, obj client.Object) []reconcile.Request {
 	list := &nifiv1alpha1.NiFiFlowDeploymentList{}
+	if err := listByClusterRef(ctx, r.Client, obj, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+	}
+	return requests
+}
+
+func (r *NiFiProcessorReconciler) requestsForCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiProcessorList{}
+	if err := listByClusterRef(ctx, r.Client, obj, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+	}
+	return requests
+}
+
+func (r *NiFiInputPortReconciler) requestsForCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiInputPortList{}
+	if err := listByClusterRef(ctx, r.Client, obj, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+	}
+	return requests
+}
+
+func (r *NiFiOutputPortReconciler) requestsForCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiOutputPortList{}
+	if err := listByClusterRef(ctx, r.Client, obj, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+	}
+	return requests
+}
+
+func (r *NiFiConnectionReconciler) requestsForCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiConnectionList{}
+	if err := listByClusterRef(ctx, r.Client, obj, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+	}
+	return requests
+}
+
+func (r *NiFiReportingTaskReconciler) requestsForCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiReportingTaskList{}
 	if err := listByClusterRef(ctx, r.Client, obj, list); err != nil {
 		return nil
 	}
@@ -1296,6 +1652,89 @@ func (r *NiFiFlowDeploymentReconciler) requestsForProcessGroup(ctx context.Conte
 	return requests
 }
 
+func (r *NiFiProcessorReconciler) requestsForProcessGroup(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiProcessorList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		if processGroupReferenceMatches(item.Namespace, item.Spec.ParentProcessGroupRef, obj) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
+func (r *NiFiInputPortReconciler) requestsForProcessGroup(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiInputPortList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		if processGroupReferenceMatches(item.Namespace, item.Spec.ParentProcessGroupRef, obj) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
+func (r *NiFiOutputPortReconciler) requestsForProcessGroup(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiOutputPortList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		if processGroupReferenceMatches(item.Namespace, item.Spec.ParentProcessGroupRef, obj) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
+func (r *NiFiConnectionReconciler) requestsForProcessGroup(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiConnectionList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		if processGroupReferenceMatches(item.Namespace, item.Spec.ParentProcessGroupRef, obj) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
+func (r *NiFiConnectionReconciler) requestsForProcessor(ctx context.Context, obj client.Object) []reconcile.Request {
+	return r.requestsForConnectable(ctx, obj, nifiv1alpha1.ConnectableTypeProcessor)
+}
+
+func (r *NiFiConnectionReconciler) requestsForInputPort(ctx context.Context, obj client.Object) []reconcile.Request {
+	return r.requestsForConnectable(ctx, obj, nifiv1alpha1.ConnectableTypeInputPort)
+}
+
+func (r *NiFiConnectionReconciler) requestsForOutputPort(ctx context.Context, obj client.Object) []reconcile.Request {
+	return r.requestsForConnectable(ctx, obj, nifiv1alpha1.ConnectableTypeOutputPort)
+}
+
+func (r *NiFiConnectionReconciler) requestsForConnectable(ctx context.Context, obj client.Object, connectableType nifiv1alpha1.ConnectableType) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiConnectionList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		if connectableReferenceMatches(item.Namespace, item.Spec.Source, connectableType, obj) ||
+			connectableReferenceMatches(item.Namespace, item.Spec.Destination, connectableType, obj) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
 func listByClusterRef(ctx context.Context, c client.Client, cluster client.Object, list client.ObjectList) error {
 	indexValue := fmt.Sprintf("%s/%s", cluster.GetNamespace(), cluster.GetName())
 	return c.List(ctx, list, client.MatchingFields{clusterRefIndexField: indexValue})
@@ -1353,6 +1792,25 @@ func flowDeploymentDependenciesWaitingFor(ctx context.Context, c client.Client, 
 	waitingFor = append(waitingFor, flowBundleSourceDependenciesWaitingFor(ctx, c, flowDeployment.Namespace, flowDeployment.Spec.Source.Inline, "source.inline")...)
 	waitingFor = append(waitingFor, processGroupReferenceDependencyWaitingFor(ctx, c, flowDeployment.Namespace, flowDeployment.Spec.Target.ParentProcessGroupRef, "target.parentProcessGroupRef")...)
 	waitingFor = append(waitingFor, parameterContextDependencyWaitingFor(ctx, c, flowDeployment.Namespace, flowDeployment.Spec.ParameterContextRef, "parameterContextRef")...)
+	return waitingFor
+}
+
+func processorDependenciesWaitingFor(ctx context.Context, c client.Client, processor *nifiv1alpha1.NiFiProcessor) []string {
+	return processGroupReferenceDependencyWaitingFor(ctx, c, processor.Namespace, processor.Spec.ParentProcessGroupRef, "parentProcessGroupRef")
+}
+
+func inputPortDependenciesWaitingFor(ctx context.Context, c client.Client, inputPort *nifiv1alpha1.NiFiInputPort) []string {
+	return processGroupReferenceDependencyWaitingFor(ctx, c, inputPort.Namespace, inputPort.Spec.ParentProcessGroupRef, "parentProcessGroupRef")
+}
+
+func outputPortDependenciesWaitingFor(ctx context.Context, c client.Client, outputPort *nifiv1alpha1.NiFiOutputPort) []string {
+	return processGroupReferenceDependencyWaitingFor(ctx, c, outputPort.Namespace, outputPort.Spec.ParentProcessGroupRef, "parentProcessGroupRef")
+}
+
+func connectionDependenciesWaitingFor(ctx context.Context, c client.Client, connection *nifiv1alpha1.NiFiConnection) []string {
+	waitingFor := processGroupReferenceDependencyWaitingFor(ctx, c, connection.Namespace, connection.Spec.ParentProcessGroupRef, "parentProcessGroupRef")
+	waitingFor = append(waitingFor, connectableReferenceDependencyWaitingFor(ctx, c, connection.Namespace, connection.Spec.Source, "source")...)
+	waitingFor = append(waitingFor, connectableReferenceDependencyWaitingFor(ctx, c, connection.Namespace, connection.Spec.Destination, "destination")...)
 	return waitingFor
 }
 
@@ -1445,6 +1903,61 @@ func processGroupReferenceDependencyWaitingFor(ctx context.Context, c client.Cli
 	return nil
 }
 
+func connectableReferenceDependencyWaitingFor(ctx context.Context, c client.Client, namespace string, ref nifiv1alpha1.ConnectableReference, fieldPath string) []string {
+	if ref.Name == "" {
+		if ref.NiFiID != "" {
+			return nil
+		}
+		return []string{fieldPath + ".name"}
+	}
+	refNamespace := connectableRefNamespace(namespace, ref)
+	switch ref.Type {
+	case nifiv1alpha1.ConnectableTypeProcessor:
+		processor := &nifiv1alpha1.NiFiProcessor{}
+		key := types.NamespacedName{Name: ref.Name, Namespace: refNamespace}
+		if err := c.Get(ctx, key, processor); err != nil {
+			if apierrors.IsNotFound(err) {
+				return []string{fmt.Sprintf("NiFiProcessor/%s/%s", refNamespace, ref.Name)}
+			}
+			return []string{fmt.Sprintf("NiFiProcessor/%s/%s:GetError", refNamespace, ref.Name)}
+		}
+		if !processor.Status.Ready {
+			return []string{fmt.Sprintf("NiFiProcessor/%s/%s:Ready", refNamespace, ref.Name)}
+		}
+	case nifiv1alpha1.ConnectableTypeInputPort:
+		inputPort := &nifiv1alpha1.NiFiInputPort{}
+		key := types.NamespacedName{Name: ref.Name, Namespace: refNamespace}
+		if err := c.Get(ctx, key, inputPort); err != nil {
+			if apierrors.IsNotFound(err) {
+				return []string{fmt.Sprintf("NiFiInputPort/%s/%s", refNamespace, ref.Name)}
+			}
+			return []string{fmt.Sprintf("NiFiInputPort/%s/%s:GetError", refNamespace, ref.Name)}
+		}
+		if !inputPort.Status.Ready {
+			return []string{fmt.Sprintf("NiFiInputPort/%s/%s:Ready", refNamespace, ref.Name)}
+		}
+	case nifiv1alpha1.ConnectableTypeOutputPort:
+		outputPort := &nifiv1alpha1.NiFiOutputPort{}
+		key := types.NamespacedName{Name: ref.Name, Namespace: refNamespace}
+		if err := c.Get(ctx, key, outputPort); err != nil {
+			if apierrors.IsNotFound(err) {
+				return []string{fmt.Sprintf("NiFiOutputPort/%s/%s", refNamespace, ref.Name)}
+			}
+			return []string{fmt.Sprintf("NiFiOutputPort/%s/%s:GetError", refNamespace, ref.Name)}
+		}
+		if !outputPort.Status.Ready {
+			return []string{fmt.Sprintf("NiFiOutputPort/%s/%s:Ready", refNamespace, ref.Name)}
+		}
+	case nifiv1alpha1.ConnectableTypeFunnel:
+		if ref.NiFiID == "" {
+			return []string{fieldPath + ".nifiId"}
+		}
+	default:
+		return []string{fieldPath + ".type"}
+	}
+	return nil
+}
+
 func localObjectReferenceMatches(defaultNamespace string, ref nifiv1alpha1.LocalObjectReference, obj client.Object) bool {
 	if ref.Name == "" {
 		return false
@@ -1459,6 +1972,13 @@ func processGroupReferenceMatches(defaultNamespace string, ref nifiv1alpha1.Proc
 	return ref.Name == obj.GetName() && processGroupRefNamespace(defaultNamespace, ref) == obj.GetNamespace()
 }
 
+func connectableReferenceMatches(defaultNamespace string, ref nifiv1alpha1.ConnectableReference, connectableType nifiv1alpha1.ConnectableType, obj client.Object) bool {
+	if ref.Type != connectableType || ref.Name == "" {
+		return false
+	}
+	return ref.Name == obj.GetName() && connectableRefNamespace(defaultNamespace, ref) == obj.GetNamespace()
+}
+
 func localObjectRefNamespace(defaultNamespace string, ref nifiv1alpha1.LocalObjectReference) string {
 	if ref.Namespace != "" {
 		return ref.Namespace
@@ -1467,6 +1987,13 @@ func localObjectRefNamespace(defaultNamespace string, ref nifiv1alpha1.LocalObje
 }
 
 func processGroupRefNamespace(defaultNamespace string, ref nifiv1alpha1.ProcessGroupReference) string {
+	if ref.Namespace != "" {
+		return ref.Namespace
+	}
+	return defaultNamespace
+}
+
+func connectableRefNamespace(defaultNamespace string, ref nifiv1alpha1.ConnectableReference) string {
 	if ref.Namespace != "" {
 		return ref.Namespace
 	}

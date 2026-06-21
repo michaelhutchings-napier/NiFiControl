@@ -1,0 +1,14 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiOutputPort
+metadata:
+  name: payments-out
+spec:
+  clusterRef:
+    name: production
+  parentProcessGroupRef:
+    name: payments
+  displayName: Payments Out
+  position:
+    x: 520
+    y: 200
+  state: Stopped

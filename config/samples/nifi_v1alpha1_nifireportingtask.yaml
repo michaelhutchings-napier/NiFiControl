@@ -1,0 +1,12 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiReportingTask
+metadata:
+  name: site-to-site-status
+spec:
+  clusterRef:
+    name: production
+  type: org.apache.nifi.reporting.SiteToSiteStatusReportingTask
+  scheduling:
+    strategy: TIMER_DRIVEN
+    period: 1 min
+  state: Disabled

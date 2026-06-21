@@ -1,0 +1,21 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiConnection
+metadata:
+  name: payments-generated
+spec:
+  clusterRef:
+    name: production
+  parentProcessGroupRef:
+    name: payments
+  source:
+    type: Processor
+    name: generate-payments
+  destination:
+    type: OutputPort
+    name: payments-out
+  selectedRelationships:
+    - success
+  backPressureObjectThreshold: "10000"
+  backPressureDataSizeThreshold: 1 GB
+  flowFileExpiration: 0 sec
+  loadBalanceStrategy: DoNotLoadBalance

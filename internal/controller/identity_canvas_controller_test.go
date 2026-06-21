@@ -194,6 +194,77 @@ func TestNiFiFlowDeploymentReconcileWaitsForBundleAndParameterContext(t *testing
 	}
 }
 
+func TestNiFiProcessorReconcileWaitsForParentProcessGroup(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	processor := &nifiv1alpha1.NiFiProcessor{
+		ObjectMeta: metav1.ObjectMeta{Name: "generate-payments", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiProcessorSpec{
+			ClusterRef:            nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			ParentProcessGroupRef: nifiv1alpha1.ProcessGroupReference{Name: "payments"},
+			Type:                  "org.apache.nifi.processors.standard.GenerateFlowFile",
+		},
+	}
+	k8sClient := newIdentityCanvasTestClient(scheme, cluster, processor)
+	reconciler := &NiFiProcessorReconciler{Client: k8sClient, Scheme: scheme}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: processor.Name, Namespace: processor.Namespace}}
+
+	reconcileProcessorTwice(t, reconciler, request)
+
+	current := &nifiv1alpha1.NiFiProcessor{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if current.Status.Dependencies.Ready {
+		t.Fatal("dependencies ready = true, want false")
+	}
+	if len(current.Status.Dependencies.WaitingFor) != 1 || current.Status.Dependencies.WaitingFor[0] != "NiFiProcessGroup/default/payments" {
+		t.Fatalf("waitingFor = %#v, want missing process group", current.Status.Dependencies.WaitingFor)
+	}
+}
+
+func TestNiFiConnectionReconcileWaitsForSourceAndDestination(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	connection := &nifiv1alpha1.NiFiConnection{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments-generated", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiConnectionSpec{
+			ClusterRef: nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			Source: nifiv1alpha1.ConnectableReference{
+				Type: nifiv1alpha1.ConnectableTypeProcessor,
+				Name: "generate-payments",
+			},
+			Destination: nifiv1alpha1.ConnectableReference{
+				Type: nifiv1alpha1.ConnectableTypeOutputPort,
+				Name: "payments-out",
+			},
+			SelectedRelationships: []string{"success"},
+		},
+	}
+	k8sClient := newIdentityCanvasTestClient(scheme, cluster, connection)
+	reconciler := &NiFiConnectionReconciler{Client: k8sClient, Scheme: scheme}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: connection.Name, Namespace: connection.Namespace}}
+
+	reconcileConnectionTwice(t, reconciler, request)
+
+	current := &nifiv1alpha1.NiFiConnection{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if current.Status.Dependencies.Ready {
+		t.Fatal("dependencies ready = true, want false")
+	}
+	want := []string{"NiFiProcessor/default/generate-payments", "NiFiOutputPort/default/payments-out"}
+	if len(current.Status.Dependencies.WaitingFor) != len(want) {
+		t.Fatalf("waitingFor = %#v, want %#v", current.Status.Dependencies.WaitingFor, want)
+	}
+	for i := range want {
+		if current.Status.Dependencies.WaitingFor[i] != want[i] {
+			t.Fatalf("waitingFor = %#v, want %#v", current.Status.Dependencies.WaitingFor, want)
+		}
+	}
+}
+
 func newIdentityCanvasTestClient(scheme *runtime.Scheme, objects ...client.Object) client.Client {
 	return fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -208,6 +279,11 @@ func newIdentityCanvasTestClient(scheme *runtime.Scheme, objects ...client.Objec
 			&nifiv1alpha1.NiFiControllerService{},
 			&nifiv1alpha1.NiFiFlowBundle{},
 			&nifiv1alpha1.NiFiFlowDeployment{},
+			&nifiv1alpha1.NiFiProcessor{},
+			&nifiv1alpha1.NiFiInputPort{},
+			&nifiv1alpha1.NiFiOutputPort{},
+			&nifiv1alpha1.NiFiConnection{},
+			&nifiv1alpha1.NiFiReportingTask{},
 		).
 		Build()
 }
@@ -263,6 +339,26 @@ func reconcileFlowBundleTwice(t *testing.T, reconciler *NiFiFlowBundleReconciler
 }
 
 func reconcileFlowDeploymentTwice(t *testing.T, reconciler *NiFiFlowDeploymentReconciler, request ctrl.Request) {
+	t.Helper()
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func reconcileProcessorTwice(t *testing.T, reconciler *NiFiProcessorReconciler, request ctrl.Request) {
+	t.Helper()
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func reconcileConnectionTwice(t *testing.T, reconciler *NiFiConnectionReconciler, request ctrl.Request) {
 	t.Helper()
 	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
 		t.Fatal(err)
