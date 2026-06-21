@@ -66,6 +66,27 @@ type LabelClient interface {
 	DeleteLabel(ctx context.Context, baseURI string, id string, revisionVersion int64) error
 }
 
+type InputPortClient interface {
+	GetInputPort(ctx context.Context, baseURI string, id string) (*PortEntity, error)
+	CreateInputPort(ctx context.Context, baseURI string, parentID string, entity PortEntity) (*PortEntity, error)
+	UpdateInputPort(ctx context.Context, baseURI string, entity PortEntity) (*PortEntity, error)
+	DeleteInputPort(ctx context.Context, baseURI string, id string, revisionVersion int64) error
+}
+
+type OutputPortClient interface {
+	GetOutputPort(ctx context.Context, baseURI string, id string) (*PortEntity, error)
+	CreateOutputPort(ctx context.Context, baseURI string, parentID string, entity PortEntity) (*PortEntity, error)
+	UpdateOutputPort(ctx context.Context, baseURI string, entity PortEntity) (*PortEntity, error)
+	DeleteOutputPort(ctx context.Context, baseURI string, id string, revisionVersion int64) error
+}
+
+type ConnectionClient interface {
+	GetConnection(ctx context.Context, baseURI string, id string) (*ConnectionEntity, error)
+	CreateConnection(ctx context.Context, baseURI string, parentID string, entity ConnectionEntity) (*ConnectionEntity, error)
+	UpdateConnection(ctx context.Context, baseURI string, entity ConnectionEntity) (*ConnectionEntity, error)
+	DeleteConnection(ctx context.Context, baseURI string, id string, revisionVersion int64) error
+}
+
 type HTTPParameterContextClient struct {
 	Client *http.Client
 }
@@ -87,6 +108,18 @@ type HTTPFunnelClient struct {
 }
 
 type HTTPLabelClient struct {
+	Client *http.Client
+}
+
+type HTTPInputPortClient struct {
+	Client *http.Client
+}
+
+type HTTPOutputPortClient struct {
+	Client *http.Client
+}
+
+type HTTPConnectionClient struct {
 	Client *http.Client
 }
 
@@ -233,6 +266,48 @@ type LabelComponent struct {
 	Width         int32             `json:"width,omitempty"`
 	Height        int32             `json:"height,omitempty"`
 	Style         map[string]string `json:"style,omitempty"`
+}
+
+type PortEntity struct {
+	ID        string        `json:"id,omitempty"`
+	Revision  Revision      `json:"revision,omitempty"`
+	Component PortComponent `json:"component,omitempty"`
+}
+
+type PortComponent struct {
+	ID                               string    `json:"id,omitempty"`
+	ParentGroupID                    string    `json:"parentGroupId,omitempty"`
+	Name                             string    `json:"name,omitempty"`
+	Position                         *Position `json:"position,omitempty"`
+	State                            string    `json:"state,omitempty"`
+	ConcurrentlySchedulableTaskCount int32     `json:"concurrentlySchedulableTaskCount,omitempty"`
+}
+
+type ConnectionEntity struct {
+	ID        string              `json:"id,omitempty"`
+	Revision  Revision            `json:"revision,omitempty"`
+	Component ConnectionComponent `json:"component,omitempty"`
+}
+
+type ConnectionComponent struct {
+	ID                            string      `json:"id,omitempty"`
+	ParentGroupID                 string      `json:"parentGroupId,omitempty"`
+	Source                        Connectable `json:"source,omitempty"`
+	Destination                   Connectable `json:"destination,omitempty"`
+	SelectedRelationships         []string    `json:"selectedRelationships,omitempty"`
+	BackPressureObjectThreshold   string      `json:"backPressureObjectThreshold,omitempty"`
+	BackPressureDataSizeThreshold string      `json:"backPressureDataSizeThreshold,omitempty"`
+	FlowFileExpiration            string      `json:"flowFileExpiration,omitempty"`
+	Prioritizers                  []string    `json:"prioritizers,omitempty"`
+	Bends                         []Position  `json:"bends,omitempty"`
+	LoadBalanceStrategy           string      `json:"loadBalanceStrategy,omitempty"`
+	LoadBalancePartitionAttribute string      `json:"loadBalancePartitionAttribute,omitempty"`
+}
+
+type Connectable struct {
+	ID      string `json:"id,omitempty"`
+	Type    string `json:"type,omitempty"`
+	GroupID string `json:"groupId,omitempty"`
 }
 
 func (c HTTPReachabilityChecker) CheckReachable(ctx context.Context, baseURI string, timeout time.Duration) error {
@@ -611,6 +686,160 @@ func (c HTTPLabelClient) DeleteLabel(ctx context.Context, baseURI string, id str
 	return c.doJSON(ctx, http.MethodDelete, endpoint, nil, nil)
 }
 
+func (c HTTPInputPortClient) GetInputPort(ctx context.Context, baseURI string, id string) (*PortEntity, error) {
+	return c.getPort(ctx, baseURI, "/input-ports/%s", id)
+}
+
+func (c HTTPInputPortClient) CreateInputPort(ctx context.Context, baseURI string, parentID string, entity PortEntity) (*PortEntity, error) {
+	return c.createPort(ctx, baseURI, "/process-groups/%s/input-ports", parentID, entity)
+}
+
+func (c HTTPInputPortClient) UpdateInputPort(ctx context.Context, baseURI string, entity PortEntity) (*PortEntity, error) {
+	return c.updatePort(ctx, baseURI, "/input-ports/%s", entity)
+}
+
+func (c HTTPInputPortClient) DeleteInputPort(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	return c.deletePort(ctx, baseURI, "/input-ports/%s", id, revisionVersion)
+}
+
+func (c HTTPOutputPortClient) GetOutputPort(ctx context.Context, baseURI string, id string) (*PortEntity, error) {
+	return c.getPort(ctx, baseURI, "/output-ports/%s", id)
+}
+
+func (c HTTPOutputPortClient) CreateOutputPort(ctx context.Context, baseURI string, parentID string, entity PortEntity) (*PortEntity, error) {
+	return c.createPort(ctx, baseURI, "/process-groups/%s/output-ports", parentID, entity)
+}
+
+func (c HTTPOutputPortClient) UpdateOutputPort(ctx context.Context, baseURI string, entity PortEntity) (*PortEntity, error) {
+	return c.updatePort(ctx, baseURI, "/output-ports/%s", entity)
+}
+
+func (c HTTPOutputPortClient) DeleteOutputPort(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	return c.deletePort(ctx, baseURI, "/output-ports/%s", id, revisionVersion)
+}
+
+func (c HTTPConnectionClient) GetConnection(ctx context.Context, baseURI string, id string) (*ConnectionEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/connections/%s", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response ConnectionEntity
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPConnectionClient) CreateConnection(ctx context.Context, baseURI string, parentID string, entity ConnectionEntity) (*ConnectionEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/%s/connections", url.PathEscape(parentID)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response ConnectionEntity
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPConnectionClient) UpdateConnection(ctx context.Context, baseURI string, entity ConnectionEntity) (*ConnectionEntity, error) {
+	id := entity.ID
+	if id == "" {
+		id = entity.Component.ID
+	}
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/connections/%s", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response ConnectionEntity
+	if err := c.doJSON(ctx, http.MethodPut, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPConnectionClient) DeleteConnection(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/connections/%s", url.PathEscape(id)))
+	if err != nil {
+		return err
+	}
+	endpoint += fmt.Sprintf("?version=%d", revisionVersion)
+
+	return c.doJSON(ctx, http.MethodDelete, endpoint, nil, nil)
+}
+
+func (c HTTPInputPortClient) getPort(ctx context.Context, baseURI string, pathFormat string, id string) (*PortEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf(pathFormat, url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response PortEntity
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPInputPortClient) createPort(ctx context.Context, baseURI string, pathFormat string, parentID string, entity PortEntity) (*PortEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf(pathFormat, url.PathEscape(parentID)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response PortEntity
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPInputPortClient) updatePort(ctx context.Context, baseURI string, pathFormat string, entity PortEntity) (*PortEntity, error) {
+	id := entity.ID
+	if id == "" {
+		id = entity.Component.ID
+	}
+	endpoint, err := apiURL(baseURI, fmt.Sprintf(pathFormat, url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response PortEntity
+	if err := c.doJSON(ctx, http.MethodPut, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPInputPortClient) deletePort(ctx context.Context, baseURI string, pathFormat string, id string, revisionVersion int64) error {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf(pathFormat, url.PathEscape(id)))
+	if err != nil {
+		return err
+	}
+	endpoint += fmt.Sprintf("?version=%d", revisionVersion)
+
+	return c.doJSON(ctx, http.MethodDelete, endpoint, nil, nil)
+}
+
+func (c HTTPOutputPortClient) getPort(ctx context.Context, baseURI string, pathFormat string, id string) (*PortEntity, error) {
+	return (HTTPInputPortClient{Client: c.Client}).getPort(ctx, baseURI, pathFormat, id)
+}
+
+func (c HTTPOutputPortClient) createPort(ctx context.Context, baseURI string, pathFormat string, parentID string, entity PortEntity) (*PortEntity, error) {
+	return (HTTPInputPortClient{Client: c.Client}).createPort(ctx, baseURI, pathFormat, parentID, entity)
+}
+
+func (c HTTPOutputPortClient) updatePort(ctx context.Context, baseURI string, pathFormat string, entity PortEntity) (*PortEntity, error) {
+	return (HTTPInputPortClient{Client: c.Client}).updatePort(ctx, baseURI, pathFormat, entity)
+}
+
+func (c HTTPOutputPortClient) deletePort(ctx context.Context, baseURI string, pathFormat string, id string, revisionVersion int64) error {
+	return (HTTPInputPortClient{Client: c.Client}).deletePort(ctx, baseURI, pathFormat, id, revisionVersion)
+}
+
 func (c HTTPParameterContextClient) doJSON(ctx context.Context, method, endpoint string, body any, out any) error {
 	return doJSON(ctx, c.Client, method, endpoint, body, out)
 }
@@ -632,6 +861,14 @@ func (c HTTPFunnelClient) doJSON(ctx context.Context, method, endpoint string, b
 }
 
 func (c HTTPLabelClient) doJSON(ctx context.Context, method, endpoint string, body any, out any) error {
+	return doJSON(ctx, c.Client, method, endpoint, body, out)
+}
+
+func (c HTTPInputPortClient) doJSON(ctx context.Context, method, endpoint string, body any, out any) error {
+	return doJSON(ctx, c.Client, method, endpoint, body, out)
+}
+
+func (c HTTPConnectionClient) doJSON(ctx context.Context, method, endpoint string, body any, out any) error {
 	return doJSON(ctx, c.Client, method, endpoint, body, out)
 }
 

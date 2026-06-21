@@ -1378,7 +1378,8 @@ func (r *NiFiProcessorReconciler) reconcileExistingProcessor(ctx context.Context
 
 type NiFiInputPortReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme          *runtime.Scheme
+	InputPortClient nifi.InputPortClient
 }
 
 func (r *NiFiInputPortReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -1390,13 +1391,12 @@ func (r *NiFiInputPortReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 	if !instance.DeletionTimestamp.IsZero() {
-		_, err := removeFinalizer(ctx, r.Client, instance)
-		return ctrl.Result{}, err
+		return r.reconcileInputPortDelete(ctx, instance)
 	}
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
 	}
-	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1407,8 +1407,60 @@ func (r *NiFiInputPortReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		return ctrl.Result{}, nil
 	}
-	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
-		return ctrl.Result{}, markInputPortAccepted(ctx, r.Client, instance)
+
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		message := "Referenced NiFiCluster is ready but does not expose a NiFi API endpoint."
+		if shouldMarkInputPortNotReady(instance, "ClusterEndpointMissing", message) {
+			return ctrl.Result{}, markInputPortNotReady(ctx, r.Client, instance, "ClusterEndpointMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	parentID, err := processGroupParentID(ctx, r.Client, instance.Namespace, cluster, instance.Spec.ParentProcessGroupRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if parentID == "" {
+		message := "The parent process group ID is not available yet."
+		if shouldMarkInputPortNotReady(instance, "ParentProcessGroupIDMissing", message) {
+			return ctrl.Result{}, markInputPortNotReady(ctx, r.Client, instance, "ParentProcessGroupIDMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	ports := r.InputPortClient
+	if ports == nil {
+		ports = nifi.HTTPInputPortClient{}
+	}
+	entity := desiredInputPort(instance, parentID)
+	if instance.Status.NiFiID != "" {
+		existing, err := ports.GetInputPort(ctx, endpoint, instance.Status.NiFiID)
+		if err != nil {
+			message := fmt.Sprintf("Failed to get NiFi input port: %v", err)
+			if shouldMarkInputPortNotReady(instance, "NiFiGetFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markInputPortNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		return r.reconcileExistingInputPort(ctx, instance, endpoint, ports, entity, existing, parentID)
+	}
+	created, err := ports.CreateInputPort(ctx, endpoint, parentID, entity)
+	if err != nil {
+		message := fmt.Sprintf("Failed to create NiFi input port: %v", err)
+		if shouldMarkInputPortNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markInputPortNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	if created == nil {
+		message := "NiFi returned an empty input port response."
+		if shouldMarkInputPortNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markInputPortNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	nifiID := portEntityID(*created)
+	if !inputPortStatusMatches(instance, nifiID, created.Revision.Version, parentID) {
+		return ctrl.Result{}, markInputPortReady(ctx, r.Client, instance, nifiID, created.Revision.Version, parentID)
 	}
 	return ctrl.Result{}, nil
 }
@@ -1424,9 +1476,70 @@ func (r *NiFiInputPortReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+func (r *NiFiInputPortReconciler) reconcileInputPortDelete(ctx context.Context, instance *nifiv1alpha1.NiFiInputPort) (ctrl.Result, error) {
+	if instance.Spec.DeletionPolicy != nifiv1alpha1.DeletionPolicyDelete || instance.Status.NiFiID == "" {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	ports := r.InputPortClient
+	if ports == nil {
+		ports = nifi.HTTPInputPortClient{}
+	}
+	if err := ports.DeleteInputPort(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	_, err = removeFinalizer(ctx, r.Client, instance)
+	return ctrl.Result{}, err
+}
+
+func (r *NiFiInputPortReconciler) reconcileExistingInputPort(ctx context.Context, instance *nifiv1alpha1.NiFiInputPort, endpoint string, ports nifi.InputPortClient, desired nifi.PortEntity, existing *nifi.PortEntity, parentID string) (ctrl.Result, error) {
+	if existing == nil {
+		message := "NiFi returned an empty input port response."
+		if shouldMarkInputPortNotReady(instance, "NiFiGetFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markInputPortNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	nifiID := portEntityID(*existing)
+	if portNeedsUpdate(desired, *existing) {
+		updateEntity := desired
+		updateEntity.ID = nifiID
+		updateEntity.Component.ID = nifiID
+		updateEntity.Revision.Version = existing.Revision.Version
+		updated, err := ports.UpdateInputPort(ctx, endpoint, updateEntity)
+		if err != nil {
+			message := fmt.Sprintf("Failed to update NiFi input port: %v", err)
+			if shouldMarkInputPortNotReady(instance, "NiFiUpdateFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markInputPortNotReady(ctx, r.Client, instance, "NiFiUpdateFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if updated != nil {
+			nifiID = portEntityID(*updated)
+			return ctrl.Result{}, markInputPortReady(ctx, r.Client, instance, nifiID, updated.Revision.Version, parentID)
+		}
+	}
+	if !inputPortStatusMatches(instance, nifiID, existing.Revision.Version, parentID) {
+		return ctrl.Result{}, markInputPortReady(ctx, r.Client, instance, nifiID, existing.Revision.Version, parentID)
+	}
+	return ctrl.Result{}, nil
+}
+
 type NiFiOutputPortReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme           *runtime.Scheme
+	OutputPortClient nifi.OutputPortClient
 }
 
 func (r *NiFiOutputPortReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -1438,13 +1551,12 @@ func (r *NiFiOutputPortReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 	if !instance.DeletionTimestamp.IsZero() {
-		_, err := removeFinalizer(ctx, r.Client, instance)
-		return ctrl.Result{}, err
+		return r.reconcileOutputPortDelete(ctx, instance)
 	}
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
 	}
-	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1455,8 +1567,60 @@ func (r *NiFiOutputPortReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		return ctrl.Result{}, nil
 	}
-	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
-		return ctrl.Result{}, markOutputPortAccepted(ctx, r.Client, instance)
+
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		message := "Referenced NiFiCluster is ready but does not expose a NiFi API endpoint."
+		if shouldMarkOutputPortNotReady(instance, "ClusterEndpointMissing", message) {
+			return ctrl.Result{}, markOutputPortNotReady(ctx, r.Client, instance, "ClusterEndpointMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	parentID, err := processGroupParentID(ctx, r.Client, instance.Namespace, cluster, instance.Spec.ParentProcessGroupRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if parentID == "" {
+		message := "The parent process group ID is not available yet."
+		if shouldMarkOutputPortNotReady(instance, "ParentProcessGroupIDMissing", message) {
+			return ctrl.Result{}, markOutputPortNotReady(ctx, r.Client, instance, "ParentProcessGroupIDMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	ports := r.OutputPortClient
+	if ports == nil {
+		ports = nifi.HTTPOutputPortClient{}
+	}
+	entity := desiredOutputPort(instance, parentID)
+	if instance.Status.NiFiID != "" {
+		existing, err := ports.GetOutputPort(ctx, endpoint, instance.Status.NiFiID)
+		if err != nil {
+			message := fmt.Sprintf("Failed to get NiFi output port: %v", err)
+			if shouldMarkOutputPortNotReady(instance, "NiFiGetFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markOutputPortNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		return r.reconcileExistingOutputPort(ctx, instance, endpoint, ports, entity, existing, parentID)
+	}
+	created, err := ports.CreateOutputPort(ctx, endpoint, parentID, entity)
+	if err != nil {
+		message := fmt.Sprintf("Failed to create NiFi output port: %v", err)
+		if shouldMarkOutputPortNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markOutputPortNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	if created == nil {
+		message := "NiFi returned an empty output port response."
+		if shouldMarkOutputPortNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markOutputPortNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	nifiID := portEntityID(*created)
+	if !outputPortStatusMatches(instance, nifiID, created.Revision.Version, parentID) {
+		return ctrl.Result{}, markOutputPortReady(ctx, r.Client, instance, nifiID, created.Revision.Version, parentID)
 	}
 	return ctrl.Result{}, nil
 }
@@ -1472,9 +1636,70 @@ func (r *NiFiOutputPortReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+func (r *NiFiOutputPortReconciler) reconcileOutputPortDelete(ctx context.Context, instance *nifiv1alpha1.NiFiOutputPort) (ctrl.Result, error) {
+	if instance.Spec.DeletionPolicy != nifiv1alpha1.DeletionPolicyDelete || instance.Status.NiFiID == "" {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	ports := r.OutputPortClient
+	if ports == nil {
+		ports = nifi.HTTPOutputPortClient{}
+	}
+	if err := ports.DeleteOutputPort(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	_, err = removeFinalizer(ctx, r.Client, instance)
+	return ctrl.Result{}, err
+}
+
+func (r *NiFiOutputPortReconciler) reconcileExistingOutputPort(ctx context.Context, instance *nifiv1alpha1.NiFiOutputPort, endpoint string, ports nifi.OutputPortClient, desired nifi.PortEntity, existing *nifi.PortEntity, parentID string) (ctrl.Result, error) {
+	if existing == nil {
+		message := "NiFi returned an empty output port response."
+		if shouldMarkOutputPortNotReady(instance, "NiFiGetFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markOutputPortNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	nifiID := portEntityID(*existing)
+	if portNeedsUpdate(desired, *existing) {
+		updateEntity := desired
+		updateEntity.ID = nifiID
+		updateEntity.Component.ID = nifiID
+		updateEntity.Revision.Version = existing.Revision.Version
+		updated, err := ports.UpdateOutputPort(ctx, endpoint, updateEntity)
+		if err != nil {
+			message := fmt.Sprintf("Failed to update NiFi output port: %v", err)
+			if shouldMarkOutputPortNotReady(instance, "NiFiUpdateFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markOutputPortNotReady(ctx, r.Client, instance, "NiFiUpdateFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if updated != nil {
+			nifiID = portEntityID(*updated)
+			return ctrl.Result{}, markOutputPortReady(ctx, r.Client, instance, nifiID, updated.Revision.Version, parentID)
+		}
+	}
+	if !outputPortStatusMatches(instance, nifiID, existing.Revision.Version, parentID) {
+		return ctrl.Result{}, markOutputPortReady(ctx, r.Client, instance, nifiID, existing.Revision.Version, parentID)
+	}
+	return ctrl.Result{}, nil
+}
+
 type NiFiConnectionReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme           *runtime.Scheme
+	ConnectionClient nifi.ConnectionClient
 }
 
 func (r *NiFiConnectionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -1486,13 +1711,12 @@ func (r *NiFiConnectionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 	if !instance.DeletionTimestamp.IsZero() {
-		_, err := removeFinalizer(ctx, r.Client, instance)
-		return ctrl.Result{}, err
+		return r.reconcileConnectionDelete(ctx, instance)
 	}
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
 	}
-	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1503,8 +1727,70 @@ func (r *NiFiConnectionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		return ctrl.Result{}, nil
 	}
-	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
-		return ctrl.Result{}, markConnectionAccepted(ctx, r.Client, instance)
+
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		message := "Referenced NiFiCluster is ready but does not expose a NiFi API endpoint."
+		if shouldMarkConnectionNotReady(instance, "ClusterEndpointMissing", message) {
+			return ctrl.Result{}, markConnectionNotReady(ctx, r.Client, instance, "ClusterEndpointMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	parentID, err := processGroupParentID(ctx, r.Client, instance.Namespace, cluster, instance.Spec.ParentProcessGroupRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if parentID == "" {
+		message := "The parent process group ID is not available yet."
+		if shouldMarkConnectionNotReady(instance, "ParentProcessGroupIDMissing", message) {
+			return ctrl.Result{}, markConnectionNotReady(ctx, r.Client, instance, "ParentProcessGroupIDMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	entity, sourceID, destinationID, err := desiredConnection(ctx, r.Client, instance, parentID)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if sourceID == "" || destinationID == "" {
+		message := "The connection source or destination ID is not available yet."
+		if shouldMarkConnectionNotReady(instance, "ConnectableIDMissing", message) {
+			return ctrl.Result{}, markConnectionNotReady(ctx, r.Client, instance, "ConnectableIDMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	connections := r.ConnectionClient
+	if connections == nil {
+		connections = nifi.HTTPConnectionClient{}
+	}
+	if instance.Status.NiFiID != "" {
+		existing, err := connections.GetConnection(ctx, endpoint, instance.Status.NiFiID)
+		if err != nil {
+			message := fmt.Sprintf("Failed to get NiFi connection: %v", err)
+			if shouldMarkConnectionNotReady(instance, "NiFiGetFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markConnectionNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		return r.reconcileExistingConnection(ctx, instance, endpoint, connections, entity, existing, sourceID, destinationID)
+	}
+	created, err := connections.CreateConnection(ctx, endpoint, parentID, entity)
+	if err != nil {
+		message := fmt.Sprintf("Failed to create NiFi connection: %v", err)
+		if shouldMarkConnectionNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markConnectionNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	if created == nil {
+		message := "NiFi returned an empty connection response."
+		if shouldMarkConnectionNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markConnectionNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	nifiID := connectionEntityID(*created)
+	if !connectionStatusMatches(instance, nifiID, created.Revision.Version, sourceID, destinationID) {
+		return ctrl.Result{}, markConnectionReady(ctx, r.Client, instance, nifiID, created.Revision.Version, sourceID, destinationID)
 	}
 	return ctrl.Result{}, nil
 }
@@ -1522,6 +1808,66 @@ func (r *NiFiConnectionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&nifiv1alpha1.NiFiOutputPort{}, handler.EnqueueRequestsFromMapFunc(r.requestsForOutputPort)).
 		Watches(&nifiv1alpha1.NiFiFunnel{}, handler.EnqueueRequestsFromMapFunc(r.requestsForFunnel)).
 		Complete(r)
+}
+
+func (r *NiFiConnectionReconciler) reconcileConnectionDelete(ctx context.Context, instance *nifiv1alpha1.NiFiConnection) (ctrl.Result, error) {
+	if instance.Spec.DeletionPolicy != nifiv1alpha1.DeletionPolicyDelete || instance.Status.NiFiID == "" {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	connections := r.ConnectionClient
+	if connections == nil {
+		connections = nifi.HTTPConnectionClient{}
+	}
+	if err := connections.DeleteConnection(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	_, err = removeFinalizer(ctx, r.Client, instance)
+	return ctrl.Result{}, err
+}
+
+func (r *NiFiConnectionReconciler) reconcileExistingConnection(ctx context.Context, instance *nifiv1alpha1.NiFiConnection, endpoint string, connections nifi.ConnectionClient, desired nifi.ConnectionEntity, existing *nifi.ConnectionEntity, sourceID string, destinationID string) (ctrl.Result, error) {
+	if existing == nil {
+		message := "NiFi returned an empty connection response."
+		if shouldMarkConnectionNotReady(instance, "NiFiGetFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markConnectionNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	nifiID := connectionEntityID(*existing)
+	if connectionNeedsUpdate(desired, *existing) {
+		updateEntity := desired
+		updateEntity.ID = nifiID
+		updateEntity.Component.ID = nifiID
+		updateEntity.Revision.Version = existing.Revision.Version
+		updated, err := connections.UpdateConnection(ctx, endpoint, updateEntity)
+		if err != nil {
+			message := fmt.Sprintf("Failed to update NiFi connection: %v", err)
+			if shouldMarkConnectionNotReady(instance, "NiFiUpdateFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markConnectionNotReady(ctx, r.Client, instance, "NiFiUpdateFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if updated != nil {
+			nifiID = connectionEntityID(*updated)
+			return ctrl.Result{}, markConnectionReady(ctx, r.Client, instance, nifiID, updated.Revision.Version, sourceID, destinationID)
+		}
+	}
+	if !connectionStatusMatches(instance, nifiID, existing.Revision.Version, sourceID, destinationID) {
+		return ctrl.Result{}, markConnectionReady(ctx, r.Client, instance, nifiID, existing.Revision.Version, sourceID, destinationID)
+	}
+	return ctrl.Result{}, nil
 }
 
 type NiFiReportingTaskReconciler struct {
@@ -2549,6 +2895,22 @@ func nifiPositionsEqual(left *nifi.Position, right *nifi.Position) bool {
 	return left.X == right.X && left.Y == right.Y
 }
 
+func nifiPositionSlicesEqual(left []nifi.Position, right []nifi.Position) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i].X != right[i].X || left[i].Y != right[i].Y {
+			return false
+		}
+	}
+	return true
+}
+
+func nifiConnectablesEqual(left nifi.Connectable, right nifi.Connectable) bool {
+	return left.ID == right.ID && left.Type == right.Type && left.GroupID == right.GroupID
+}
+
 func componentReferenceID(ref *nifi.ComponentReference) string {
 	if ref == nil {
 		return ""
@@ -2714,8 +3076,105 @@ func inputPortDependenciesWaitingFor(ctx context.Context, c client.Client, input
 	return processGroupReferenceDependencyWaitingFor(ctx, c, inputPort.Namespace, inputPort.Spec.ParentProcessGroupRef, "parentProcessGroupRef")
 }
 
+func desiredInputPort(inputPort *nifiv1alpha1.NiFiInputPort, parentID string) nifi.PortEntity {
+	return desiredPort(inputPortDisplayName(inputPort), inputPort.Spec.Position, inputPort.Spec.State, inputPort.Spec.ConcurrentlySchedulableTaskCount, parentID)
+}
+
+func inputPortDisplayName(inputPort *nifiv1alpha1.NiFiInputPort) string {
+	if inputPort.Spec.DisplayName != "" {
+		return inputPort.Spec.DisplayName
+	}
+	return inputPort.Name
+}
+
+func inputPortStatusMatches(instance *nifiv1alpha1.NiFiInputPort, nifiID string, revisionVersion int64, parentID string) bool {
+	return instance.Status.ObservedGeneration == instance.Generation &&
+		instance.Status.Ready &&
+		instance.Status.Dependencies.Ready &&
+		instance.Status.NiFiID == nifiID &&
+		instance.Status.Revision.Version == revisionVersion &&
+		instance.Status.ParentProcessGroupID == parentID
+}
+
+func shouldMarkInputPortNotReady(instance *nifiv1alpha1.NiFiInputPort, reason, message string) bool {
+	if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Ready || instance.Status.Sync.LastError != message {
+		return true
+	}
+	for _, condition := range instance.Status.Conditions {
+		if condition.Type == string(nifiv1alpha1.ConditionReady) {
+			return condition.Reason != reason
+		}
+	}
+	return true
+}
+
 func outputPortDependenciesWaitingFor(ctx context.Context, c client.Client, outputPort *nifiv1alpha1.NiFiOutputPort) []string {
 	return processGroupReferenceDependencyWaitingFor(ctx, c, outputPort.Namespace, outputPort.Spec.ParentProcessGroupRef, "parentProcessGroupRef")
+}
+
+func desiredOutputPort(outputPort *nifiv1alpha1.NiFiOutputPort, parentID string) nifi.PortEntity {
+	return desiredPort(outputPortDisplayName(outputPort), outputPort.Spec.Position, outputPort.Spec.State, outputPort.Spec.ConcurrentlySchedulableTaskCount, parentID)
+}
+
+func outputPortDisplayName(outputPort *nifiv1alpha1.NiFiOutputPort) string {
+	if outputPort.Spec.DisplayName != "" {
+		return outputPort.Spec.DisplayName
+	}
+	return outputPort.Name
+}
+
+func outputPortStatusMatches(instance *nifiv1alpha1.NiFiOutputPort, nifiID string, revisionVersion int64, parentID string) bool {
+	return instance.Status.ObservedGeneration == instance.Generation &&
+		instance.Status.Ready &&
+		instance.Status.Dependencies.Ready &&
+		instance.Status.NiFiID == nifiID &&
+		instance.Status.Revision.Version == revisionVersion &&
+		instance.Status.ParentProcessGroupID == parentID
+}
+
+func shouldMarkOutputPortNotReady(instance *nifiv1alpha1.NiFiOutputPort, reason, message string) bool {
+	if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Ready || instance.Status.Sync.LastError != message {
+		return true
+	}
+	for _, condition := range instance.Status.Conditions {
+		if condition.Type == string(nifiv1alpha1.ConditionReady) {
+			return condition.Reason != reason
+		}
+	}
+	return true
+}
+
+func desiredPort(name string, position *nifiv1alpha1.Position, state nifiv1alpha1.RuntimeState, concurrentlySchedulableTaskCount int32, parentID string) nifi.PortEntity {
+	component := nifi.PortComponent{
+		ParentGroupID:                    parentID,
+		Name:                             name,
+		State:                            string(state),
+		ConcurrentlySchedulableTaskCount: concurrentlySchedulableTaskCount,
+	}
+	if position != nil {
+		component.Position = &nifi.Position{X: position.X, Y: position.Y}
+	}
+	return nifi.PortEntity{
+		Revision:  nifi.Revision{Version: 0},
+		Component: component,
+	}
+}
+
+func portEntityID(entity nifi.PortEntity) string {
+	if entity.ID != "" {
+		return entity.ID
+	}
+	return entity.Component.ID
+}
+
+func portNeedsUpdate(desired nifi.PortEntity, existing nifi.PortEntity) bool {
+	if desired.Component.Name != existing.Component.Name ||
+		desired.Component.ParentGroupID != "" && desired.Component.ParentGroupID != existing.Component.ParentGroupID ||
+		desired.Component.State != "" && desired.Component.State != existing.Component.State ||
+		desired.Component.ConcurrentlySchedulableTaskCount != existing.Component.ConcurrentlySchedulableTaskCount {
+		return true
+	}
+	return !nifiPositionsEqual(desired.Component.Position, existing.Component.Position)
 }
 
 func connectionDependenciesWaitingFor(ctx context.Context, c client.Client, connection *nifiv1alpha1.NiFiConnection) []string {
@@ -2723,6 +3182,151 @@ func connectionDependenciesWaitingFor(ctx context.Context, c client.Client, conn
 	waitingFor = append(waitingFor, connectableReferenceDependencyWaitingFor(ctx, c, connection.Namespace, connection.Spec.Source, "source")...)
 	waitingFor = append(waitingFor, connectableReferenceDependencyWaitingFor(ctx, c, connection.Namespace, connection.Spec.Destination, "destination")...)
 	return waitingFor
+}
+
+func desiredConnection(ctx context.Context, c client.Client, connection *nifiv1alpha1.NiFiConnection, parentID string) (nifi.ConnectionEntity, string, string, error) {
+	source, err := nifiConnectable(ctx, c, connection.Namespace, connection.Spec.Source, parentID)
+	if err != nil {
+		return nifi.ConnectionEntity{}, "", "", err
+	}
+	destination, err := nifiConnectable(ctx, c, connection.Namespace, connection.Spec.Destination, parentID)
+	if err != nil {
+		return nifi.ConnectionEntity{}, "", "", err
+	}
+	component := nifi.ConnectionComponent{
+		ParentGroupID:                 parentID,
+		Source:                        source,
+		Destination:                   destination,
+		SelectedRelationships:         connection.Spec.SelectedRelationships,
+		BackPressureObjectThreshold:   connection.Spec.BackPressureObjectThreshold,
+		BackPressureDataSizeThreshold: connection.Spec.BackPressureDataSizeThreshold,
+		FlowFileExpiration:            connection.Spec.FlowFileExpiration,
+		Prioritizers:                  connection.Spec.Prioritizers,
+		LoadBalanceStrategy:           connection.Spec.LoadBalanceStrategy,
+		LoadBalancePartitionAttribute: connection.Spec.LoadBalancePartitionAttribute,
+	}
+	if len(connection.Spec.Bends) > 0 {
+		component.Bends = make([]nifi.Position, 0, len(connection.Spec.Bends))
+		for _, bend := range connection.Spec.Bends {
+			component.Bends = append(component.Bends, nifi.Position{X: bend.X, Y: bend.Y})
+		}
+	}
+	return nifi.ConnectionEntity{
+		Revision:  nifi.Revision{Version: 0},
+		Component: component,
+	}, source.ID, destination.ID, nil
+}
+
+func nifiConnectable(ctx context.Context, c client.Client, namespace string, ref nifiv1alpha1.ConnectableReference, fallbackGroupID string) (nifi.Connectable, error) {
+	connectable := nifi.Connectable{
+		ID:      ref.NiFiID,
+		Type:    nifiConnectableType(ref.Type),
+		GroupID: fallbackGroupID,
+	}
+	if ref.Name == "" {
+		return connectable, nil
+	}
+	refNamespace := connectableRefNamespace(namespace, ref)
+	switch ref.Type {
+	case nifiv1alpha1.ConnectableTypeProcessor:
+		processor := &nifiv1alpha1.NiFiProcessor{}
+		if err := c.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: refNamespace}, processor); err != nil {
+			return nifi.Connectable{}, err
+		}
+		connectable.ID = processor.Status.NiFiID
+		connectable.GroupID = processor.Status.ParentProcessGroupID
+	case nifiv1alpha1.ConnectableTypeInputPort:
+		inputPort := &nifiv1alpha1.NiFiInputPort{}
+		if err := c.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: refNamespace}, inputPort); err != nil {
+			return nifi.Connectable{}, err
+		}
+		connectable.ID = inputPort.Status.NiFiID
+		connectable.GroupID = inputPort.Status.ParentProcessGroupID
+	case nifiv1alpha1.ConnectableTypeOutputPort:
+		outputPort := &nifiv1alpha1.NiFiOutputPort{}
+		if err := c.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: refNamespace}, outputPort); err != nil {
+			return nifi.Connectable{}, err
+		}
+		connectable.ID = outputPort.Status.NiFiID
+		connectable.GroupID = outputPort.Status.ParentProcessGroupID
+	case nifiv1alpha1.ConnectableTypeFunnel:
+		funnel := &nifiv1alpha1.NiFiFunnel{}
+		if err := c.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: refNamespace}, funnel); err != nil {
+			return nifi.Connectable{}, err
+		}
+		connectable.ID = funnel.Status.NiFiID
+		connectable.GroupID = funnel.Status.ParentProcessGroupID
+	}
+	if connectable.GroupID == "" {
+		connectable.GroupID = fallbackGroupID
+	}
+	return connectable, nil
+}
+
+func nifiConnectableType(connectableType nifiv1alpha1.ConnectableType) string {
+	switch connectableType {
+	case nifiv1alpha1.ConnectableTypeProcessor:
+		return "PROCESSOR"
+	case nifiv1alpha1.ConnectableTypeInputPort:
+		return "INPUT_PORT"
+	case nifiv1alpha1.ConnectableTypeOutputPort:
+		return "OUTPUT_PORT"
+	case nifiv1alpha1.ConnectableTypeFunnel:
+		return "FUNNEL"
+	default:
+		return ""
+	}
+}
+
+func connectionEntityID(entity nifi.ConnectionEntity) string {
+	if entity.ID != "" {
+		return entity.ID
+	}
+	return entity.Component.ID
+}
+
+func connectionNeedsUpdate(desired nifi.ConnectionEntity, existing nifi.ConnectionEntity) bool {
+	if desired.Component.ParentGroupID != "" && desired.Component.ParentGroupID != existing.Component.ParentGroupID {
+		return true
+	}
+	if !nifiConnectablesEqual(desired.Component.Source, existing.Component.Source) ||
+		!nifiConnectablesEqual(desired.Component.Destination, existing.Component.Destination) {
+		return true
+	}
+	if desired.Component.BackPressureObjectThreshold != existing.Component.BackPressureObjectThreshold ||
+		desired.Component.BackPressureDataSizeThreshold != existing.Component.BackPressureDataSizeThreshold ||
+		desired.Component.FlowFileExpiration != existing.Component.FlowFileExpiration ||
+		desired.Component.LoadBalanceStrategy != existing.Component.LoadBalanceStrategy ||
+		desired.Component.LoadBalancePartitionAttribute != existing.Component.LoadBalancePartitionAttribute {
+		return true
+	}
+	if !stringSlicesEqual(desired.Component.SelectedRelationships, existing.Component.SelectedRelationships) ||
+		!stringSlicesEqual(desired.Component.Prioritizers, existing.Component.Prioritizers) {
+		return true
+	}
+	return !nifiPositionSlicesEqual(desired.Component.Bends, existing.Component.Bends)
+}
+
+func connectionStatusMatches(instance *nifiv1alpha1.NiFiConnection, nifiID string, revisionVersion int64, sourceID string, destinationID string) bool {
+	return instance.Status.ObservedGeneration == instance.Generation &&
+		instance.Status.Ready &&
+		instance.Status.Dependencies.Ready &&
+		instance.Status.NiFiID == nifiID &&
+		instance.Status.Revision.Version == revisionVersion &&
+		instance.Status.SourceID == sourceID &&
+		instance.Status.DestinationID == destinationID
+}
+
+func shouldMarkConnectionNotReady(instance *nifiv1alpha1.NiFiConnection, reason, message string) bool {
+	if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Ready || instance.Status.Sync.LastError != message {
+		return true
+	}
+	for _, condition := range instance.Status.Conditions {
+		if condition.Type == string(nifiv1alpha1.ConditionReady) {
+			return condition.Reason != reason
+		}
+	}
+	return true
 }
 
 func funnelDependenciesWaitingFor(ctx context.Context, c client.Client, funnel *nifiv1alpha1.NiFiFunnel) []string {

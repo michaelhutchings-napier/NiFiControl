@@ -227,6 +227,23 @@ func markInputPortAccepted(ctx context.Context, c client.Client, obj *nifiv1alph
 	return c.Status().Update(ctx, obj)
 }
 
+func markInputPortReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiInputPort, nifiID string, revisionVersion int64, parentProcessGroupID string) error {
+	obj.Status.CommonStatus.MarkReady(obj.Generation, "InputPortReady", "The NiFi input port is reconciled.")
+	obj.Status.NiFiID = nifiID
+	obj.Status.Revision.Version = revisionVersion
+	obj.Status.ParentProcessGroupID = parentProcessGroupID
+	obj.Status.Sync.LastError = ""
+	return c.Status().Update(ctx, obj)
+}
+
+func markInputPortNotReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiInputPort, reason, message string) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, reason, message)
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.Sync.LastError = message
+	return c.Status().Update(ctx, obj)
+}
+
 func markInputPortWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiInputPort, waitingFor []string) error {
 	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
 	return c.Status().Update(ctx, obj)
@@ -237,6 +254,23 @@ func markOutputPortAccepted(ctx context.Context, c client.Client, obj *nifiv1alp
 	return c.Status().Update(ctx, obj)
 }
 
+func markOutputPortReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiOutputPort, nifiID string, revisionVersion int64, parentProcessGroupID string) error {
+	obj.Status.CommonStatus.MarkReady(obj.Generation, "OutputPortReady", "The NiFi output port is reconciled.")
+	obj.Status.NiFiID = nifiID
+	obj.Status.Revision.Version = revisionVersion
+	obj.Status.ParentProcessGroupID = parentProcessGroupID
+	obj.Status.Sync.LastError = ""
+	return c.Status().Update(ctx, obj)
+}
+
+func markOutputPortNotReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiOutputPort, reason, message string) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, reason, message)
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.Sync.LastError = message
+	return c.Status().Update(ctx, obj)
+}
+
 func markOutputPortWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiOutputPort, waitingFor []string) error {
 	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
 	return c.Status().Update(ctx, obj)
@@ -244,6 +278,24 @@ func markOutputPortWaitingForDependencies(ctx context.Context, c client.Client, 
 
 func markConnectionAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiConnection) error {
 	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+	return c.Status().Update(ctx, obj)
+}
+
+func markConnectionReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiConnection, nifiID string, revisionVersion int64, sourceID string, destinationID string) error {
+	obj.Status.CommonStatus.MarkReady(obj.Generation, "ConnectionReady", "The NiFi connection is reconciled.")
+	obj.Status.NiFiID = nifiID
+	obj.Status.Revision.Version = revisionVersion
+	obj.Status.SourceID = sourceID
+	obj.Status.DestinationID = destinationID
+	obj.Status.Sync.LastError = ""
+	return c.Status().Update(ctx, obj)
+}
+
+func markConnectionNotReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiConnection, reason, message string) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, reason, message)
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.Sync.LastError = message
 	return c.Status().Update(ctx, obj)
 }
 

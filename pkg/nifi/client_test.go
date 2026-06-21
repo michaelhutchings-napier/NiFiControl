@@ -476,3 +476,96 @@ func TestHTTPProcessorClientDeleteProcessor(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestHTTPInputPortClientCreateInputPort(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/process-groups/pg-1/input-ports" {
+			t.Fatalf("path = %s, want /nifi-api/process-groups/pg-1/input-ports", r.URL.Path)
+		}
+		var got PortEntity
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Component.Name != "payments-in" {
+			t.Fatalf("name = %q, want payments-in", got.Component.Name)
+		}
+		_ = json.NewEncoder(w).Encode(PortEntity{ID: "input-1", Revision: Revision{Version: 0}})
+	}))
+	defer server.Close()
+
+	created, err := (HTTPInputPortClient{}).CreateInputPort(t.Context(), server.URL, "pg-1", PortEntity{
+		Component: PortComponent{Name: "payments-in"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID != "input-1" {
+		t.Fatalf("created id = %q, want input-1", created.ID)
+	}
+}
+
+func TestHTTPOutputPortClientCreateOutputPort(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/process-groups/pg-1/output-ports" {
+			t.Fatalf("path = %s, want /nifi-api/process-groups/pg-1/output-ports", r.URL.Path)
+		}
+		var got PortEntity
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Component.Name != "payments-out" {
+			t.Fatalf("name = %q, want payments-out", got.Component.Name)
+		}
+		_ = json.NewEncoder(w).Encode(PortEntity{ID: "output-1", Revision: Revision{Version: 0}})
+	}))
+	defer server.Close()
+
+	created, err := (HTTPOutputPortClient{}).CreateOutputPort(t.Context(), server.URL, "pg-1", PortEntity{
+		Component: PortComponent{Name: "payments-out"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID != "output-1" {
+		t.Fatalf("created id = %q, want output-1", created.ID)
+	}
+}
+
+func TestHTTPConnectionClientCreateConnection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/process-groups/pg-1/connections" {
+			t.Fatalf("path = %s, want /nifi-api/process-groups/pg-1/connections", r.URL.Path)
+		}
+		var got ConnectionEntity
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Component.Source.ID != "processor-1" || got.Component.Destination.ID != "output-1" {
+			t.Fatalf("source/destination = %q/%q", got.Component.Source.ID, got.Component.Destination.ID)
+		}
+		_ = json.NewEncoder(w).Encode(ConnectionEntity{ID: "connection-1", Revision: Revision{Version: 0}})
+	}))
+	defer server.Close()
+
+	created, err := (HTTPConnectionClient{}).CreateConnection(t.Context(), server.URL, "pg-1", ConnectionEntity{
+		Component: ConnectionComponent{
+			Source:      Connectable{ID: "processor-1", Type: "PROCESSOR"},
+			Destination: Connectable{ID: "output-1", Type: "OUTPUT_PORT"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID != "connection-1" {
+		t.Fatalf("created id = %q, want connection-1", created.ID)
+	}
+}

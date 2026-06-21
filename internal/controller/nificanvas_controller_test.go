@@ -179,6 +179,93 @@ func (f *fakeLabelClient) DeleteLabel(ctx context.Context, baseURI string, id st
 	return f.err
 }
 
+type fakeInputPortClient struct {
+	created []nifi.PortEntity
+	err     error
+}
+
+func (f *fakeInputPortClient) GetInputPort(ctx context.Context, baseURI string, id string) (*nifi.PortEntity, error) {
+	return nil, f.err
+}
+
+func (f *fakeInputPortClient) CreateInputPort(ctx context.Context, baseURI string, parentID string, entity nifi.PortEntity) (*nifi.PortEntity, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.created = append(f.created, entity)
+	created := entity
+	created.ID = "input-port-created"
+	created.Component.ID = "input-port-created"
+	created.Component.ParentGroupID = parentID
+	return &created, nil
+}
+
+func (f *fakeInputPortClient) UpdateInputPort(ctx context.Context, baseURI string, entity nifi.PortEntity) (*nifi.PortEntity, error) {
+	return &entity, f.err
+}
+
+func (f *fakeInputPortClient) DeleteInputPort(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	return f.err
+}
+
+type fakeOutputPortClient struct {
+	created []nifi.PortEntity
+	err     error
+}
+
+func (f *fakeOutputPortClient) GetOutputPort(ctx context.Context, baseURI string, id string) (*nifi.PortEntity, error) {
+	return nil, f.err
+}
+
+func (f *fakeOutputPortClient) CreateOutputPort(ctx context.Context, baseURI string, parentID string, entity nifi.PortEntity) (*nifi.PortEntity, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.created = append(f.created, entity)
+	created := entity
+	created.ID = "output-port-created"
+	created.Component.ID = "output-port-created"
+	created.Component.ParentGroupID = parentID
+	return &created, nil
+}
+
+func (f *fakeOutputPortClient) UpdateOutputPort(ctx context.Context, baseURI string, entity nifi.PortEntity) (*nifi.PortEntity, error) {
+	return &entity, f.err
+}
+
+func (f *fakeOutputPortClient) DeleteOutputPort(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	return f.err
+}
+
+type fakeConnectionClient struct {
+	created []nifi.ConnectionEntity
+	err     error
+}
+
+func (f *fakeConnectionClient) GetConnection(ctx context.Context, baseURI string, id string) (*nifi.ConnectionEntity, error) {
+	return nil, f.err
+}
+
+func (f *fakeConnectionClient) CreateConnection(ctx context.Context, baseURI string, parentID string, entity nifi.ConnectionEntity) (*nifi.ConnectionEntity, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.created = append(f.created, entity)
+	created := entity
+	created.ID = "connection-created"
+	created.Component.ID = "connection-created"
+	created.Component.ParentGroupID = parentID
+	return &created, nil
+}
+
+func (f *fakeConnectionClient) UpdateConnection(ctx context.Context, baseURI string, entity nifi.ConnectionEntity) (*nifi.ConnectionEntity, error) {
+	return &entity, f.err
+}
+
+func (f *fakeConnectionClient) DeleteConnection(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	return f.err
+}
+
 func TestNiFiProcessGroupReconcileCreatesProcessGroup(t *testing.T) {
 	scheme := testScheme()
 	cluster := readyTestCluster()
@@ -335,6 +422,121 @@ func TestNiFiLabelReconcileCreatesLabel(t *testing.T) {
 	}
 }
 
+func TestNiFiInputPortReconcileCreatesInputPort(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	parent := readyTestProcessGroup("payments", "pg-payments")
+	inputPort := &nifiv1alpha1.NiFiInputPort{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments-in", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiInputPortSpec{
+			ClusterRef:            nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			ParentProcessGroupRef: nifiv1alpha1.ProcessGroupReference{Name: parent.Name},
+			DisplayName:           "Payments In",
+			State:                 nifiv1alpha1.RuntimeStateStopped,
+		},
+	}
+	k8sClient := newCanvasTestClient(scheme, cluster, parent, inputPort)
+	nifiClient := &fakeInputPortClient{}
+	reconciler := &NiFiInputPortReconciler{Client: k8sClient, Scheme: scheme, InputPortClient: nifiClient}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: inputPort.Name, Namespace: inputPort.Namespace}}
+
+	reconcileInputPortTwice(t, reconciler, request)
+
+	if len(nifiClient.created) != 1 {
+		t.Fatalf("created count = %d, want 1", len(nifiClient.created))
+	}
+	if nifiClient.created[0].Component.Name != "Payments In" {
+		t.Fatalf("created name = %q, want Payments In", nifiClient.created[0].Component.Name)
+	}
+	current := &nifiv1alpha1.NiFiInputPort{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if !current.Status.Ready || current.Status.NiFiID != "input-port-created" {
+		t.Fatalf("status ready/id = %v/%q, want true/input-port-created", current.Status.Ready, current.Status.NiFiID)
+	}
+}
+
+func TestNiFiOutputPortReconcileCreatesOutputPort(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	parent := readyTestProcessGroup("payments", "pg-payments")
+	outputPort := &nifiv1alpha1.NiFiOutputPort{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments-out", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiOutputPortSpec{
+			ClusterRef:            nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			ParentProcessGroupRef: nifiv1alpha1.ProcessGroupReference{Name: parent.Name},
+			DisplayName:           "Payments Out",
+			State:                 nifiv1alpha1.RuntimeStateStopped,
+		},
+	}
+	k8sClient := newCanvasTestClient(scheme, cluster, parent, outputPort)
+	nifiClient := &fakeOutputPortClient{}
+	reconciler := &NiFiOutputPortReconciler{Client: k8sClient, Scheme: scheme, OutputPortClient: nifiClient}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: outputPort.Name, Namespace: outputPort.Namespace}}
+
+	reconcileOutputPortTwice(t, reconciler, request)
+
+	if len(nifiClient.created) != 1 {
+		t.Fatalf("created count = %d, want 1", len(nifiClient.created))
+	}
+	if nifiClient.created[0].Component.Name != "Payments Out" {
+		t.Fatalf("created name = %q, want Payments Out", nifiClient.created[0].Component.Name)
+	}
+	current := &nifiv1alpha1.NiFiOutputPort{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if !current.Status.Ready || current.Status.NiFiID != "output-port-created" {
+		t.Fatalf("status ready/id = %v/%q, want true/output-port-created", current.Status.Ready, current.Status.NiFiID)
+	}
+}
+
+func TestNiFiConnectionReconcileCreatesConnection(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	parent := readyTestProcessGroup("payments", "pg-payments")
+	processor := readyTestProcessor("generate-payments", "processor-1", "pg-payments")
+	outputPort := readyTestOutputPort("payments-out", "output-port-1", "pg-payments")
+	connection := &nifiv1alpha1.NiFiConnection{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments-generated", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiConnectionSpec{
+			ClusterRef:            nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			ParentProcessGroupRef: nifiv1alpha1.ProcessGroupReference{Name: parent.Name},
+			Source:                nifiv1alpha1.ConnectableReference{Type: nifiv1alpha1.ConnectableTypeProcessor, Name: processor.Name},
+			Destination:           nifiv1alpha1.ConnectableReference{Type: nifiv1alpha1.ConnectableTypeOutputPort, Name: outputPort.Name},
+			SelectedRelationships: []string{"success"},
+		},
+	}
+	k8sClient := newCanvasTestClient(scheme, cluster, parent, processor, outputPort, connection)
+	nifiClient := &fakeConnectionClient{}
+	reconciler := &NiFiConnectionReconciler{Client: k8sClient, Scheme: scheme, ConnectionClient: nifiClient}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: connection.Name, Namespace: connection.Namespace}}
+
+	reconcileConnectionTwice(t, reconciler, request)
+
+	if len(nifiClient.created) != 1 {
+		t.Fatalf("created count = %d, want 1", len(nifiClient.created))
+	}
+	created := nifiClient.created[0]
+	if created.Component.Source.ID != "processor-1" || created.Component.Destination.ID != "output-port-1" {
+		t.Fatalf("source/destination = %q/%q, want processor-1/output-port-1", created.Component.Source.ID, created.Component.Destination.ID)
+	}
+	if created.Component.Source.Type != "PROCESSOR" || created.Component.Destination.Type != "OUTPUT_PORT" {
+		t.Fatalf("source/destination types = %q/%q", created.Component.Source.Type, created.Component.Destination.Type)
+	}
+	current := &nifiv1alpha1.NiFiConnection{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if !current.Status.Ready || current.Status.NiFiID != "connection-created" {
+		t.Fatalf("status ready/id = %v/%q, want true/connection-created", current.Status.Ready, current.Status.NiFiID)
+	}
+	if current.Status.SourceID != "processor-1" || current.Status.DestinationID != "output-port-1" {
+		t.Fatalf("status source/destination = %q/%q", current.Status.SourceID, current.Status.DestinationID)
+	}
+}
+
 func readyTestProcessGroup(name string, nifiID string) *nifiv1alpha1.NiFiProcessGroup {
 	return &nifiv1alpha1.NiFiProcessGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: 1},
@@ -352,12 +554,78 @@ func readyTestProcessGroup(name string, nifiID string) *nifiv1alpha1.NiFiProcess
 	}
 }
 
+func readyTestProcessor(name string, nifiID string, parentID string) *nifiv1alpha1.NiFiProcessor {
+	return &nifiv1alpha1.NiFiProcessor{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiProcessorSpec{
+			ClusterRef: nifiv1alpha1.ClusterReference{Name: "production"},
+			Type:       "org.apache.nifi.processors.standard.GenerateFlowFile",
+		},
+		Status: nifiv1alpha1.NiFiProcessorStatus{
+			CommonStatus: nifiv1alpha1.CommonStatus{
+				Ready:              true,
+				ObservedGeneration: 1,
+				NiFiID:             nifiID,
+				Dependencies:       nifiv1alpha1.DependencyStatus{Ready: true},
+			},
+			ParentProcessGroupID: parentID,
+		},
+	}
+}
+
+func readyTestOutputPort(name string, nifiID string, parentID string) *nifiv1alpha1.NiFiOutputPort {
+	return &nifiv1alpha1.NiFiOutputPort{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiOutputPortSpec{
+			ClusterRef: nifiv1alpha1.ClusterReference{Name: "production"},
+		},
+		Status: nifiv1alpha1.NiFiOutputPortStatus{
+			CommonStatus: nifiv1alpha1.CommonStatus{
+				Ready:              true,
+				ObservedGeneration: 1,
+				NiFiID:             nifiID,
+				Dependencies:       nifiv1alpha1.DependencyStatus{Ready: true},
+			},
+			ParentProcessGroupID: parentID,
+		},
+	}
+}
+
 func newCanvasTestClient(scheme *runtime.Scheme, objects ...client.Object) client.Client {
 	return fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objects...).
-		WithStatusSubresource(&nifiv1alpha1.NiFiCluster{}, &nifiv1alpha1.NiFiProcessGroup{}, &nifiv1alpha1.NiFiProcessor{}, &nifiv1alpha1.NiFiFunnel{}, &nifiv1alpha1.NiFiLabel{}).
+		WithStatusSubresource(
+			&nifiv1alpha1.NiFiCluster{},
+			&nifiv1alpha1.NiFiProcessGroup{},
+			&nifiv1alpha1.NiFiProcessor{},
+			&nifiv1alpha1.NiFiInputPort{},
+			&nifiv1alpha1.NiFiOutputPort{},
+			&nifiv1alpha1.NiFiConnection{},
+			&nifiv1alpha1.NiFiFunnel{},
+			&nifiv1alpha1.NiFiLabel{},
+		).
 		Build()
+}
+
+func reconcileInputPortTwice(t *testing.T, reconciler *NiFiInputPortReconciler, request ctrl.Request) {
+	t.Helper()
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func reconcileOutputPortTwice(t *testing.T, reconciler *NiFiOutputPortReconciler, request ctrl.Request) {
+	t.Helper()
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func reconcileFunnelTwice(t *testing.T, reconciler *NiFiFunnelReconciler, request ctrl.Request) {
