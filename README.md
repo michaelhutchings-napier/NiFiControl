@@ -13,8 +13,9 @@ services, and high-level flow deployments.
   processors, ports, connections, funnels, and labels reconcile against NiFi.
 - Flow deployments import complete embedded NiFi `RegisteredFlowSnapshot`
   contents and use NiFi's asynchronous replace requests for updates.
-- Git, OCI, and Registry sources currently resolve source metadata; fetching
-  and materializing their remote flow artifacts remain under development.
+- Public Git repositories and NiFi Registry sources fetch and materialize full
+  snapshots. OCI artifact fetching and authenticated source credentials remain
+  under development.
 
 ## Full Flow Snapshots
 
@@ -28,6 +29,11 @@ The first reconciliation imports the snapshot below the target parent process
 group. Later digest or version changes create and poll a NiFi process-group
 replace request, then clean up the request and publish `SnapshotInSync` status.
 See `config/samples/nifi_v1alpha1_nififlowbundle.yaml` for a complete example.
+
+Git sources read `path` as JSON or YAML (`flow.json` by default) and record the
+resolved commit SHA. NiFi Registry sources use the referenced
+`NiFiRegistryClient.spec.uri` and fetch either the pinned integer version or the
+latest version when `source.registry.version` is omitted.
 
 ## Module
 

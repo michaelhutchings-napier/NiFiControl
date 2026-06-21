@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
+	"github.com/michaelhutchings-napier/NiFiControl/pkg/flowartifact"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/nifi"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -491,11 +492,16 @@ func TestNiFiControllerServiceReconcileCreatesControllerService(t *testing.T) {
 	}
 }
 
-func TestNiFiFlowDeploymentReconcileCreatesTargetProcessGroup(t *testing.T) {
+func TestNiFiFlowDeploymentResolvesBundleArtifact(t *testing.T) {
 	scheme := testScheme()
 	cluster := readyTestCluster()
 	parent := readyTestProcessGroup("platform", "pg-platform")
-	flowBundle := readyTestFlowBundle("payments", "sha256:abc123", "main")
+	snapshot := testFlowSnapshot("Original name", "Generate payload")
+	_, digest, err := canonicalFlowSnapshot(snapshot, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	flowBundle := readyTestFlowBundle("payments", digest, "commit-1")
 	flowDeployment := &nifiv1alpha1.NiFiFlowDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "default", Generation: 1},
 		Spec: nifiv1alpha1.NiFiFlowDeploymentSpec{
@@ -510,31 +516,35 @@ func TestNiFiFlowDeploymentReconcileCreatesTargetProcessGroup(t *testing.T) {
 		},
 	}
 	k8sClient := newCanvasTestClient(scheme, cluster, parent, flowBundle, flowDeployment)
-	nifiClient := &fakeProcessGroupClient{}
-	reconciler := &NiFiFlowDeploymentReconciler{Client: k8sClient, Scheme: scheme, ProcessGroupClient: nifiClient}
+	processGroups := &fakeProcessGroupClient{entities: []nifi.ProcessGroupEntity{{
+		ID: "pg-imported", Revision: nifi.Revision{Version: 2},
+		Component: nifi.ProcessGroupComponent{ID: "pg-imported", ParentGroupID: "pg-platform", Name: "Payments"},
+	}}}
+	flowSnapshots := &fakeFlowSnapshotClient{importedEntity: processGroups.entities[0]}
+	reconciler := &NiFiFlowDeploymentReconciler{
+		Client: k8sClient, Scheme: scheme, ProcessGroupClient: processGroups, FlowSnapshotClient: flowSnapshots,
+		ArtifactResolver: fakeFlowArtifactResolver{artifact: &flowartifact.Artifact{Snapshot: *snapshot, Revision: "commit-1"}},
+	}
 	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: flowDeployment.Name, Namespace: flowDeployment.Namespace}}
 
-	reconcileFlowDeploymentTwice(t, reconciler, request)
+	for range 3 {
+		if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
 
-	if len(nifiClient.created) != 1 {
-		t.Fatalf("created count = %d, want 1", len(nifiClient.created))
-	}
-	created := nifiClient.created[0]
-	if created.Component.Name != "Payments" {
-		t.Fatalf("process group name = %q, want Payments", created.Component.Name)
-	}
-	if created.Component.ParentGroupID != "pg-platform" {
-		t.Fatalf("parent id = %q, want pg-platform", created.Component.ParentGroupID)
+	if len(flowSnapshots.imported) != 1 || len(processGroups.created) != 0 {
+		t.Fatalf("import/create counts = %d/%d, want 1/0", len(flowSnapshots.imported), len(processGroups.created))
 	}
 	current := &nifiv1alpha1.NiFiFlowDeployment{}
 	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
 		t.Fatal(err)
 	}
-	if !current.Status.Ready || current.Status.ProcessGroupID != "pg-created" {
-		t.Fatalf("status ready/process group id = %v/%q, want true/pg-created", current.Status.Ready, current.Status.ProcessGroupID)
+	if !current.Status.Ready || current.Status.ProcessGroupID != "pg-imported" {
+		t.Fatalf("status ready/process group id = %v/%q, want true/pg-imported", current.Status.Ready, current.Status.ProcessGroupID)
 	}
-	if current.Status.ArtifactDigest != "sha256:abc123" || current.Status.DeployedVersion != "main" {
-		t.Fatalf("status digest/version = %q/%q, want sha256:abc123/main", current.Status.ArtifactDigest, current.Status.DeployedVersion)
+	if current.Status.ArtifactDigest != digest || current.Status.DeployedVersion != "commit-1" {
+		t.Fatalf("status digest/version = %q/%q, want %s/commit-1", current.Status.ArtifactDigest, current.Status.DeployedVersion, digest)
 	}
 }
 

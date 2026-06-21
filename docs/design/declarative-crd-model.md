@@ -1176,8 +1176,9 @@ Key status fields: common status without NiFi ID, `artifactDigest`,
 Current implementation: `source.snapshot` accepts a native NiFi
 `RegisteredFlowSnapshot`. NiFiControl validates `flowContents`, computes a
 stable SHA-256 digest from canonical JSON, and makes the snapshot available to
-referencing deployments. Git, OCI, and Registry sources currently resolve
-metadata but do not fetch the remote snapshot payload.
+referencing deployments. Public Git sources fetch JSON or YAML from the pinned
+ref and path, and NiFi Registry sources fetch pinned or latest flow versions.
+OCI and authenticated source fetching remain pending.
 
 Dependencies: Git, OCI, NiFi Registry, or embedded artifact source.
 

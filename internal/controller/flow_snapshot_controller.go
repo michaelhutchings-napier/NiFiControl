@@ -10,6 +10,7 @@ import (
 	"time"
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
+	"github.com/michaelhutchings-napier/NiFiControl/pkg/flowartifact"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/nifi"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -64,10 +65,25 @@ func canonicalFlowSnapshot(snapshot *runtime.RawExtension, targetName string) (j
 	return canonicalTarget, digest, nil
 }
 
-func resolvedFlowDeploymentSnapshot(ctx context.Context, c client.Client, deployment *nifiv1alpha1.NiFiFlowDeployment) (json.RawMessage, string, string, error) {
+func resolvedFlowBundleArtifact(ctx context.Context, c client.Client, resolver flowartifact.Resolver, bundle *nifiv1alpha1.NiFiFlowBundle) (string, string, error) {
+	_, artifactRevision, digest, err := resolvedFlowArtifact(ctx, c, resolver, bundle.Namespace, &bundle.Spec.Source, "")
+	if err != nil {
+		return "", "", err
+	}
+	resolvedRevision := bundle.Spec.Version
+	if resolvedRevision == "" {
+		resolvedRevision = artifactRevision
+	}
+	if resolvedRevision == "" {
+		resolvedRevision = digest
+	}
+	return digest, resolvedRevision, nil
+}
+
+func resolvedFlowDeploymentSnapshot(ctx context.Context, c client.Client, resolver flowartifact.Resolver, deployment *nifiv1alpha1.NiFiFlowDeployment) (json.RawMessage, string, string, error) {
 	version := deployment.Spec.Source.Version
 	var source *nifiv1alpha1.FlowBundleSource
-	artifactDigest := ""
+	expectedDigest := ""
 	if deployment.Spec.Source.BundleRef != nil {
 		ref := *deployment.Spec.Source.BundleRef
 		bundle := &nifiv1alpha1.NiFiFlowBundle{}
@@ -76,7 +92,7 @@ func resolvedFlowDeploymentSnapshot(ctx context.Context, c client.Client, deploy
 			return nil, "", "", err
 		}
 		source = &bundle.Spec.Source
-		artifactDigest = bundle.Status.ArtifactDigest
+		expectedDigest = bundle.Status.ArtifactDigest
 		if version == "" {
 			version = bundle.Status.ResolvedRevision
 		}
@@ -86,20 +102,60 @@ func resolvedFlowDeploymentSnapshot(ctx context.Context, c client.Client, deploy
 	} else {
 		source = deployment.Spec.Source.Inline
 	}
-	if source == nil || source.Snapshot == nil {
+	if source == nil {
 		return nil, "", "", nil
 	}
-	snapshot, digest, err := canonicalFlowSnapshot(source.Snapshot, deployment.Spec.Target.ProcessGroupName)
+	snapshot, artifactRevision, digest, err := resolvedFlowArtifact(ctx, c, resolver, deployment.Namespace, source, deployment.Spec.Target.ProcessGroupName)
 	if err != nil {
 		return nil, "", "", err
 	}
-	if artifactDigest == "" {
-		artifactDigest = digest
+	if expectedDigest != "" && expectedDigest != digest {
+		return nil, "", "", fmt.Errorf("resolved artifact digest %s does not match ready bundle digest %s", digest, expectedDigest)
 	}
 	if version == "" {
-		version = artifactDigest
+		version = artifactRevision
 	}
-	return snapshot, version, artifactDigest, nil
+	if version == "" {
+		version = digest
+	}
+	return snapshot, version, digest, nil
+}
+
+func resolvedFlowArtifact(ctx context.Context, c client.Client, resolver flowartifact.Resolver, namespace string, source *nifiv1alpha1.FlowBundleSource, targetName string) (json.RawMessage, string, string, error) {
+	if source == nil {
+		return nil, "", "", fmt.Errorf("flow artifact source is not configured")
+	}
+	registryURI := ""
+	if source.Registry != nil {
+		ref := source.Registry.RegistryClientRef
+		registryClient := &nifiv1alpha1.NiFiRegistryClient{}
+		key := types.NamespacedName{Name: ref.Name, Namespace: localObjectRefNamespace(namespace, ref)}
+		if err := c.Get(ctx, key, registryClient); err != nil {
+			return nil, "", "", err
+		}
+		if registryClient.Spec.Type != "" && registryClient.Spec.Type != nifiv1alpha1.RegistryClientTypeNiFiRegistry {
+			return nil, "", "", fmt.Errorf("referenced NiFiRegistryClient %s has type %s; direct snapshot fetching requires NiFiRegistry", key.String(), registryClient.Spec.Type)
+		}
+		registryURI = registryClient.Spec.URI
+		if registryURI == "" {
+			return nil, "", "", fmt.Errorf("referenced NiFiRegistryClient %s has no URI", key.String())
+		}
+	}
+	if resolver == nil {
+		resolver = flowartifact.DefaultResolver{}
+	}
+	artifact, err := resolver.Resolve(ctx, flowartifact.Request{Source: *source, RegistryURI: registryURI})
+	if err != nil {
+		return nil, "", "", err
+	}
+	if artifact == nil {
+		return nil, "", "", fmt.Errorf("artifact resolver returned no flow snapshot")
+	}
+	snapshot, digest, err := canonicalFlowSnapshot(&artifact.Snapshot, targetName)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return snapshot, artifact.Revision, digest, nil
 }
 
 func (r *NiFiFlowDeploymentReconciler) reconcileSnapshotFlowDeployment(ctx context.Context, deployment *nifiv1alpha1.NiFiFlowDeployment, endpoint string, parentID string, snapshot json.RawMessage, version string, digest string) (ctrl.Result, error) {

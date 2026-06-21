@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
+	"github.com/michaelhutchings-napier/NiFiControl/pkg/flowartifact"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -12,6 +13,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+type fakeFlowArtifactResolver struct {
+	artifact *flowartifact.Artifact
+	err      error
+}
+
+func (f fakeFlowArtifactResolver) Resolve(ctx context.Context, request flowartifact.Request) (*flowartifact.Artifact, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.artifact, nil
+}
 
 func TestNiFiUserReconcileWaitsForCluster(t *testing.T) {
 	scheme := testScheme()
@@ -173,7 +186,10 @@ func TestNiFiFlowBundleReconcileMarksGitBundleReady(t *testing.T) {
 		},
 	}
 	k8sClient := newIdentityCanvasTestClient(scheme, flowBundle)
-	reconciler := &NiFiFlowBundleReconciler{Client: k8sClient, Scheme: scheme}
+	reconciler := &NiFiFlowBundleReconciler{
+		Client: k8sClient, Scheme: scheme,
+		ArtifactResolver: fakeFlowArtifactResolver{artifact: &flowartifact.Artifact{Snapshot: *testFlowSnapshot("Payments", "Generate"), Revision: "commit-1"}},
+	}
 	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: flowBundle.Name, Namespace: flowBundle.Namespace}}
 
 	reconcileFlowBundleTwice(t, reconciler, request)
@@ -185,8 +201,8 @@ func TestNiFiFlowBundleReconcileMarksGitBundleReady(t *testing.T) {
 	if !current.Status.Ready {
 		t.Fatal("flow bundle ready = false, want true")
 	}
-	if current.Status.ResolvedRevision != "main" {
-		t.Fatalf("resolved revision = %q, want main", current.Status.ResolvedRevision)
+	if current.Status.ResolvedRevision != "commit-1" {
+		t.Fatalf("resolved revision = %q, want commit-1", current.Status.ResolvedRevision)
 	}
 }
 
@@ -246,7 +262,7 @@ func TestNiFiFlowBundleReconcileRejectsInvalidSnapshot(t *testing.T) {
 			readyReason = condition.Reason
 		}
 	}
-	if readyReason != "InvalidFlowSnapshot" {
+	if readyReason != "ArtifactResolutionFailed" {
 		t.Fatalf("ready condition reason = %q", readyReason)
 	}
 }

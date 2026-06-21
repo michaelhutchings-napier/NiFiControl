@@ -6,6 +6,7 @@ import (
 	"time"
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
+	"github.com/michaelhutchings-napier/NiFiControl/pkg/flowartifact"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/nifi"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -1253,7 +1254,8 @@ func (r *NiFiControllerServiceReconciler) reconcileExistingControllerService(ctx
 
 type NiFiFlowBundleReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme           *runtime.Scheme
+	ArtifactResolver flowartifact.Resolver
 }
 
 func (r *NiFiFlowBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -1278,18 +1280,22 @@ func (r *NiFiFlowBundleReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		return ctrl.Result{}, nil
 	}
-	artifactDigest, resolvedRevision, err := flowBundleResolvedMetadata(instance)
+	artifactDigest, resolvedRevision, err := resolvedFlowBundleArtifact(ctx, r.Client, r.ArtifactResolver, instance)
 	if err != nil {
-		message := fmt.Sprintf("Invalid flow bundle source: %v", err)
-		if shouldMarkFlowBundleNotReady(instance, "InvalidFlowSnapshot", message) {
-			return ctrl.Result{}, markFlowBundleNotReady(ctx, r.Client, instance, "InvalidFlowSnapshot", message)
+		message := fmt.Sprintf("Failed to resolve flow bundle artifact: %v", err)
+		if shouldMarkFlowBundleNotReady(instance, "ArtifactResolutionFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markFlowBundleNotReady(ctx, r.Client, instance, "ArtifactResolutionFailed", message)
 		}
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	result := ctrl.Result{}
+	if instance.Spec.Source.Snapshot == nil {
+		result.RequeueAfter = 5 * time.Minute
 	}
 	if !flowBundleStatusMatches(instance, artifactDigest, resolvedRevision) {
-		return ctrl.Result{}, markFlowBundleReady(ctx, r.Client, instance, artifactDigest, resolvedRevision)
+		return result, markFlowBundleReady(ctx, r.Client, instance, artifactDigest, resolvedRevision)
 	}
-	return ctrl.Result{}, nil
+	return result, nil
 }
 
 func (r *NiFiFlowBundleReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -1304,6 +1310,7 @@ type NiFiFlowDeploymentReconciler struct {
 	Scheme             *runtime.Scheme
 	ProcessGroupClient nifi.ProcessGroupClient
 	FlowSnapshotClient nifi.FlowSnapshotClient
+	ArtifactResolver   flowartifact.Resolver
 }
 
 func (r *NiFiFlowDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -1351,7 +1358,7 @@ func (r *NiFiFlowDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.R
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
-	snapshot, snapshotVersion, snapshotDigest, err := resolvedFlowDeploymentSnapshot(ctx, r.Client, instance)
+	snapshot, snapshotVersion, snapshotDigest, err := resolvedFlowDeploymentSnapshot(ctx, r.Client, r.ArtifactResolver, instance)
 	if err != nil {
 		message := fmt.Sprintf("Failed to resolve flow snapshot: %v", err)
 		if shouldMarkFlowDeploymentNotReady(instance, "InvalidFlowSnapshot", message) {
@@ -3352,45 +3359,6 @@ func flowBundleDependenciesWaitingFor(ctx context.Context, c client.Client, flow
 		return nil
 	}
 	return registryClientDependencyWaitingFor(ctx, c, flowBundle.Namespace, flowBundle.Spec.Source.Registry.RegistryClientRef, "source.registry.registryClientRef")
-}
-
-func flowBundleResolvedMetadata(flowBundle *nifiv1alpha1.NiFiFlowBundle) (string, string, error) {
-	resolvedRevision := flowBundle.Spec.Version
-	artifactDigest := ""
-	switch {
-	case flowBundle.Spec.Source.Snapshot != nil:
-		_, digest, err := canonicalFlowSnapshot(flowBundle.Spec.Source.Snapshot, "")
-		if err != nil {
-			return "", "", err
-		}
-		artifactDigest = digest
-		if resolvedRevision == "" {
-			resolvedRevision = digest
-		}
-	case flowBundle.Spec.Source.Git != nil:
-		source := flowBundle.Spec.Source.Git
-		if resolvedRevision == "" {
-			resolvedRevision = source.Ref
-		}
-	case flowBundle.Spec.Source.OCI != nil:
-		source := flowBundle.Spec.Source.OCI
-		artifactDigest = source.Digest
-		if resolvedRevision == "" {
-			resolvedRevision = source.Digest
-		}
-		if resolvedRevision == "" {
-			resolvedRevision = source.Image
-		}
-	case flowBundle.Spec.Source.Registry != nil:
-		source := flowBundle.Spec.Source.Registry
-		if resolvedRevision == "" {
-			resolvedRevision = source.Version
-		}
-		if resolvedRevision == "" {
-			resolvedRevision = source.FlowID
-		}
-	}
-	return artifactDigest, resolvedRevision, nil
 }
 
 func flowBundleStatusMatches(instance *nifiv1alpha1.NiFiFlowBundle, artifactDigest string, resolvedRevision string) bool {
