@@ -8,6 +8,7 @@ import (
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/flowartifact"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/nifi"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -30,7 +31,9 @@ type fakeFlowSnapshotClient struct {
 	deleted         []string
 	importedEntity  nifi.ProcessGroupEntity
 	createdRequest  nifi.ProcessGroupReplaceRequestEntity
+	createdRequests []nifi.ProcessGroupReplaceRequestEntity
 	observedRequest nifi.ProcessGroupReplaceRequestEntity
+	liveSnapshot    json.RawMessage
 	err             error
 }
 
@@ -39,6 +42,7 @@ func (f *fakeFlowSnapshotClient) ImportProcessGroup(ctx context.Context, baseURI
 		return nil, f.err
 	}
 	f.imported = append(f.imported, append(json.RawMessage(nil), snapshot...))
+	f.liveSnapshot = append(json.RawMessage(nil), snapshot...)
 	return &f.importedEntity, nil
 }
 
@@ -47,7 +51,31 @@ func (f *fakeFlowSnapshotClient) CreateProcessGroupReplaceRequest(ctx context.Co
 		return nil, f.err
 	}
 	f.replacements = append(f.replacements, append(json.RawMessage(nil), snapshot...))
+	f.liveSnapshot = append(json.RawMessage(nil), snapshot...)
+	if index := len(f.replacements) - 1; index < len(f.createdRequests) {
+		return &f.createdRequests[index], nil
+	}
 	return &f.createdRequest, nil
+}
+
+func (f *fakeFlowSnapshotClient) DownloadProcessGroup(ctx context.Context, baseURI string, processGroupID string) (json.RawMessage, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append(json.RawMessage(nil), f.liveSnapshot...), nil
+}
+
+type fakeProcessGroupScheduler struct {
+	states []string
+	err    error
+}
+
+func (f *fakeProcessGroupScheduler) ScheduleProcessGroup(ctx context.Context, baseURI string, processGroupID string, state string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.states = append(f.states, state)
+	return nil
 }
 
 func (f *fakeFlowSnapshotClient) GetProcessGroupReplaceRequest(ctx context.Context, baseURI string, requestID string) (*nifi.ProcessGroupReplaceRequestEntity, error) {
@@ -603,7 +631,7 @@ func TestNiFiFlowDeploymentImportsFullSnapshot(t *testing.T) {
 	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
 		t.Fatal(err)
 	}
-	if !current.Status.Ready || current.Status.ProcessGroupID != "pg-imported" || current.Status.SyncState != "SnapshotInSync" {
+	if !current.Status.Ready || current.Status.ProcessGroupID != "pg-imported" || current.Status.SyncState != "InSync" {
 		t.Fatalf("status ready/id/sync = %v/%q/%q", current.Status.Ready, current.Status.ProcessGroupID, current.Status.SyncState)
 	}
 	if current.Status.ArtifactDigest != digest || current.Status.DeployedVersion != "release-1" {
@@ -665,8 +693,199 @@ func TestNiFiFlowDeploymentReplacesChangedSnapshot(t *testing.T) {
 	if !current.Status.Ready || current.Status.ArtifactDigest != digest || current.Status.DeployedVersion != "release-2" {
 		t.Fatalf("status ready/digest/version = %v/%q/%q", current.Status.Ready, current.Status.ArtifactDigest, current.Status.DeployedVersion)
 	}
-	if current.Status.LatestReplaceRequest == nil || !current.Status.LatestReplaceRequest.Complete || current.Status.LatestReplaceRequest.ID != "" {
-		t.Fatalf("replace status = %#v", current.Status.LatestReplaceRequest)
+	if current.Status.LatestReplaceRequest != nil || len(current.Status.RolloutHistory) != 1 || current.Status.RolloutHistory[0].Result != "Succeeded" {
+		t.Fatalf("replace status/history = %#v/%#v", current.Status.LatestReplaceRequest, current.Status.RolloutHistory)
+	}
+}
+
+func TestNiFiFlowDeploymentWarnsOnLiveDrift(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	parent := readyTestProcessGroup("platform", "pg-platform")
+	desired := testFlowSnapshot("Payments", "Generate desired")
+	_, digest, err := canonicalFlowSnapshot(desired, "Payments")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := readyTestSnapshotFlowBundle("payments", desired, digest, "release-1")
+	deployment := &nifiv1alpha1.NiFiFlowDeployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiFlowDeploymentSpec{
+			ClusterRef:  nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			Source:      nifiv1alpha1.FlowDeploymentSource{BundleRef: &nifiv1alpha1.LocalObjectReference{Name: bundle.Name}},
+			Target:      nifiv1alpha1.FlowDeploymentTarget{ParentProcessGroupRef: nifiv1alpha1.ProcessGroupReference{Name: parent.Name}, ProcessGroupName: "Payments"},
+			DriftPolicy: nifiv1alpha1.DriftPolicy{Mode: nifiv1alpha1.DriftPolicyWarn},
+		},
+		Status: nifiv1alpha1.NiFiFlowDeploymentStatus{
+			CommonStatus:   nifiv1alpha1.CommonStatus{Ready: true, ObservedGeneration: 1, NiFiID: "pg-imported", Dependencies: nifiv1alpha1.DependencyStatus{Ready: true}},
+			ProcessGroupID: "pg-imported", ArtifactDigest: digest, DeployedVersion: "release-1",
+		},
+	}
+	processGroups := &fakeProcessGroupClient{entities: []nifi.ProcessGroupEntity{{
+		ID: "pg-imported", Revision: nifi.Revision{Version: 4}, Component: nifi.ProcessGroupComponent{ID: "pg-imported", Name: "Payments"},
+	}}}
+	flowSnapshots := &fakeFlowSnapshotClient{liveSnapshot: testFlowSnapshot("Payments", "Generate changed in UI").Raw}
+	k8sClient := newCanvasTestClient(scheme, cluster, parent, bundle, deployment)
+	reconciler := &NiFiFlowDeploymentReconciler{Client: k8sClient, Scheme: scheme, ProcessGroupClient: processGroups, FlowSnapshotClient: flowSnapshots}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: deployment.Name, Namespace: deployment.Namespace}}
+
+	for range 2 {
+		if _, err := reconciler.Reconcile(t.Context(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	current := &nifiv1alpha1.NiFiFlowDeployment{}
+	if err := k8sClient.Get(t.Context(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if !current.Status.Ready || current.Status.Drift.Status != "Drifted" || len(current.Status.Drift.Differences) == 0 {
+		t.Fatalf("ready/drift = %v/%#v", current.Status.Ready, current.Status.Drift)
+	}
+	if len(flowSnapshots.replacements) != 0 {
+		t.Fatalf("warn policy created %d replacement(s)", len(flowSnapshots.replacements))
+	}
+}
+
+func TestNiFiFlowDeploymentReconcilesLiveDrift(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	parent := readyTestProcessGroup("platform", "pg-platform")
+	desired := testFlowSnapshot("Payments", "Generate desired")
+	_, digest, err := canonicalFlowSnapshot(desired, "Payments")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := readyTestSnapshotFlowBundle("payments", desired, digest, "release-1")
+	deployment := &nifiv1alpha1.NiFiFlowDeployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiFlowDeploymentSpec{
+			ClusterRef:  nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			Source:      nifiv1alpha1.FlowDeploymentSource{BundleRef: &nifiv1alpha1.LocalObjectReference{Name: bundle.Name}},
+			Target:      nifiv1alpha1.FlowDeploymentTarget{ParentProcessGroupRef: nifiv1alpha1.ProcessGroupReference{Name: parent.Name}, ProcessGroupName: "Payments"},
+			Rollout:     nifiv1alpha1.RolloutStrategy{Strategy: "ChangedOnly"},
+			DriftPolicy: nifiv1alpha1.DriftPolicy{Mode: nifiv1alpha1.DriftPolicyReconcile},
+		},
+		Status: nifiv1alpha1.NiFiFlowDeploymentStatus{
+			CommonStatus:   nifiv1alpha1.CommonStatus{Ready: true, ObservedGeneration: 1, NiFiID: "pg-imported", Dependencies: nifiv1alpha1.DependencyStatus{Ready: true}},
+			ProcessGroupID: "pg-imported", ArtifactDigest: digest, DeployedVersion: "release-1",
+		},
+	}
+	processGroups := &fakeProcessGroupClient{entities: []nifi.ProcessGroupEntity{{ID: "pg-imported", Revision: nifi.Revision{Version: 4}, Component: nifi.ProcessGroupComponent{ID: "pg-imported", Name: "Payments"}}}}
+	flowSnapshots := &fakeFlowSnapshotClient{
+		liveSnapshot:   testFlowSnapshot("Payments", "Generate changed in UI").Raw,
+		createdRequest: nifi.ProcessGroupReplaceRequestEntity{Request: nifi.ProcessGroupReplaceRequest{RequestID: "replace-drift", State: "Running"}},
+	}
+	k8sClient := newCanvasTestClient(scheme, cluster, parent, bundle, deployment)
+	reconciler := &NiFiFlowDeploymentReconciler{Client: k8sClient, Scheme: scheme, ProcessGroupClient: processGroups, FlowSnapshotClient: flowSnapshots}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: deployment.Name, Namespace: deployment.Namespace}}
+
+	for range 2 {
+		if _, err := reconciler.Reconcile(t.Context(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(flowSnapshots.replacements) != 1 {
+		t.Fatalf("replacement count = %d, want 1", len(flowSnapshots.replacements))
+	}
+}
+
+func TestNiFiFlowDeploymentStopAllThenApplySchedulesAroundRollout(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	parent := readyTestProcessGroup("platform", "pg-platform")
+	desired := testFlowSnapshot("Payments", "Generate v2")
+	_, digest, err := canonicalFlowSnapshot(desired, "Payments")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := readyTestSnapshotFlowBundle("payments", desired, digest, "release-2")
+	deployment := &nifiv1alpha1.NiFiFlowDeployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "default", Generation: 2},
+		Spec: nifiv1alpha1.NiFiFlowDeploymentSpec{
+			ClusterRef: nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			Source:     nifiv1alpha1.FlowDeploymentSource{BundleRef: &nifiv1alpha1.LocalObjectReference{Name: bundle.Name}},
+			Target:     nifiv1alpha1.FlowDeploymentTarget{ParentProcessGroupRef: nifiv1alpha1.ProcessGroupReference{Name: parent.Name}, ProcessGroupName: "Payments"},
+			Rollout:    nifiv1alpha1.RolloutStrategy{Strategy: "StopAllThenApply"},
+		},
+		Status: nifiv1alpha1.NiFiFlowDeploymentStatus{CommonStatus: nifiv1alpha1.CommonStatus{Ready: true, ObservedGeneration: 1}, ProcessGroupID: "pg-imported", ArtifactDigest: "sha256:old", DeployedVersion: "release-1"},
+	}
+	processGroups := &fakeProcessGroupClient{entities: []nifi.ProcessGroupEntity{{ID: "pg-imported", Revision: nifi.Revision{Version: 4}, Component: nifi.ProcessGroupComponent{ID: "pg-imported", Name: "Payments"}}}}
+	flowSnapshots := &fakeFlowSnapshotClient{
+		createdRequest:  nifi.ProcessGroupReplaceRequestEntity{Request: nifi.ProcessGroupReplaceRequest{RequestID: "replace-1", State: "Running"}},
+		observedRequest: nifi.ProcessGroupReplaceRequestEntity{Request: nifi.ProcessGroupReplaceRequest{RequestID: "replace-1", State: "Complete", Complete: true, PercentCompleted: 100}},
+	}
+	scheduler := &fakeProcessGroupScheduler{}
+	k8sClient := newCanvasTestClient(scheme, cluster, parent, bundle, deployment)
+	reconciler := &NiFiFlowDeploymentReconciler{Client: k8sClient, Scheme: scheme, ProcessGroupClient: processGroups, FlowSnapshotClient: flowSnapshots, ProcessGroupScheduler: scheduler}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: deployment.Name, Namespace: deployment.Namespace}}
+
+	for range 5 {
+		if _, err := reconciler.Reconcile(t.Context(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(scheduler.states) != 2 || scheduler.states[0] != "STOPPED" || scheduler.states[1] != "RUNNING" || len(flowSnapshots.replacements) != 1 {
+		t.Fatalf("states/replacements = %#v/%d", scheduler.states, len(flowSnapshots.replacements))
+	}
+}
+
+func TestNiFiFlowDeploymentAutomaticallyRollsBackFailedReplacement(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	parent := readyTestProcessGroup("platform", "pg-platform")
+	previous := testFlowSnapshot("Payments", "Generate v1")
+	_, previousDigest, err := canonicalFlowSnapshot(previous, "Payments")
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired := testFlowSnapshot("Payments", "Generate v2")
+	_, desiredDigest, err := canonicalFlowSnapshot(desired, "Payments")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := readyTestSnapshotFlowBundle("payments", desired, desiredDigest, "release-2")
+	history := nifiv1alpha1.FlowDeploymentHistory{Version: "release-1", Digest: previousDigest, SnapshotConfigMap: "payments-history-v1", Result: "Succeeded", DeployedAt: metav1.Now()}
+	deployment := &nifiv1alpha1.NiFiFlowDeployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "default", Generation: 2},
+		Spec: nifiv1alpha1.NiFiFlowDeploymentSpec{
+			ClusterRef: nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			Source:     nifiv1alpha1.FlowDeploymentSource{BundleRef: &nifiv1alpha1.LocalObjectReference{Name: bundle.Name}},
+			Target:     nifiv1alpha1.FlowDeploymentTarget{ParentProcessGroupRef: nifiv1alpha1.ProcessGroupReference{Name: parent.Name}, ProcessGroupName: "Payments"},
+			Rollout:    nifiv1alpha1.RolloutStrategy{Strategy: "ChangedOnly"},
+			Rollback:   nifiv1alpha1.RollbackStrategy{Enabled: true, HistoryLimit: 5},
+		},
+		Status: nifiv1alpha1.NiFiFlowDeploymentStatus{
+			CommonStatus: nifiv1alpha1.CommonStatus{Ready: true, ObservedGeneration: 1}, ProcessGroupID: "pg-imported",
+			ArtifactDigest: previousDigest, DeployedVersion: "release-1", LastSuccessful: history.DeepCopy(), RolloutHistory: []nifiv1alpha1.FlowDeploymentHistory{history},
+		},
+	}
+	historyConfigMap := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: history.SnapshotConfigMap, Namespace: "default"}, Data: map[string]string{flowSnapshotDataKey: string(previous.Raw)}}
+	processGroups := &fakeProcessGroupClient{entities: []nifi.ProcessGroupEntity{{ID: "pg-imported", Revision: nifi.Revision{Version: 4}, Component: nifi.ProcessGroupComponent{ID: "pg-imported", Name: "Payments"}}}}
+	flowSnapshots := &fakeFlowSnapshotClient{createdRequests: []nifi.ProcessGroupReplaceRequestEntity{
+		{Request: nifi.ProcessGroupReplaceRequest{RequestID: "replace-failed", Complete: true, FailureReason: "invalid replacement"}},
+		{Request: nifi.ProcessGroupReplaceRequest{RequestID: "rollback-1", State: "Running"}},
+	}, observedRequest: nifi.ProcessGroupReplaceRequestEntity{Request: nifi.ProcessGroupReplaceRequest{RequestID: "rollback-1", State: "Complete", Complete: true, PercentCompleted: 100}}}
+	k8sClient := newCanvasTestClient(scheme, cluster, parent, bundle, deployment, historyConfigMap)
+	reconciler := &NiFiFlowDeploymentReconciler{Client: k8sClient, Scheme: scheme, ProcessGroupClient: processGroups, FlowSnapshotClient: flowSnapshots}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: deployment.Name, Namespace: deployment.Namespace}}
+
+	for range 5 {
+		if _, err := reconciler.Reconcile(t.Context(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(flowSnapshots.replacements) != 2 || string(flowSnapshots.replacements[1]) != string(previous.Raw) {
+		t.Fatalf("rollback replacements = %#v", flowSnapshots.replacements)
+	}
+	current := &nifiv1alpha1.NiFiFlowDeployment{}
+	if err := k8sClient.Get(t.Context(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if current.Status.LatestReplaceRequest != nil || current.Status.LastRollback == nil || current.Status.LastRollback.CompletedAt == nil || current.Status.LastRollback.FailedDigest != desiredDigest {
+		t.Fatalf("rollback status = %#v / %#v", current.Status.LatestReplaceRequest, current.Status.LastRollback)
+	}
+	if current.Status.Ready || current.Status.ArtifactDigest != previousDigest || current.Status.SyncState != "RolledBack" {
+		t.Fatalf("rolled back ready/digest/state = %v/%q/%q", current.Status.Ready, current.Status.ArtifactDigest, current.Status.SyncState)
 	}
 }
 

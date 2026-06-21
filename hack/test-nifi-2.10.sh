@@ -32,7 +32,7 @@ docker run --rm -d \
 
 for _ in $(seq 1 90); do
   if curl -fsS "http://127.0.0.1:${port}/nifi-api/flow/about" >/dev/null; then
-    NIFI_API_URI="http://127.0.0.1:${port}" go test -count=1 -tags=integration ./integration -v
+    NIFI_API_URI="http://127.0.0.1:${port}" go test -count=1 -tags=integration ./internal/controller ./integration -v
     exit 0
   fi
   sleep 2

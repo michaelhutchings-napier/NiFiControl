@@ -41,6 +41,7 @@ import (
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiprocessgroups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiprocessgroups/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;create;update;patch;delete
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nificontrollerservices,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nificontrollerservices/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nificontrollerservices/finalizers,verbs=update
@@ -1312,10 +1313,12 @@ func (r *NiFiFlowBundleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 type NiFiFlowDeploymentReconciler struct {
 	client.Client
-	Scheme             *runtime.Scheme
-	ProcessGroupClient nifi.ProcessGroupClient
-	FlowSnapshotClient nifi.FlowSnapshotClient
-	ArtifactResolver   flowartifact.Resolver
+	Scheme                *runtime.Scheme
+	ProcessGroupClient    nifi.ProcessGroupClient
+	FlowSnapshotClient    nifi.FlowSnapshotClient
+	FlowSnapshotReader    nifi.FlowSnapshotReader
+	ProcessGroupScheduler nifi.ProcessGroupScheduler
+	ArtifactResolver      flowartifact.Resolver
 }
 
 func (r *NiFiFlowDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

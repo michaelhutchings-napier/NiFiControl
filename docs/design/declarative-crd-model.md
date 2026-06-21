@@ -1244,6 +1244,20 @@ Current implementation: embedded snapshots are imported with NiFi's native
 process-group import API. Updates use asynchronous process-group replace
 requests, checkpoint request progress in `latestReplaceRequest`, and reconcile
 the target name and parameter context after NiFi finishes replacing the graph.
+Successful and failed attempts are retained in bounded `rolloutHistory`; full
+rollback snapshots are stored in owner-controlled ConfigMaps. A failed
+asynchronous replacement can automatically restore `lastSuccessfulDeployment`,
+and the failed generation is blocked from immediately retrying the same digest.
+
+Live drift checks export the deployed process group from NiFi 2.10, normalize
+generated identifiers, metadata, numeric representation, component ordering,
+and known NiFi defaults, then report field paths without values. `Ignore`,
+`Warn`, `Reconcile`, and `Fail` are enforced by the controller.
+
+`StopAllThenApply` explicitly stops and restarts the target group. `ApplyOnly`
+does not issue run-state changes, while `ChangedOnly` and `Rolling` rely on
+NiFi's native differential replace sequencing. `BlueGreen` remains explicitly
+unsupported until upstream/downstream connection switching can be transactional.
 
 Dependencies: `NiFiCluster`, source provider or `NiFiFlowBundle`,
 `NiFiRegistryClient`, target `NiFiProcessGroup`, `NiFiParameterContext`,

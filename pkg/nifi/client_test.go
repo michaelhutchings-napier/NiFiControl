@@ -470,6 +470,46 @@ func TestHTTPFlowSnapshotClientDeleteMissingReplaceRequestIsIdempotent(t *testin
 	}
 }
 
+func TestHTTPFlowSnapshotClientDownloadsProcessGroup(t *testing.T) {
+	want := json.RawMessage(`{"flowContents":{"name":"Payments"}}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/nifi-api/process-groups/pg-1/download" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write(want)
+	}))
+	defer server.Close()
+
+	got, err := (HTTPFlowSnapshotClient{}).DownloadProcessGroup(t.Context(), server.URL, "pg-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("snapshot = %s, want %s", got, want)
+	}
+}
+
+func TestHTTPProcessGroupSchedulerSchedulesWholeGroup(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/nifi-api/flow/process-groups/pg-1" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var got ScheduleComponentsEntity
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got.ID != "pg-1" || got.State != "STOPPED" {
+			t.Fatalf("schedule request = %#v", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	if err := (HTTPProcessGroupScheduler{}).ScheduleProcessGroup(t.Context(), server.URL, "pg-1", "STOPPED"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHTTPControllerServiceClientCreateControllerService(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

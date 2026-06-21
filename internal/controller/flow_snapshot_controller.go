@@ -223,15 +223,16 @@ func (r *NiFiFlowDeploymentReconciler) reconcileSnapshotFlowDeployment(ctx conte
 
 	if pending := deployment.Status.LatestReplaceRequest; pending != nil && pending.ID != "" {
 		if pending.FailureReason != "" {
-			return r.snapshotDeploymentFailed(ctx, deployment, "FlowReplaceFailed", fmt.Errorf("%s", pending.FailureReason))
+			return r.handleFlowReplaceFailure(ctx, deployment, endpoint, flowSnapshots, processGroups, pending, fmt.Errorf("%s", pending.FailureReason))
 		}
 		if pending.Complete {
-			return r.completeFlowReplace(ctx, deployment, endpoint, flowSnapshots, processGroups, pending)
+			return r.completeFlowReplace(ctx, deployment, endpoint, flowSnapshots, processGroups, pending, snapshot)
 		}
 		return r.reconcilePendingFlowReplace(ctx, deployment, endpoint, flowSnapshots, processGroups)
 	}
 
 	if deployment.Status.ProcessGroupID == "" {
+		ensureActiveFlowRollout(deployment, version, digest, "Rollout")
 		imported, err := flowSnapshots.ImportProcessGroup(ctx, endpoint, parentID, snapshot)
 		if err != nil {
 			return r.snapshotDeploymentFailed(ctx, deployment, "SnapshotImportFailed", fmt.Errorf("failed to import NiFi flow snapshot: %w", err))
@@ -257,12 +258,85 @@ func (r *NiFiFlowDeploymentReconciler) reconcileSnapshotFlowDeployment(ctx conte
 		return r.snapshotDeploymentFailed(ctx, deployment, "NiFiGetFailed", fmt.Errorf("NiFi returned an empty imported process group response"))
 	}
 
-	if deployment.Status.ArtifactDigest != digest || deployment.Status.DeployedVersion != version {
+	if rollbackBlocksTarget(deployment, digest) {
+		return rolloutRequeue(), nil
+	}
+
+	forceReplace := false
+	desiredContentDigest := ""
+	liveContentDigest := ""
+	if deployment.Status.ArtifactDigest == digest && deployment.Status.DeployedVersion == version {
+		mode := resolvedDriftPolicy(deployment)
+		if mode == nifiv1alpha1.DriftPolicyIgnore {
+			_, desiredContentDigest, err = normalizeFlowSnapshot(snapshot, deployment.Spec.DriftPolicy.IgnoreFields)
+			if err != nil {
+				return r.snapshotDeploymentFailed(ctx, deployment, "DriftCheckFailed", err)
+			}
+			liveContentDigest = desiredContentDigest
+		} else {
+			liveSnapshot, downloadErr := r.snapshotReader().DownloadProcessGroup(ctx, endpoint, deployment.Status.ProcessGroupID)
+			if downloadErr != nil {
+				return r.snapshotDeploymentFailed(ctx, deployment, "DriftCheckFailed", fmt.Errorf("download live NiFi flow: %w", downloadErr))
+			}
+			var differences []string
+			desiredContentDigest, liveContentDigest, differences, err = compareFlowSnapshots(snapshot, liveSnapshot, deployment.Spec.DriftPolicy.IgnoreFields)
+			if err != nil {
+				return r.snapshotDeploymentFailed(ctx, deployment, "DriftCheckFailed", err)
+			}
+			if len(differences) > 0 {
+				switch mode {
+				case nifiv1alpha1.DriftPolicyReconcile:
+					forceReplace = true
+				case nifiv1alpha1.DriftPolicyWarn, nifiv1alpha1.DriftPolicyFail:
+					if err := r.markSnapshotDeploymentDrift(ctx, deployment, desiredContentDigest, liveContentDigest, differences, mode); err != nil {
+						return ctrl.Result{}, err
+					}
+					return rolloutRequeue(), nil
+				}
+			}
+		}
+		if !forceReplace {
+			current, metadataErr := r.reconcileSnapshotDeploymentMetadata(ctx, deployment, endpoint, processGroups, existing)
+			if metadataErr != nil {
+				return r.snapshotDeploymentFailed(ctx, deployment, "SnapshotMetadataFailed", metadataErr)
+			}
+			needsCompletion := deployment.Status.LastSuccessful == nil || deployment.Status.LastSuccessful.Digest != digest || deployment.Status.ActiveRollout != nil
+			statusChanged := !flowDeploymentStatusMatches(deployment, deployment.Status.ProcessGroupID, current.Revision.Version, version, digest, "InSync") ||
+				deployment.Status.DesiredContentDigest != desiredContentDigest || deployment.Status.LiveContentDigest != liveContentDigest || deployment.Status.Drift.Status != "InSync"
+			if needsCompletion {
+				if err := r.finalizeFlowRolloutState(ctx, deployment, endpoint); err != nil {
+					return r.snapshotDeploymentFailed(ctx, deployment, "RolloutFinalizeFailed", err)
+				}
+			}
+			if needsCompletion || statusChanged {
+				if err := r.markSnapshotDeploymentInSync(ctx, deployment, deployment.Status.ProcessGroupID, current.Revision.Version, version, digest, desiredContentDigest, liveContentDigest, snapshot); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+			return rolloutRequeue(), nil
+		}
+	}
+
+	prepared, err := r.prepareFlowRollout(ctx, deployment, endpoint, version, digest)
+	if err != nil {
+		return r.snapshotDeploymentFailed(ctx, deployment, "RolloutPreparationFailed", err)
+	}
+	if !prepared {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+	snapshotConfigMap, err := r.persistFlowDeploymentSnapshot(ctx, deployment, snapshot, digest)
+	if err != nil {
+		return r.snapshotDeploymentFailed(ctx, deployment, "RolloutCheckpointFailed", err)
+	}
+	if deployment.Status.ActiveRollout != nil {
+		deployment.Status.ActiveRollout.Phase = "Replacing"
+	}
+	{
 		request, err := flowSnapshots.CreateProcessGroupReplaceRequest(ctx, endpoint, deployment.Status.ProcessGroupID, existing.Revision.Version, snapshot)
 		if err != nil {
 			return r.snapshotDeploymentFailed(ctx, deployment, "FlowReplaceCreateFailed", fmt.Errorf("failed to create NiFi flow replace request: %w", err))
 		}
-		status := flowReplaceRequestStatus(request, digest, version)
+		status := flowReplaceRequestStatus(request, digest, version, "Rollout", snapshotConfigMap)
 		if status.ID == "" {
 			return r.snapshotDeploymentFailed(ctx, deployment, "FlowReplaceCreateFailed", fmt.Errorf("NiFi did not return a flow replace request ID"))
 		}
@@ -271,7 +345,7 @@ func (r *NiFiFlowDeploymentReconciler) reconcileSnapshotFlowDeployment(ctx conte
 			if err := flowSnapshots.DeleteProcessGroupReplaceRequest(ctx, endpoint, status.ID); err == nil {
 				status.ID = ""
 			}
-			return r.snapshotDeploymentFailed(ctx, deployment, "FlowReplaceFailed", fmt.Errorf("%s", status.FailureReason))
+			return r.handleFlowReplaceFailure(ctx, deployment, endpoint, flowSnapshots, processGroups, status, fmt.Errorf("%s", status.FailureReason))
 		}
 		if status.Complete {
 			if err := markFlowDeploymentReplaceRunning(ctx, r.Client, deployment, status); err != nil {
@@ -284,15 +358,6 @@ func (r *NiFiFlowDeploymentReconciler) reconcileSnapshotFlowDeployment(ctx conte
 		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
-
-	current, err := r.reconcileSnapshotDeploymentMetadata(ctx, deployment, endpoint, processGroups, existing)
-	if err != nil {
-		return r.snapshotDeploymentFailed(ctx, deployment, "SnapshotMetadataFailed", err)
-	}
-	if !flowDeploymentStatusMatches(deployment, deployment.Status.ProcessGroupID, current.Revision.Version, version, digest, "SnapshotInSync") {
-		return ctrl.Result{}, markFlowDeploymentReady(ctx, r.Client, deployment, deployment.Status.ProcessGroupID, current.Revision.Version, version, digest, "SnapshotInSync")
-	}
-	return ctrl.Result{}, nil
 }
 
 func (r *NiFiFlowDeploymentReconciler) reconcilePendingFlowReplace(ctx context.Context, deployment *nifiv1alpha1.NiFiFlowDeployment, endpoint string, flowSnapshots nifi.FlowSnapshotClient, processGroups nifi.ProcessGroupClient) (ctrl.Result, error) {
@@ -301,7 +366,7 @@ func (r *NiFiFlowDeploymentReconciler) reconcilePendingFlowReplace(ctx context.C
 	if err != nil {
 		return r.snapshotDeploymentFailed(ctx, deployment, "FlowReplaceGetFailed", fmt.Errorf("failed to get NiFi flow replace request: %w", err))
 	}
-	status := flowReplaceRequestStatus(request, pending.TargetDigest, pending.TargetVersion)
+	status := flowReplaceRequestStatus(request, pending.TargetDigest, pending.TargetVersion, pending.Operation, pending.SnapshotConfigMap)
 	if status.ID == "" {
 		status.ID = pending.ID
 	}
@@ -310,7 +375,7 @@ func (r *NiFiFlowDeploymentReconciler) reconcilePendingFlowReplace(ctx context.C
 		if err := flowSnapshots.DeleteProcessGroupReplaceRequest(ctx, endpoint, status.ID); err == nil {
 			status.ID = ""
 		}
-		return r.snapshotDeploymentFailed(ctx, deployment, "FlowReplaceFailed", fmt.Errorf("%s", status.FailureReason))
+		return r.handleFlowReplaceFailure(ctx, deployment, endpoint, flowSnapshots, processGroups, status, fmt.Errorf("%s", status.FailureReason))
 	}
 	if !status.Complete {
 		if err := markFlowDeploymentReplaceRunning(ctx, r.Client, deployment, status); err != nil {
@@ -324,7 +389,7 @@ func (r *NiFiFlowDeploymentReconciler) reconcilePendingFlowReplace(ctx context.C
 	return ctrl.Result{RequeueAfter: time.Second}, nil
 }
 
-func (r *NiFiFlowDeploymentReconciler) completeFlowReplace(ctx context.Context, deployment *nifiv1alpha1.NiFiFlowDeployment, endpoint string, flowSnapshots nifi.FlowSnapshotClient, processGroups nifi.ProcessGroupClient, status *nifiv1alpha1.FlowReplaceRequestStatus) (ctrl.Result, error) {
+func (r *NiFiFlowDeploymentReconciler) completeFlowReplace(ctx context.Context, deployment *nifiv1alpha1.NiFiFlowDeployment, endpoint string, flowSnapshots nifi.FlowSnapshotClient, processGroups nifi.ProcessGroupClient, status *nifiv1alpha1.FlowReplaceRequestStatus, desiredSnapshot json.RawMessage) (ctrl.Result, error) {
 	existing, err := processGroups.GetProcessGroup(ctx, endpoint, deployment.Status.ProcessGroupID)
 	if err != nil {
 		return r.snapshotDeploymentFailed(ctx, deployment, "NiFiRefreshFailed", fmt.Errorf("failed to refresh replaced process group: %w", err))
@@ -342,7 +407,50 @@ func (r *NiFiFlowDeploymentReconciler) completeFlowReplace(ctx context.Context, 
 	status.Complete = true
 	status.ID = ""
 	deployment.Status.LatestReplaceRequest = status
-	return ctrl.Result{}, markFlowDeploymentReady(ctx, r.Client, deployment, deployment.Status.ProcessGroupID, current.Revision.Version, status.TargetVersion, status.TargetDigest, "SnapshotInSync")
+	if err := r.finalizeFlowRolloutState(ctx, deployment, endpoint); err != nil {
+		return r.snapshotDeploymentFailed(ctx, deployment, "RolloutFinalizeFailed", err)
+	}
+	targetSnapshot := []byte(desiredSnapshot)
+	if status.SnapshotConfigMap != "" {
+		checkpoint, checkpointErr := r.flowDeploymentSnapshotFromConfigMap(ctx, deployment.Namespace, status.SnapshotConfigMap)
+		if checkpointErr != nil {
+			return r.snapshotDeploymentFailed(ctx, deployment, "RolloutCheckpointMissing", checkpointErr)
+		}
+		targetSnapshot = checkpoint
+	}
+	if status.Operation == "Rollback" {
+		rollbackSnapshot, history, err := r.rollbackSnapshot(ctx, deployment)
+		if err != nil {
+			return r.snapshotDeploymentFailed(ctx, deployment, "RollbackSnapshotMissing", err)
+		}
+		return ctrl.Result{}, r.markSnapshotDeploymentRolledBack(ctx, deployment, current.Revision.Version, history, rollbackSnapshot)
+	}
+	mode := resolvedDriftPolicy(deployment)
+	desiredContentDigest := ""
+	liveContentDigest := ""
+	differences := []string{}
+	if mode == nifiv1alpha1.DriftPolicyIgnore {
+		_, desiredContentDigest, err = normalizeFlowSnapshot(targetSnapshot, deployment.Spec.DriftPolicy.IgnoreFields)
+		liveContentDigest = desiredContentDigest
+	} else {
+		liveSnapshot, downloadErr := r.snapshotReader().DownloadProcessGroup(ctx, endpoint, deployment.Status.ProcessGroupID)
+		if downloadErr != nil {
+			return r.snapshotDeploymentFailed(ctx, deployment, "DriftCheckFailed", fmt.Errorf("download replaced NiFi flow: %w", downloadErr))
+		}
+		desiredContentDigest, liveContentDigest, differences, err = compareFlowSnapshots(targetSnapshot, liveSnapshot, deployment.Spec.DriftPolicy.IgnoreFields)
+	}
+	if err != nil {
+		return r.snapshotDeploymentFailed(ctx, deployment, "DriftCheckFailed", err)
+	}
+	if err := r.markSnapshotDeploymentInSync(ctx, deployment, deployment.Status.ProcessGroupID, current.Revision.Version, status.TargetVersion, status.TargetDigest, desiredContentDigest, liveContentDigest, targetSnapshot); err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(differences) > 0 && mode != nifiv1alpha1.DriftPolicyIgnore {
+		if err := r.markSnapshotDeploymentDrift(ctx, deployment, desiredContentDigest, liveContentDigest, differences, mode); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	return rolloutRequeue(), nil
 }
 
 func (r *NiFiFlowDeploymentReconciler) reconcileSnapshotDeploymentMetadata(ctx context.Context, deployment *nifiv1alpha1.NiFiFlowDeployment, endpoint string, processGroups nifi.ProcessGroupClient, existing *nifi.ProcessGroupEntity) (*nifi.ProcessGroupEntity, error) {
@@ -389,8 +497,80 @@ func (r *NiFiFlowDeploymentReconciler) snapshotDeploymentFailed(ctx context.Cont
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
-func flowReplaceRequestStatus(entity *nifi.ProcessGroupReplaceRequestEntity, targetDigest string, targetVersion string) *nifiv1alpha1.FlowReplaceRequestStatus {
-	status := &nifiv1alpha1.FlowReplaceRequestStatus{TargetDigest: targetDigest, TargetVersion: targetVersion}
+func (r *NiFiFlowDeploymentReconciler) handleFlowReplaceFailure(
+	ctx context.Context,
+	deployment *nifiv1alpha1.NiFiFlowDeployment,
+	endpoint string,
+	flowSnapshots nifi.FlowSnapshotClient,
+	processGroups nifi.ProcessGroupClient,
+	failed *nifiv1alpha1.FlowReplaceRequestStatus,
+	failure error,
+) (ctrl.Result, error) {
+	if failed.ID != "" {
+		if err := flowSnapshots.DeleteProcessGroupReplaceRequest(ctx, endpoint, failed.ID); err == nil {
+			failed.ID = ""
+		}
+	}
+	r.recordFailedFlowDeployment(deployment, failed.TargetVersion, failed.TargetDigest, failed.SnapshotConfigMap, failure.Error())
+	r.trimFlowDeploymentHistory(ctx, deployment)
+	if failed.Operation == "Rollback" {
+		deployment.Status.LatestReplaceRequest = failed
+		deployment.Status.ActiveRollout = nil
+		return r.snapshotDeploymentFailed(ctx, deployment, "RollbackFailed", fmt.Errorf("automatic rollback failed: %w", failure))
+	}
+	if !deployment.Spec.Rollback.Enabled {
+		deployment.Status.LatestReplaceRequest = failed
+		deployment.Status.ActiveRollout = nil
+		return r.snapshotDeploymentFailed(ctx, deployment, "FlowReplaceFailed", failure)
+	}
+
+	rollbackSnapshot, history, err := r.rollbackSnapshot(ctx, deployment)
+	if err != nil {
+		deployment.Status.LatestReplaceRequest = failed
+		deployment.Status.ActiveRollout = nil
+		return r.snapshotDeploymentFailed(ctx, deployment, "RollbackUnavailable", fmt.Errorf("%v; %w", failure, err))
+	}
+	existing, err := processGroups.GetProcessGroup(ctx, endpoint, deployment.Status.ProcessGroupID)
+	if err != nil {
+		return r.snapshotDeploymentFailed(ctx, deployment, "RollbackPreparationFailed", fmt.Errorf("refresh process group for rollback: %w", err))
+	}
+	if existing == nil {
+		return r.snapshotDeploymentFailed(ctx, deployment, "RollbackPreparationFailed", fmt.Errorf("NiFi returned no process group for rollback"))
+	}
+
+	request, err := flowSnapshots.CreateProcessGroupReplaceRequest(ctx, endpoint, deployment.Status.ProcessGroupID, existing.Revision.Version, rollbackSnapshot)
+	if err != nil {
+		return r.snapshotDeploymentFailed(ctx, deployment, "RollbackCreateFailed", fmt.Errorf("create automatic rollback request: %w", err))
+	}
+	status := flowReplaceRequestStatus(request, history.Digest, history.Version, "Rollback", history.SnapshotConfigMap)
+	if status.ID == "" {
+		return r.snapshotDeploymentFailed(ctx, deployment, "RollbackCreateFailed", fmt.Errorf("NiFi did not return an automatic rollback request ID"))
+	}
+	deployment.Status.LastRollback = &nifiv1alpha1.FlowRollbackStatus{
+		FailedGeneration: deployment.Generation,
+		FailedVersion:    failed.TargetVersion,
+		FailedDigest:     failed.TargetDigest,
+		RestoredVersion:  history.Version,
+		RestoredDigest:   history.Digest,
+		Message:          failure.Error(),
+	}
+	active := ensureActiveFlowRollout(deployment, history.Version, history.Digest, "Rollback")
+	active.Phase = "RollingBack"
+	active.Strategy = resolvedRolloutStrategy(deployment)
+	deployment.Status.LatestReplaceRequest = status
+	if status.FailureReason != "" {
+		return r.handleFlowReplaceFailure(ctx, deployment, endpoint, flowSnapshots, processGroups, status, fmt.Errorf("%s", status.FailureReason))
+	}
+	if err := markFlowDeploymentReplaceRunning(ctx, r.Client, deployment, status); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: time.Second}, nil
+}
+
+func flowReplaceRequestStatus(entity *nifi.ProcessGroupReplaceRequestEntity, targetDigest string, targetVersion string, operation string, snapshotConfigMap string) *nifiv1alpha1.FlowReplaceRequestStatus {
+	status := &nifiv1alpha1.FlowReplaceRequestStatus{
+		TargetDigest: targetDigest, TargetVersion: targetVersion, Operation: operation, SnapshotConfigMap: snapshotConfigMap,
+	}
 	if entity == nil {
 		return status
 	}

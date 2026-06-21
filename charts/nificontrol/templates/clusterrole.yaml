@@ -52,6 +52,16 @@ rules:
       - list
       - watch
   - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - create
+      - delete
+      - get
+      - patch
+      - update
+  - apiGroups:
       - nifi.controlnifi.io
     resources:
       - nificlusters

@@ -116,7 +116,16 @@ spec:
                 properties:
                   enabled:
                     type: boolean
+                  historyLimit:
+                    default: 5
+                    format: int32
+                    maximum: 20
+                    minimum: 1
+                    type: integer
                   onFailure:
+                    default: PreviousSuccessful
+                    enum:
+                    - PreviousSuccessful
                     type: string
                 type: object
               rollout:
@@ -547,6 +556,26 @@ spec:
             type: object
           status:
             properties:
+              activeRollout:
+                properties:
+                  operation:
+                    type: string
+                  phase:
+                    type: string
+                  previousDigest:
+                    type: string
+                  previousVersion:
+                    type: string
+                  startedAt:
+                    format: date-time
+                    type: string
+                  strategy:
+                    type: string
+                  targetDigest:
+                    type: string
+                  targetVersion:
+                    type: string
+                type: object
               artifactDigest:
                 type: string
               conditions:
@@ -616,6 +645,8 @@ spec:
                 type: object
               deployedVersion:
                 type: string
+              desiredContentDigest:
+                type: string
               drift:
                 properties:
                   differences:
@@ -628,6 +659,43 @@ spec:
                   status:
                     type: string
                 type: object
+              lastRollback:
+                properties:
+                  completedAt:
+                    format: date-time
+                    type: string
+                  failedDigest:
+                    type: string
+                  failedGeneration:
+                    format: int64
+                    type: integer
+                  failedVersion:
+                    type: string
+                  message:
+                    type: string
+                  restoredDigest:
+                    type: string
+                  restoredVersion:
+                    type: string
+                type: object
+              lastSuccessfulDeployment:
+                properties:
+                  deployedAt:
+                    format: date-time
+                    type: string
+                  digest:
+                    type: string
+                  reason:
+                    type: string
+                  result:
+                    type: string
+                  snapshotConfigMap:
+                    type: string
+                  strategy:
+                    type: string
+                  version:
+                    type: string
+                type: object
               latestReplaceRequest:
                 properties:
                   complete:
@@ -636,9 +704,13 @@ spec:
                     type: string
                   id:
                     type: string
+                  operation:
+                    type: string
                   percentCompleted:
                     format: int32
                     type: integer
+                  snapshotConfigMap:
+                    type: string
                   state:
                     type: string
                   targetDigest:
@@ -646,6 +718,8 @@ spec:
                   targetVersion:
                     type: string
                 type: object
+              liveContentDigest:
+                type: string
               nifiId:
                 type: string
               observedGeneration:
@@ -663,6 +737,26 @@ spec:
                     format: int64
                     type: integer
                 type: object
+              rolloutHistory:
+                items:
+                  properties:
+                    deployedAt:
+                      format: date-time
+                      type: string
+                    digest:
+                      type: string
+                    reason:
+                      type: string
+                    result:
+                      type: string
+                    snapshotConfigMap:
+                      type: string
+                    strategy:
+                      type: string
+                    version:
+                      type: string
+                  type: object
+                type: array
               sync:
                 properties:
                   lastAttemptTime:

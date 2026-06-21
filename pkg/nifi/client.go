@@ -70,6 +70,14 @@ type FlowSnapshotClient interface {
 	DeleteProcessGroupReplaceRequest(ctx context.Context, baseURI string, requestID string) error
 }
 
+type FlowSnapshotReader interface {
+	DownloadProcessGroup(ctx context.Context, baseURI string, processGroupID string) (json.RawMessage, error)
+}
+
+type ProcessGroupScheduler interface {
+	ScheduleProcessGroup(ctx context.Context, baseURI string, processGroupID string, state string) error
+}
+
 type ControllerServiceClient interface {
 	GetControllerService(ctx context.Context, baseURI string, id string) (*ControllerServiceEntity, error)
 	CreateControllerService(ctx context.Context, baseURI string, parentID string, entity ControllerServiceEntity) (*ControllerServiceEntity, error)
@@ -132,6 +140,10 @@ type HTTPProcessGroupClient struct {
 }
 
 type HTTPFlowSnapshotClient struct {
+	Client *http.Client
+}
+
+type HTTPProcessGroupScheduler struct {
 	Client *http.Client
 }
 
@@ -282,6 +294,11 @@ type ProcessGroupReplaceRequest struct {
 	FailureReason    string `json:"failureReason,omitempty"`
 	PercentCompleted int32  `json:"percentCompleted,omitempty"`
 	State            string `json:"state,omitempty"`
+}
+
+type ScheduleComponentsEntity struct {
+	ID    string `json:"id"`
+	State string `json:"state"`
 }
 
 type ControllerServiceEntity struct {
@@ -675,6 +692,26 @@ func (c HTTPFlowSnapshotClient) DeleteProcessGroupReplaceRequest(ctx context.Con
 		return nil
 	}
 	return err
+}
+
+func (c HTTPFlowSnapshotClient) DownloadProcessGroup(ctx context.Context, baseURI string, processGroupID string) (json.RawMessage, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/%s/download", url.PathEscape(processGroupID)))
+	if err != nil {
+		return nil, err
+	}
+	var snapshot json.RawMessage
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &snapshot); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
+func (c HTTPProcessGroupScheduler) ScheduleProcessGroup(ctx context.Context, baseURI string, processGroupID string, state string) error {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/flow/process-groups/%s", url.PathEscape(processGroupID)))
+	if err != nil {
+		return err
+	}
+	return doJSON(ctx, c.Client, http.MethodPut, endpoint, ScheduleComponentsEntity{ID: processGroupID, State: state}, nil)
 }
 
 func (c HTTPControllerServiceClient) GetControllerService(ctx context.Context, baseURI string, id string) (*ControllerServiceEntity, error) {

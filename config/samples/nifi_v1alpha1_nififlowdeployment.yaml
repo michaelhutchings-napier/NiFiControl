@@ -20,6 +20,7 @@ spec:
   rollback:
     enabled: true
     onFailure: PreviousSuccessful
+    historyLimit: 5
   ownership:
     mode: Managed
     prune: true

@@ -72,6 +72,38 @@ Git, OCI, and NiFi Registry sources accept `credentials` with
 `insecureSkipVerify` is available for controlled development environments.
 Referenced Secret changes automatically trigger reconciliation.
 
+## Flow Safety
+
+`NiFiFlowDeployment` keeps bounded rollout history and stores each checkpointed
+snapshot in an owner-controlled ConfigMap. Automatic rollback restores the
+previous successful checkpoint after an asynchronous NiFi replacement failure:
+
+```yaml
+spec:
+  rollout:
+    strategy: StopAllThenApply
+  rollback:
+    enabled: true
+    onFailure: PreviousSuccessful
+    historyLimit: 5
+  driftPolicy:
+    mode: Reconcile
+    ignoreFields:
+      - component.position
+```
+
+Drift is checked every minute using NiFi 2.10's process-group download API.
+Generated identifiers, snapshot metadata, and NiFi defaults are normalized
+before comparison. `Ignore` skips live comparison, `Warn` reports differences,
+`Reconcile` replaces drifted contents, and `Fail` blocks further rollout.
+
+`ApplyOnly` does not explicitly change component run state.
+`StopAllThenApply` stops the whole group and starts it after replacement.
+`ChangedOnly` and `Rolling` use NiFi's native differential asynchronous replace
+workflow, which stops and restarts affected components in dependency order.
+`BlueGreen` is rejected until external connection switching is implemented;
+the operator does not approximate it in a way that could silently drop traffic.
+
 ## Module
 
 ```text

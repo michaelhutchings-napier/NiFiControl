@@ -21,8 +21,14 @@ type RolloutStrategy struct {
 }
 
 type RollbackStrategy struct {
-	Enabled   bool   `json:"enabled,omitempty"`
+	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:validation:Enum=PreviousSuccessful
+	// +kubebuilder:default=PreviousSuccessful
 	OnFailure string `json:"onFailure,omitempty"`
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=20
+	// +kubebuilder:default=5
+	HistoryLimit int32 `json:"historyLimit,omitempty"`
 }
 
 type OwnershipPolicy struct {
@@ -52,19 +58,58 @@ type NiFiFlowDeploymentStatus struct {
 	CommonStatus         `json:",inline"`
 	DeployedVersion      string                    `json:"deployedVersion,omitempty"`
 	ArtifactDigest       string                    `json:"artifactDigest,omitempty"`
+	DesiredContentDigest string                    `json:"desiredContentDigest,omitempty"`
+	LiveContentDigest    string                    `json:"liveContentDigest,omitempty"`
 	ProcessGroupID       string                    `json:"processGroupId,omitempty"`
 	SyncState            string                    `json:"syncState,omitempty"`
 	LatestReplaceRequest *FlowReplaceRequestStatus `json:"latestReplaceRequest,omitempty"`
+	ActiveRollout        *FlowRolloutStatus        `json:"activeRollout,omitempty"`
+	LastRollback         *FlowRollbackStatus       `json:"lastRollback,omitempty"`
+	LastSuccessful       *FlowDeploymentHistory    `json:"lastSuccessfulDeployment,omitempty"`
+	RolloutHistory       []FlowDeploymentHistory   `json:"rolloutHistory,omitempty"`
 }
 
 type FlowReplaceRequestStatus struct {
-	ID               string `json:"id,omitempty"`
-	State            string `json:"state,omitempty"`
-	Complete         bool   `json:"complete,omitempty"`
-	FailureReason    string `json:"failureReason,omitempty"`
-	PercentCompleted int32  `json:"percentCompleted,omitempty"`
-	TargetDigest     string `json:"targetDigest,omitempty"`
-	TargetVersion    string `json:"targetVersion,omitempty"`
+	ID                string `json:"id,omitempty"`
+	State             string `json:"state,omitempty"`
+	Complete          bool   `json:"complete,omitempty"`
+	FailureReason     string `json:"failureReason,omitempty"`
+	PercentCompleted  int32  `json:"percentCompleted,omitempty"`
+	TargetDigest      string `json:"targetDigest,omitempty"`
+	TargetVersion     string `json:"targetVersion,omitempty"`
+	Operation         string `json:"operation,omitempty"`
+	SnapshotConfigMap string `json:"snapshotConfigMap,omitempty"`
+}
+
+type FlowRolloutStatus struct {
+	Phase           string      `json:"phase,omitempty"`
+	Strategy        string      `json:"strategy,omitempty"`
+	Operation       string      `json:"operation,omitempty"`
+	TargetVersion   string      `json:"targetVersion,omitempty"`
+	TargetDigest    string      `json:"targetDigest,omitempty"`
+	PreviousVersion string      `json:"previousVersion,omitempty"`
+	PreviousDigest  string      `json:"previousDigest,omitempty"`
+	StartedAt       metav1.Time `json:"startedAt,omitempty"`
+}
+
+type FlowRollbackStatus struct {
+	FailedGeneration int64        `json:"failedGeneration,omitempty"`
+	FailedVersion    string       `json:"failedVersion,omitempty"`
+	FailedDigest     string       `json:"failedDigest,omitempty"`
+	RestoredVersion  string       `json:"restoredVersion,omitempty"`
+	RestoredDigest   string       `json:"restoredDigest,omitempty"`
+	CompletedAt      *metav1.Time `json:"completedAt,omitempty"`
+	Message          string       `json:"message,omitempty"`
+}
+
+type FlowDeploymentHistory struct {
+	Version           string      `json:"version,omitempty"`
+	Digest            string      `json:"digest,omitempty"`
+	SnapshotConfigMap string      `json:"snapshotConfigMap,omitempty"`
+	Strategy          string      `json:"strategy,omitempty"`
+	Result            string      `json:"result,omitempty"`
+	Reason            string      `json:"reason,omitempty"`
+	DeployedAt        metav1.Time `json:"deployedAt,omitempty"`
 }
 
 // +kubebuilder:object:root=true
