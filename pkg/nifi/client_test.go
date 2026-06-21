@@ -386,12 +386,18 @@ func TestHTTPFlowSnapshotClientImportProcessGroup(t *testing.T) {
 		if r.URL.Path != "/nifi-api/process-groups/root/process-groups/import" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
-		var got ProcessGroupImportEntity
+		var got ProcessGroupUploadEntity
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatal(err)
 		}
-		if string(got.VersionedFlowSnapshot) != string(snapshot) {
-			t.Fatalf("snapshot = %s, want %s", got.VersionedFlowSnapshot, snapshot)
+		if string(got.FlowSnapshot) != string(snapshot) {
+			t.Fatalf("snapshot = %s, want %s", got.FlowSnapshot, snapshot)
+		}
+		if got.GroupName != "Payments" {
+			t.Fatalf("group name = %q, want Payments", got.GroupName)
+		}
+		if got.Revision.Version != 0 {
+			t.Fatalf("revision = %d, want 0", got.Revision.Version)
 		}
 		_ = json.NewEncoder(w).Encode(ProcessGroupEntity{ID: "pg-imported", Revision: Revision{Version: 3}})
 	}))

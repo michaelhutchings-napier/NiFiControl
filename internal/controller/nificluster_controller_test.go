@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,6 +149,10 @@ func TestNiFiClusterReconcileCreatesManagedWorkload(t *testing.T) {
 	}
 	if statefulSet.Spec.Template.Spec.Containers[0].Image != "apache/nifi:2.10.0" {
 		t.Fatalf("image = %q", statefulSet.Spec.Template.Spec.Containers[0].Image)
+	}
+	command := statefulSet.Spec.Template.Spec.Containers[0].Command
+	if len(command) != 3 || !strings.Contains(command[2], "nifi.web.http.port") || !strings.Contains(command[2], "nifi.security.keystore' ''") {
+		t.Fatalf("NiFi 2 HTTP startup command = %#v", command)
 	}
 	if len(statefulSet.Spec.Template.Spec.Volumes) != 1 || statefulSet.Spec.Template.Spec.Volumes[0].EmptyDir == nil {
 		t.Fatal("managed cluster without persistence should use an EmptyDir data volume")

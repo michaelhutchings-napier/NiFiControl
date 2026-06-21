@@ -168,8 +168,8 @@ type Revision struct {
 }
 
 type Position struct {
-	X int64 `json:"x,omitempty"`
-	Y int64 `json:"y,omitempty"`
+	X float64 `json:"x,omitempty"`
+	Y float64 `json:"y,omitempty"`
 }
 
 type ComponentReference struct {
@@ -258,6 +258,13 @@ type ProcessGroupImportEntity struct {
 	ProcessGroupRevision         *Revision       `json:"processGroupRevision,omitempty"`
 	DisconnectedNodeAcknowledged bool            `json:"disconnectedNodeAcknowledged,omitempty"`
 	VersionedFlowSnapshot        json.RawMessage `json:"versionedFlowSnapshot"`
+}
+
+type ProcessGroupUploadEntity struct {
+	GroupName                    string          `json:"groupName,omitempty"`
+	DisconnectedNodeAcknowledged bool            `json:"disconnectedNodeAcknowledged,omitempty"`
+	FlowSnapshot                 json.RawMessage `json:"flowSnapshot"`
+	Revision                     Revision        `json:"revisionDTO"`
 }
 
 type ProcessGroupReplaceRequestEntity struct {
@@ -612,7 +619,15 @@ func (c HTTPFlowSnapshotClient) ImportProcessGroup(ctx context.Context, baseURI 
 	if err != nil {
 		return nil, err
 	}
-	body := ProcessGroupImportEntity{VersionedFlowSnapshot: snapshot}
+	var descriptor struct {
+		FlowContents struct {
+			Name string `json:"name"`
+		} `json:"flowContents"`
+	}
+	if err := json.Unmarshal(snapshot, &descriptor); err != nil {
+		return nil, fmt.Errorf("decode flow snapshot for import: %w", err)
+	}
+	body := ProcessGroupUploadEntity{GroupName: descriptor.FlowContents.Name, FlowSnapshot: snapshot, Revision: Revision{Version: 0}}
 	var response ProcessGroupEntity
 	if err := c.doJSON(ctx, http.MethodPost, endpoint, body, &response); err != nil {
 		return nil, err

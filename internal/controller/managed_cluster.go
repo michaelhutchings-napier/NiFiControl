@@ -33,6 +33,36 @@ const (
 	managedDataVolume        = "data"
 )
 
+const managedNiFiStartCommand = `. /opt/nifi/scripts/common.sh
+prop_replace 'java.arg.2' "-Xms${NIFI_JVM_HEAP_INIT}" "${nifi_bootstrap_file}"
+prop_replace 'java.arg.3' "-Xmx${NIFI_JVM_HEAP_MAX}" "${nifi_bootstrap_file}"
+uncomment 'nifi.python.command' "${nifi_props_file}"
+prop_replace 'nifi.python.extensions.source.directory.default' "${NIFI_HOME}/python_extensions"
+prop_replace 'nifi.nar.library.autoload.directory' "${NIFI_HOME}/nar_extensions"
+prop_replace 'nifi.web.http.host' "${NIFI_WEB_HTTP_HOST:-0.0.0.0}"
+prop_replace 'nifi.web.http.port' "${NIFI_WEB_HTTP_PORT:-8080}"
+prop_replace 'nifi.web.https.host' ''
+prop_replace 'nifi.web.https.port' ''
+prop_replace 'nifi.security.keystore' ''
+prop_replace 'nifi.security.keystoreType' ''
+prop_replace 'nifi.security.keystorePasswd' ''
+prop_replace 'nifi.security.keyPasswd' ''
+prop_replace 'nifi.security.truststore' ''
+prop_replace 'nifi.security.truststoreType' ''
+prop_replace 'nifi.security.truststorePasswd' ''
+prop_replace 'nifi.remote.input.host' "${NIFI_REMOTE_INPUT_HOST:-${HOSTNAME}}"
+prop_replace 'nifi.remote.input.socket.port' "${NIFI_REMOTE_INPUT_SOCKET_PORT:-10000}"
+prop_replace 'nifi.remote.input.secure' 'false'
+prop_replace 'nifi.cluster.is.node' "${NIFI_CLUSTER_IS_NODE:-false}"
+prop_replace 'nifi.cluster.node.address' "${NIFI_CLUSTER_ADDRESS:-${HOSTNAME}}"
+prop_replace 'nifi.cluster.node.protocol.port' "${NIFI_CLUSTER_NODE_PROTOCOL_PORT:-}"
+prop_replace 'nifi.cluster.load.balance.host' "${NIFI_CLUSTER_LOAD_BALANCE_HOST:-}"
+prop_replace 'nifi.zookeeper.connect.string' "${NIFI_ZK_CONNECT_STRING:-}"
+prop_replace 'nifi.zookeeper.root.node' "${NIFI_ZK_ROOT_NODE:-/nifi}"
+prop_replace 'nifi.cluster.flow.election.max.wait.time' "${NIFI_ELECTION_MAX_WAIT:-5 mins}"
+prop_replace 'nifi.cluster.flow.election.max.candidates' "${NIFI_ELECTION_MAX_CANDIDATES:-}"
+exec "${NIFI_HOME}/bin/nifi.sh" run`
+
 var managedDataDirectories = []string{
 	"conf",
 	"database_repository",
@@ -191,6 +221,7 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster) app
 		Name:            "nifi",
 		Image:           managedClusterImage(cluster),
 		ImagePullPolicy: managedClusterImagePullPolicy(cluster),
+		Command:         []string{"/bin/bash", "-ec", managedNiFiStartCommand},
 		Env:             managedClusterEnvironment(cluster),
 		Ports: []corev1.ContainerPort{
 			{Name: "web", ContainerPort: defaultNiFiWebPort, Protocol: corev1.ProtocolTCP},

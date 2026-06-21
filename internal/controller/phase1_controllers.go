@@ -3099,7 +3099,7 @@ func desiredProcessGroup(ctx context.Context, c client.Client, processGroup *nif
 		ParentGroupID: parentID,
 	}
 	if processGroup.Spec.Position != nil {
-		component.Position = &nifi.Position{X: processGroup.Spec.Position.X, Y: processGroup.Spec.Position.Y}
+		component.Position = &nifi.Position{X: float64(processGroup.Spec.Position.X), Y: float64(processGroup.Spec.Position.Y)}
 	}
 	if processGroup.Spec.ParameterContextRef != nil {
 		parameterContext := &nifiv1alpha1.NiFiParameterContext{}
@@ -3513,7 +3513,7 @@ func desiredProcessor(processor *nifiv1alpha1.NiFiProcessor, parentID string) ni
 		}
 	}
 	if processor.Spec.Position != nil {
-		component.Position = &nifi.Position{X: processor.Spec.Position.X, Y: processor.Spec.Position.Y}
+		component.Position = &nifi.Position{X: float64(processor.Spec.Position.X), Y: float64(processor.Spec.Position.Y)}
 	}
 	return nifi.ProcessorEntity{
 		Revision:  nifi.Revision{Version: 0},
@@ -3669,7 +3669,7 @@ func desiredPort(name string, position *nifiv1alpha1.Position, state nifiv1alpha
 		ConcurrentlySchedulableTaskCount: concurrentlySchedulableTaskCount,
 	}
 	if position != nil {
-		component.Position = &nifi.Position{X: position.X, Y: position.Y}
+		component.Position = &nifi.Position{X: float64(position.X), Y: float64(position.Y)}
 	}
 	return nifi.PortEntity{
 		Revision:  nifi.Revision{Version: 0},
@@ -3725,7 +3725,7 @@ func desiredConnection(ctx context.Context, c client.Client, connection *nifiv1a
 	if len(connection.Spec.Bends) > 0 {
 		component.Bends = make([]nifi.Position, 0, len(connection.Spec.Bends))
 		for _, bend := range connection.Spec.Bends {
-			component.Bends = append(component.Bends, nifi.Position{X: bend.X, Y: bend.Y})
+			component.Bends = append(component.Bends, nifi.Position{X: float64(bend.X), Y: float64(bend.Y)})
 		}
 	}
 	return nifi.ConnectionEntity{
@@ -3853,7 +3853,7 @@ func funnelDependenciesWaitingFor(ctx context.Context, c client.Client, funnel *
 func desiredFunnel(funnel *nifiv1alpha1.NiFiFunnel, parentID string) nifi.FunnelEntity {
 	component := nifi.FunnelComponent{ParentGroupID: parentID}
 	if funnel.Spec.Position != nil {
-		component.Position = &nifi.Position{X: funnel.Spec.Position.X, Y: funnel.Spec.Position.Y}
+		component.Position = &nifi.Position{X: float64(funnel.Spec.Position.X), Y: float64(funnel.Spec.Position.Y)}
 	}
 	return nifi.FunnelEntity{
 		Revision:  nifi.Revision{Version: 0},
@@ -3909,7 +3909,7 @@ func desiredLabel(label *nifiv1alpha1.NiFiLabel, parentID string) nifi.LabelEnti
 		Style:         label.Spec.Style,
 	}
 	if label.Spec.Position != nil {
-		component.Position = &nifi.Position{X: label.Spec.Position.X, Y: label.Spec.Position.Y}
+		component.Position = &nifi.Position{X: float64(label.Spec.Position.X), Y: float64(label.Spec.Position.Y)}
 	}
 	return nifi.LabelEntity{
 		Revision:  nifi.Revision{Version: 0},

@@ -54,6 +54,13 @@ go test ./...
 make helm-verify
 ```
 
+Run the native import/replace lifecycle against a disposable Apache NiFi
+2.10.0 container with:
+
+```bash
+make integration-nifi
+```
+
 Install the CRDs and controller manifests with:
 
 ```bash
