@@ -377,6 +377,91 @@ func TestHTTPProcessGroupClientDeleteProcessGroup(t *testing.T) {
 	}
 }
 
+func TestHTTPControllerServiceClientCreateControllerService(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/process-groups/pg-1/controller-services" {
+			t.Fatalf("path = %s, want /nifi-api/process-groups/pg-1/controller-services", r.URL.Path)
+		}
+		var got ControllerServiceEntity
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Component.Type != "org.apache.nifi.dbcp.DBCPConnectionPool" {
+			t.Fatalf("type = %q", got.Component.Type)
+		}
+		_ = json.NewEncoder(w).Encode(ControllerServiceEntity{
+			ID:       "controller-service-1",
+			Revision: Revision{Version: 0},
+			Component: ControllerServiceComponent{
+				ID:               "controller-service-1",
+				Name:             got.Component.Name,
+				ValidationStatus: "VALID",
+			},
+		})
+	}))
+	defer server.Close()
+
+	created, err := (HTTPControllerServiceClient{}).CreateControllerService(t.Context(), server.URL, "pg-1", ControllerServiceEntity{
+		Component: ControllerServiceComponent{
+			Name: "dbcp",
+			Type: "org.apache.nifi.dbcp.DBCPConnectionPool",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID != "controller-service-1" {
+		t.Fatalf("created id = %q, want controller-service-1", created.ID)
+	}
+	if created.Component.ValidationStatus != "VALID" {
+		t.Fatalf("validation status = %q, want VALID", created.Component.ValidationStatus)
+	}
+}
+
+func TestHTTPControllerServiceClientUpdateControllerService(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Fatalf("method = %s, want PUT", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/controller-services/controller-service-1" {
+			t.Fatalf("path = %s, want /nifi-api/controller-services/controller-service-1", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(ControllerServiceEntity{ID: "controller-service-1", Revision: Revision{Version: 2}})
+	}))
+	defer server.Close()
+
+	got, err := (HTTPControllerServiceClient{}).UpdateControllerService(t.Context(), server.URL, ControllerServiceEntity{ID: "controller-service-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Revision.Version != 2 {
+		t.Fatalf("revision = %d, want 2", got.Revision.Version)
+	}
+}
+
+func TestHTTPControllerServiceClientDeleteControllerService(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Fatalf("method = %s, want DELETE", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/controller-services/controller-service-1" {
+			t.Fatalf("path = %s, want /nifi-api/controller-services/controller-service-1", r.URL.Path)
+		}
+		if r.URL.Query().Get("version") != "12" {
+			t.Fatalf("version = %q, want 12", r.URL.Query().Get("version"))
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	if err := (HTTPControllerServiceClient{}).DeleteControllerService(t.Context(), server.URL, "controller-service-1", 12); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHTTPProcessorClientCreateProcessor(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

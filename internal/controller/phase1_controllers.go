@@ -1060,7 +1060,8 @@ func (r *NiFiProcessGroupReconciler) reconcileExistingProcessGroup(ctx context.C
 
 type NiFiControllerServiceReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme                  *runtime.Scheme
+	ControllerServiceClient nifi.ControllerServiceClient
 }
 
 func (r *NiFiControllerServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -1072,13 +1073,12 @@ func (r *NiFiControllerServiceReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, err
 	}
 	if !instance.DeletionTimestamp.IsZero() {
-		_, err := removeFinalizer(ctx, r.Client, instance)
-		return ctrl.Result{}, err
+		return r.reconcileControllerServiceDelete(ctx, instance)
 	}
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
 	}
-	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1089,8 +1089,82 @@ func (r *NiFiControllerServiceReconciler) Reconcile(ctx context.Context, req ctr
 		}
 		return ctrl.Result{}, nil
 	}
-	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
-		return ctrl.Result{}, markControllerServiceAccepted(ctx, r.Client, instance)
+
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		message := "Referenced NiFiCluster is ready but does not expose a NiFi API endpoint."
+		if shouldMarkControllerServiceNotReady(instance, "ClusterEndpointMissing", message) {
+			return ctrl.Result{}, markControllerServiceNotReady(ctx, r.Client, instance, "ClusterEndpointMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	parentID, err := processGroupParentID(ctx, r.Client, instance.Namespace, cluster, instance.Spec.ParentProcessGroupRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if parentID == "" {
+		message := "The parent process group ID is not available yet."
+		if shouldMarkControllerServiceNotReady(instance, "ParentProcessGroupIDMissing", message) {
+			return ctrl.Result{}, markControllerServiceNotReady(ctx, r.Client, instance, "ParentProcessGroupIDMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	entity, waitingFor, err := r.desiredControllerService(ctx, instance, parentID)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markControllerServiceWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+
+	controllerServices := r.ControllerServiceClient
+	if controllerServices == nil {
+		controllerServices = nifi.HTTPControllerServiceClient{}
+	}
+	if instance.Status.NiFiID != "" {
+		existing, err := controllerServices.GetControllerService(ctx, endpoint, instance.Status.NiFiID)
+		if err != nil {
+			message := fmt.Sprintf("Failed to get NiFi controller service: %v", err)
+			if shouldMarkControllerServiceNotReady(instance, "NiFiGetFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markControllerServiceNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		return r.reconcileExistingControllerService(ctx, instance, endpoint, controllerServices, entity, existing)
+	}
+	if instance.Spec.AdoptionPolicy.Mode == nifiv1alpha1.AdoptionPolicyAdoptByID && instance.Spec.AdoptionPolicy.NiFiID != "" {
+		existing, err := controllerServices.GetControllerService(ctx, endpoint, instance.Spec.AdoptionPolicy.NiFiID)
+		if err != nil {
+			message := fmt.Sprintf("Failed to adopt NiFi controller service: %v", err)
+			if shouldMarkControllerServiceNotReady(instance, "AdoptionFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markControllerServiceNotReady(ctx, r.Client, instance, "AdoptionFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		return r.reconcileExistingControllerService(ctx, instance, endpoint, controllerServices, entity, existing)
+	}
+
+	created, err := controllerServices.CreateControllerService(ctx, endpoint, parentID, entity)
+	if err != nil {
+		message := fmt.Sprintf("Failed to create NiFi controller service: %v", err)
+		if shouldMarkControllerServiceNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markControllerServiceNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	if created == nil {
+		message := "NiFi returned an empty controller service response."
+		if shouldMarkControllerServiceNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markControllerServiceNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	nifiID := controllerServiceEntityID(*created)
+	if !controllerServiceStatusMatches(instance, nifiID, created.Revision.Version, created.Component.ValidationStatus) {
+		return ctrl.Result{}, markControllerServiceReady(ctx, r.Client, instance, nifiID, created.Revision.Version, created.Component.ValidationStatus)
 	}
 	return ctrl.Result{}, nil
 }
@@ -1105,6 +1179,66 @@ func (r *NiFiControllerServiceReconciler) SetupWithManager(mgr ctrl.Manager) err
 		Watches(&nifiv1alpha1.NiFiParameterContext{}, handler.EnqueueRequestsFromMapFunc(r.requestsForParameterContext)).
 		Watches(&nifiv1alpha1.NiFiProcessGroup{}, handler.EnqueueRequestsFromMapFunc(r.requestsForProcessGroup)).
 		Complete(r)
+}
+
+func (r *NiFiControllerServiceReconciler) reconcileControllerServiceDelete(ctx context.Context, instance *nifiv1alpha1.NiFiControllerService) (ctrl.Result, error) {
+	if instance.Spec.DeletionPolicy != nifiv1alpha1.DeletionPolicyDelete || instance.Status.NiFiID == "" {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	controllerServices := r.ControllerServiceClient
+	if controllerServices == nil {
+		controllerServices = nifi.HTTPControllerServiceClient{}
+	}
+	if err := controllerServices.DeleteControllerService(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	_, err = removeFinalizer(ctx, r.Client, instance)
+	return ctrl.Result{}, err
+}
+
+func (r *NiFiControllerServiceReconciler) reconcileExistingControllerService(ctx context.Context, instance *nifiv1alpha1.NiFiControllerService, endpoint string, controllerServices nifi.ControllerServiceClient, desired nifi.ControllerServiceEntity, existing *nifi.ControllerServiceEntity) (ctrl.Result, error) {
+	if existing == nil {
+		message := "NiFi returned an empty controller service response."
+		if shouldMarkControllerServiceNotReady(instance, "NiFiGetFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markControllerServiceNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	nifiID := controllerServiceEntityID(*existing)
+	if controllerServiceNeedsUpdate(desired, *existing) {
+		updateEntity := desired
+		updateEntity.ID = nifiID
+		updateEntity.Component.ID = nifiID
+		updateEntity.Revision.Version = existing.Revision.Version
+		updated, err := controllerServices.UpdateControllerService(ctx, endpoint, updateEntity)
+		if err != nil {
+			message := fmt.Sprintf("Failed to update NiFi controller service: %v", err)
+			if shouldMarkControllerServiceNotReady(instance, "NiFiUpdateFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markControllerServiceNotReady(ctx, r.Client, instance, "NiFiUpdateFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if updated != nil {
+			nifiID = controllerServiceEntityID(*updated)
+			return ctrl.Result{}, markControllerServiceReady(ctx, r.Client, instance, nifiID, updated.Revision.Version, updated.Component.ValidationStatus)
+		}
+	}
+	if !controllerServiceStatusMatches(instance, nifiID, existing.Revision.Version, existing.Component.ValidationStatus) {
+		return ctrl.Result{}, markControllerServiceReady(ctx, r.Client, instance, nifiID, existing.Revision.Version, existing.Component.ValidationStatus)
+	}
+	return ctrl.Result{}, nil
 }
 
 type NiFiFlowBundleReconciler struct {
@@ -1134,8 +1268,9 @@ func (r *NiFiFlowBundleReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		return ctrl.Result{}, nil
 	}
-	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
-		return ctrl.Result{}, markFlowBundleAccepted(ctx, r.Client, instance)
+	artifactDigest, resolvedRevision := flowBundleResolvedMetadata(instance)
+	if !flowBundleStatusMatches(instance, artifactDigest, resolvedRevision) {
+		return ctrl.Result{}, markFlowBundleReady(ctx, r.Client, instance, artifactDigest, resolvedRevision)
 	}
 	return ctrl.Result{}, nil
 }
@@ -1149,7 +1284,8 @@ func (r *NiFiFlowBundleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 type NiFiFlowDeploymentReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme             *runtime.Scheme
+	ProcessGroupClient nifi.ProcessGroupClient
 }
 
 func (r *NiFiFlowDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -1161,13 +1297,12 @@ func (r *NiFiFlowDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, err
 	}
 	if !instance.DeletionTimestamp.IsZero() {
-		_, err := removeFinalizer(ctx, r.Client, instance)
-		return ctrl.Result{}, err
+		return r.reconcileFlowDeploymentDelete(ctx, instance)
 	}
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
 	}
-	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1178,8 +1313,75 @@ func (r *NiFiFlowDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.R
 		}
 		return ctrl.Result{}, nil
 	}
-	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
-		return ctrl.Result{}, markFlowDeploymentAccepted(ctx, r.Client, instance)
+
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		message := "Referenced NiFiCluster is ready but does not expose a NiFi API endpoint."
+		if shouldMarkFlowDeploymentNotReady(instance, "ClusterEndpointMissing", message) {
+			return ctrl.Result{}, markFlowDeploymentNotReady(ctx, r.Client, instance, "ClusterEndpointMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	parentID, err := processGroupParentID(ctx, r.Client, instance.Namespace, cluster, instance.Spec.Target.ParentProcessGroupRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if parentID == "" {
+		message := "The target parent process group ID is not available yet."
+		if shouldMarkFlowDeploymentNotReady(instance, "ParentProcessGroupIDMissing", message) {
+			return ctrl.Result{}, markFlowDeploymentNotReady(ctx, r.Client, instance, "ParentProcessGroupIDMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	entity, deployedVersion, artifactDigest, err := desiredFlowDeploymentProcessGroup(ctx, r.Client, instance, parentID)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	processGroups := r.ProcessGroupClient
+	if processGroups == nil {
+		processGroups = nifi.HTTPProcessGroupClient{}
+	}
+	if instance.Status.ProcessGroupID != "" {
+		existing, err := processGroups.GetProcessGroup(ctx, endpoint, instance.Status.ProcessGroupID)
+		if err != nil {
+			message := fmt.Sprintf("Failed to get NiFi flow deployment process group: %v", err)
+			if shouldMarkFlowDeploymentNotReady(instance, "NiFiGetFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markFlowDeploymentNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		return r.reconcileExistingFlowDeploymentProcessGroup(ctx, instance, endpoint, processGroups, entity, existing, deployedVersion, artifactDigest)
+	}
+	if instance.Spec.AdoptionPolicy.Mode == nifiv1alpha1.AdoptionPolicyAdoptByID && instance.Spec.AdoptionPolicy.NiFiID != "" {
+		existing, err := processGroups.GetProcessGroup(ctx, endpoint, instance.Spec.AdoptionPolicy.NiFiID)
+		if err != nil {
+			message := fmt.Sprintf("Failed to adopt NiFi flow deployment process group: %v", err)
+			if shouldMarkFlowDeploymentNotReady(instance, "AdoptionFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markFlowDeploymentNotReady(ctx, r.Client, instance, "AdoptionFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		return r.reconcileExistingFlowDeploymentProcessGroup(ctx, instance, endpoint, processGroups, entity, existing, deployedVersion, artifactDigest)
+	}
+
+	created, err := processGroups.CreateProcessGroup(ctx, endpoint, parentID, entity)
+	if err != nil {
+		message := fmt.Sprintf("Failed to create NiFi flow deployment process group: %v", err)
+		if shouldMarkFlowDeploymentNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markFlowDeploymentNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	if created == nil {
+		message := "NiFi returned an empty flow deployment process group response."
+		if shouldMarkFlowDeploymentNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markFlowDeploymentNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	processGroupID := processGroupEntityID(*created)
+	if !flowDeploymentStatusMatches(instance, processGroupID, created.Revision.Version, deployedVersion, artifactDigest, "ProcessGroupReconciled") {
+		return ctrl.Result{}, markFlowDeploymentReady(ctx, r.Client, instance, processGroupID, created.Revision.Version, deployedVersion, artifactDigest, "ProcessGroupReconciled")
 	}
 	return ctrl.Result{}, nil
 }
@@ -1195,6 +1397,70 @@ func (r *NiFiFlowDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		Watches(&nifiv1alpha1.NiFiParameterContext{}, handler.EnqueueRequestsFromMapFunc(r.requestsForParameterContext)).
 		Watches(&nifiv1alpha1.NiFiProcessGroup{}, handler.EnqueueRequestsFromMapFunc(r.requestsForProcessGroup)).
 		Complete(r)
+}
+
+func (r *NiFiFlowDeploymentReconciler) reconcileFlowDeploymentDelete(ctx context.Context, instance *nifiv1alpha1.NiFiFlowDeployment) (ctrl.Result, error) {
+	processGroupID := instance.Status.ProcessGroupID
+	if processGroupID == "" {
+		processGroupID = instance.Status.NiFiID
+	}
+	if instance.Spec.DeletionPolicy != nifiv1alpha1.DeletionPolicyDelete || processGroupID == "" {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	processGroups := r.ProcessGroupClient
+	if processGroups == nil {
+		processGroups = nifi.HTTPProcessGroupClient{}
+	}
+	if err := processGroups.DeleteProcessGroup(ctx, endpoint, processGroupID, instance.Status.Revision.Version); err != nil {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	_, err = removeFinalizer(ctx, r.Client, instance)
+	return ctrl.Result{}, err
+}
+
+func (r *NiFiFlowDeploymentReconciler) reconcileExistingFlowDeploymentProcessGroup(ctx context.Context, instance *nifiv1alpha1.NiFiFlowDeployment, endpoint string, processGroups nifi.ProcessGroupClient, desired nifi.ProcessGroupEntity, existing *nifi.ProcessGroupEntity, deployedVersion string, artifactDigest string) (ctrl.Result, error) {
+	if existing == nil {
+		message := "NiFi returned an empty flow deployment process group response."
+		if shouldMarkFlowDeploymentNotReady(instance, "NiFiGetFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markFlowDeploymentNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	processGroupID := processGroupEntityID(*existing)
+	if processGroupNeedsUpdate(desired, *existing) {
+		updateEntity := desired
+		updateEntity.ID = processGroupID
+		updateEntity.Component.ID = processGroupID
+		updateEntity.Revision.Version = existing.Revision.Version
+		updated, err := processGroups.UpdateProcessGroup(ctx, endpoint, updateEntity)
+		if err != nil {
+			message := fmt.Sprintf("Failed to update NiFi flow deployment process group: %v", err)
+			if shouldMarkFlowDeploymentNotReady(instance, "NiFiUpdateFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markFlowDeploymentNotReady(ctx, r.Client, instance, "NiFiUpdateFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if updated != nil {
+			processGroupID = processGroupEntityID(*updated)
+			return ctrl.Result{}, markFlowDeploymentReady(ctx, r.Client, instance, processGroupID, updated.Revision.Version, deployedVersion, artifactDigest, "ProcessGroupReconciled")
+		}
+	}
+	if !flowDeploymentStatusMatches(instance, processGroupID, existing.Revision.Version, deployedVersion, artifactDigest, "ProcessGroupReconciled") {
+		return ctrl.Result{}, markFlowDeploymentReady(ctx, r.Client, instance, processGroupID, existing.Revision.Version, deployedVersion, artifactDigest, "ProcessGroupReconciled")
+	}
+	return ctrl.Result{}, nil
 }
 
 type NiFiProcessorReconciler struct {
@@ -2955,11 +3221,146 @@ func controllerServiceDependenciesWaitingFor(ctx context.Context, c client.Clien
 	return waitingFor
 }
 
+func (r *NiFiControllerServiceReconciler) desiredControllerService(ctx context.Context, controllerService *nifiv1alpha1.NiFiControllerService, parentID string) (nifi.ControllerServiceEntity, []string, error) {
+	properties := make(map[string]string, len(controllerService.Spec.Properties)+len(controllerService.Spec.SensitiveProperties))
+	for key, value := range controllerService.Spec.Properties {
+		properties[key] = value
+	}
+	waitingFor := make([]string, 0)
+	for propertyName, source := range controllerService.Spec.SensitiveProperties {
+		if source.SecretKeyRef == nil {
+			waitingFor = append(waitingFor, fmt.Sprintf("sensitiveProperties.%s.secretKeyRef", propertyName))
+			continue
+		}
+		secretRef := source.SecretKeyRef
+		secret := &corev1.Secret{}
+		key := types.NamespacedName{Name: secretRef.Name, Namespace: controllerService.Namespace}
+		if err := r.Get(ctx, key, secret); err != nil {
+			if apierrors.IsNotFound(err) {
+				waitingFor = append(waitingFor, fmt.Sprintf("Secret/%s/%s", controllerService.Namespace, secretRef.Name))
+				continue
+			}
+			return nifi.ControllerServiceEntity{}, nil, err
+		}
+		data, ok := secret.Data[secretRef.Key]
+		if !ok {
+			if secretRef.Optional != nil && *secretRef.Optional {
+				properties[propertyName] = ""
+			} else {
+				waitingFor = append(waitingFor, fmt.Sprintf("Secret/%s/%s:%s", controllerService.Namespace, secretRef.Name, secretRef.Key))
+			}
+			continue
+		}
+		properties[propertyName] = string(data)
+	}
+	if len(properties) == 0 {
+		properties = nil
+	}
+
+	component := nifi.ControllerServiceComponent{
+		ParentGroupID: parentID,
+		Name:          controllerService.Name,
+		Type:          controllerService.Spec.Type,
+		Properties:    properties,
+		State:         string(controllerService.Spec.State),
+	}
+	if controllerService.Spec.Bundle != nil {
+		component.Bundle = &nifi.Bundle{
+			Group:    controllerService.Spec.Bundle.Group,
+			Artifact: controllerService.Spec.Bundle.Artifact,
+			Version:  controllerService.Spec.Bundle.Version,
+		}
+	}
+	return nifi.ControllerServiceEntity{
+		Revision:  nifi.Revision{Version: 0},
+		Component: component,
+	}, waitingFor, nil
+}
+
+func controllerServiceEntityID(entity nifi.ControllerServiceEntity) string {
+	if entity.ID != "" {
+		return entity.ID
+	}
+	return entity.Component.ID
+}
+
+func controllerServiceNeedsUpdate(desired nifi.ControllerServiceEntity, existing nifi.ControllerServiceEntity) bool {
+	if desired.Component.Name != existing.Component.Name ||
+		desired.Component.Type != existing.Component.Type ||
+		desired.Component.ParentGroupID != "" && desired.Component.ParentGroupID != existing.Component.ParentGroupID ||
+		desired.Component.State != "" && desired.Component.State != existing.Component.State {
+		return true
+	}
+	if !nifiBundlesEqual(desired.Component.Bundle, existing.Component.Bundle) {
+		return true
+	}
+	return !stringMapsEqual(desired.Component.Properties, existing.Component.Properties)
+}
+
+func controllerServiceStatusMatches(instance *nifiv1alpha1.NiFiControllerService, nifiID string, revisionVersion int64, validationStatus string) bool {
+	return instance.Status.ObservedGeneration == instance.Generation &&
+		instance.Status.Ready &&
+		instance.Status.Dependencies.Ready &&
+		instance.Status.NiFiID == nifiID &&
+		instance.Status.Revision.Version == revisionVersion &&
+		instance.Status.ValidationStatus == validationStatus
+}
+
+func shouldMarkControllerServiceNotReady(instance *nifiv1alpha1.NiFiControllerService, reason, message string) bool {
+	if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Ready || instance.Status.Sync.LastError != message {
+		return true
+	}
+	for _, condition := range instance.Status.Conditions {
+		if condition.Type == string(nifiv1alpha1.ConditionReady) {
+			return condition.Reason != reason
+		}
+	}
+	return true
+}
+
 func flowBundleDependenciesWaitingFor(ctx context.Context, c client.Client, flowBundle *nifiv1alpha1.NiFiFlowBundle) []string {
 	if flowBundle.Spec.Source.Registry == nil {
 		return nil
 	}
 	return registryClientDependencyWaitingFor(ctx, c, flowBundle.Namespace, flowBundle.Spec.Source.Registry.RegistryClientRef, "source.registry.registryClientRef")
+}
+
+func flowBundleResolvedMetadata(flowBundle *nifiv1alpha1.NiFiFlowBundle) (string, string) {
+	resolvedRevision := flowBundle.Spec.Version
+	artifactDigest := ""
+	switch {
+	case flowBundle.Spec.Source.Git != nil:
+		source := flowBundle.Spec.Source.Git
+		if resolvedRevision == "" {
+			resolvedRevision = source.Ref
+		}
+	case flowBundle.Spec.Source.OCI != nil:
+		source := flowBundle.Spec.Source.OCI
+		artifactDigest = source.Digest
+		if resolvedRevision == "" {
+			resolvedRevision = source.Digest
+		}
+		if resolvedRevision == "" {
+			resolvedRevision = source.Image
+		}
+	case flowBundle.Spec.Source.Registry != nil:
+		source := flowBundle.Spec.Source.Registry
+		if resolvedRevision == "" {
+			resolvedRevision = source.Version
+		}
+		if resolvedRevision == "" {
+			resolvedRevision = source.FlowID
+		}
+	}
+	return artifactDigest, resolvedRevision
+}
+
+func flowBundleStatusMatches(instance *nifiv1alpha1.NiFiFlowBundle, artifactDigest string, resolvedRevision string) bool {
+	return instance.Status.ObservedGeneration == instance.Generation &&
+		instance.Status.Ready &&
+		instance.Status.Dependencies.Ready &&
+		instance.Status.ArtifactDigest == artifactDigest &&
+		instance.Status.ResolvedRevision == resolvedRevision
 }
 
 func flowDeploymentDependenciesWaitingFor(ctx context.Context, c client.Client, flowDeployment *nifiv1alpha1.NiFiFlowDeployment) []string {
@@ -2968,6 +3369,104 @@ func flowDeploymentDependenciesWaitingFor(ctx context.Context, c client.Client, 
 	waitingFor = append(waitingFor, processGroupReferenceDependencyWaitingFor(ctx, c, flowDeployment.Namespace, flowDeployment.Spec.Target.ParentProcessGroupRef, "target.parentProcessGroupRef")...)
 	waitingFor = append(waitingFor, parameterContextDependencyWaitingFor(ctx, c, flowDeployment.Namespace, flowDeployment.Spec.ParameterContextRef, "parameterContextRef")...)
 	return waitingFor
+}
+
+func desiredFlowDeploymentProcessGroup(ctx context.Context, c client.Client, flowDeployment *nifiv1alpha1.NiFiFlowDeployment, parentID string) (nifi.ProcessGroupEntity, string, string, error) {
+	name := flowDeployment.Spec.Target.ProcessGroupName
+	if name == "" {
+		name = flowDeployment.Name
+	}
+	component := nifi.ProcessGroupComponent{
+		Name:          name,
+		ParentGroupID: parentID,
+		Comments:      fmt.Sprintf("Managed by NiFiControl FlowDeployment %s/%s.", flowDeployment.Namespace, flowDeployment.Name),
+	}
+	if flowDeployment.Spec.ParameterContextRef != nil {
+		ref := *flowDeployment.Spec.ParameterContextRef
+		parameterContext := &nifiv1alpha1.NiFiParameterContext{}
+		key := types.NamespacedName{Name: ref.Name, Namespace: localObjectRefNamespace(flowDeployment.Namespace, ref)}
+		if err := c.Get(ctx, key, parameterContext); err != nil {
+			return nifi.ProcessGroupEntity{}, "", "", err
+		}
+		if parameterContext.Status.NiFiID != "" {
+			component.ParameterContext = &nifi.ComponentReference{ID: parameterContext.Status.NiFiID}
+		}
+	}
+	deployedVersion, artifactDigest, err := flowDeploymentSourceMetadata(ctx, c, flowDeployment)
+	if err != nil {
+		return nifi.ProcessGroupEntity{}, "", "", err
+	}
+	return nifi.ProcessGroupEntity{
+		Revision:  nifi.Revision{Version: 0},
+		Component: component,
+	}, deployedVersion, artifactDigest, nil
+}
+
+func flowDeploymentSourceMetadata(ctx context.Context, c client.Client, flowDeployment *nifiv1alpha1.NiFiFlowDeployment) (string, string, error) {
+	deployedVersion := flowDeployment.Spec.Source.Version
+	artifactDigest := ""
+	if flowDeployment.Spec.Source.BundleRef != nil {
+		ref := *flowDeployment.Spec.Source.BundleRef
+		bundle := &nifiv1alpha1.NiFiFlowBundle{}
+		key := types.NamespacedName{Name: ref.Name, Namespace: localObjectRefNamespace(flowDeployment.Namespace, ref)}
+		if err := c.Get(ctx, key, bundle); err != nil {
+			return "", "", err
+		}
+		if deployedVersion == "" {
+			deployedVersion = bundle.Status.ResolvedRevision
+		}
+		if deployedVersion == "" {
+			deployedVersion = bundle.Spec.Version
+		}
+		artifactDigest = bundle.Status.ArtifactDigest
+		return deployedVersion, artifactDigest, nil
+	}
+	if inline := flowDeployment.Spec.Source.Inline; inline != nil {
+		switch {
+		case inline.Registry != nil:
+			if deployedVersion == "" {
+				deployedVersion = inline.Registry.Version
+			}
+			if deployedVersion == "" {
+				deployedVersion = inline.Registry.FlowID
+			}
+		case inline.Git != nil:
+			if deployedVersion == "" {
+				deployedVersion = inline.Git.Ref
+			}
+			artifactDigest = inline.Git.Path
+		case inline.OCI != nil:
+			if deployedVersion == "" {
+				deployedVersion = inline.OCI.Digest
+			}
+			artifactDigest = inline.OCI.Digest
+		}
+	}
+	return deployedVersion, artifactDigest, nil
+}
+
+func flowDeploymentStatusMatches(instance *nifiv1alpha1.NiFiFlowDeployment, processGroupID string, revisionVersion int64, deployedVersion string, artifactDigest string, syncState string) bool {
+	return instance.Status.ObservedGeneration == instance.Generation &&
+		instance.Status.Ready &&
+		instance.Status.Dependencies.Ready &&
+		instance.Status.NiFiID == processGroupID &&
+		instance.Status.ProcessGroupID == processGroupID &&
+		instance.Status.Revision.Version == revisionVersion &&
+		instance.Status.DeployedVersion == deployedVersion &&
+		instance.Status.ArtifactDigest == artifactDigest &&
+		instance.Status.SyncState == syncState
+}
+
+func shouldMarkFlowDeploymentNotReady(instance *nifiv1alpha1.NiFiFlowDeployment, reason, message string) bool {
+	if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Ready || instance.Status.Sync.LastError != message {
+		return true
+	}
+	for _, condition := range instance.Status.Conditions {
+		if condition.Type == string(nifiv1alpha1.ConditionReady) {
+			return condition.Reason != reason
+		}
+	}
+	return true
 }
 
 func processorDependenciesWaitingFor(ctx context.Context, c client.Client, processor *nifiv1alpha1.NiFiProcessor) []string {

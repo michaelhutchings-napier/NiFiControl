@@ -159,6 +159,37 @@ func TestNiFiFlowBundleReconcileWaitsForRegistryClient(t *testing.T) {
 	}
 }
 
+func TestNiFiFlowBundleReconcileMarksGitBundleReady(t *testing.T) {
+	scheme := testScheme()
+	flowBundle := &nifiv1alpha1.NiFiFlowBundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiFlowBundleSpec{
+			Source: nifiv1alpha1.FlowBundleSource{
+				Git: &nifiv1alpha1.GitSource{
+					URL: "https://example.test/flows.git",
+					Ref: "main",
+				},
+			},
+		},
+	}
+	k8sClient := newIdentityCanvasTestClient(scheme, flowBundle)
+	reconciler := &NiFiFlowBundleReconciler{Client: k8sClient, Scheme: scheme}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: flowBundle.Name, Namespace: flowBundle.Namespace}}
+
+	reconcileFlowBundleTwice(t, reconciler, request)
+
+	current := &nifiv1alpha1.NiFiFlowBundle{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if !current.Status.Ready {
+		t.Fatal("flow bundle ready = false, want true")
+	}
+	if current.Status.ResolvedRevision != "main" {
+		t.Fatalf("resolved revision = %q, want main", current.Status.ResolvedRevision)
+	}
+}
+
 func TestNiFiFlowDeploymentReconcileWaitsForBundleAndParameterContext(t *testing.T) {
 	scheme := testScheme()
 	cluster := readyTestCluster()

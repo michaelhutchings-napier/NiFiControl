@@ -67,6 +67,60 @@ func (f *fakeProcessGroupClient) DeleteProcessGroup(ctx context.Context, baseURI
 	return nil
 }
 
+type fakeControllerServiceClient struct {
+	entities []nifi.ControllerServiceEntity
+	created  []nifi.ControllerServiceEntity
+	updated  []nifi.ControllerServiceEntity
+	deleted  []string
+	err      error
+}
+
+func (f *fakeControllerServiceClient) GetControllerService(ctx context.Context, baseURI string, id string) (*nifi.ControllerServiceEntity, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	for i := range f.entities {
+		if controllerServiceEntityID(f.entities[i]) == id {
+			return &f.entities[i], nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeControllerServiceClient) CreateControllerService(ctx context.Context, baseURI string, parentID string, entity nifi.ControllerServiceEntity) (*nifi.ControllerServiceEntity, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.created = append(f.created, entity)
+	created := entity
+	created.ID = "controller-service-created"
+	created.Component.ID = "controller-service-created"
+	created.Component.ParentGroupID = parentID
+	created.Component.ValidationStatus = "VALID"
+	created.Revision.Version = 0
+	f.entities = append(f.entities, created)
+	return &created, nil
+}
+
+func (f *fakeControllerServiceClient) UpdateControllerService(ctx context.Context, baseURI string, entity nifi.ControllerServiceEntity) (*nifi.ControllerServiceEntity, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.updated = append(f.updated, entity)
+	updated := entity
+	updated.Revision.Version++
+	f.entities = append(f.entities, updated)
+	return &updated, nil
+}
+
+func (f *fakeControllerServiceClient) DeleteControllerService(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.deleted = append(f.deleted, id)
+	return nil
+}
+
 type fakeProcessorClient struct {
 	entities []nifi.ProcessorEntity
 	created  []nifi.ProcessorEntity
@@ -352,6 +406,96 @@ func TestNiFiProcessorReconcileCreatesProcessor(t *testing.T) {
 	}
 }
 
+func TestNiFiControllerServiceReconcileCreatesControllerService(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	parent := readyTestProcessGroup("payments", "pg-payments")
+	controllerService := &nifiv1alpha1.NiFiControllerService{
+		ObjectMeta: metav1.ObjectMeta{Name: "dbcp", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiControllerServiceSpec{
+			ClusterRef:            nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			ParentProcessGroupRef: nifiv1alpha1.ProcessGroupReference{Name: parent.Name},
+			Type:                  "org.apache.nifi.dbcp.DBCPConnectionPool",
+			Properties:            map[string]string{"Database Connection URL": "jdbc:postgresql://postgres/payments"},
+			State:                 nifiv1alpha1.RuntimeStateDisabled,
+		},
+	}
+	k8sClient := newCanvasTestClient(scheme, cluster, parent, controllerService)
+	nifiClient := &fakeControllerServiceClient{}
+	reconciler := &NiFiControllerServiceReconciler{Client: k8sClient, Scheme: scheme, ControllerServiceClient: nifiClient}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: controllerService.Name, Namespace: controllerService.Namespace}}
+
+	reconcileControllerServiceTwice(t, reconciler, request)
+
+	if len(nifiClient.created) != 1 {
+		t.Fatalf("created count = %d, want 1", len(nifiClient.created))
+	}
+	created := nifiClient.created[0]
+	if created.Component.ParentGroupID != "pg-payments" {
+		t.Fatalf("parent id = %q, want pg-payments", created.Component.ParentGroupID)
+	}
+	if created.Component.Properties["Database Connection URL"] != "jdbc:postgresql://postgres/payments" {
+		t.Fatalf("database url = %q", created.Component.Properties["Database Connection URL"])
+	}
+	current := &nifiv1alpha1.NiFiControllerService{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if !current.Status.Ready || current.Status.NiFiID != "controller-service-created" {
+		t.Fatalf("status ready/id = %v/%q, want true/controller-service-created", current.Status.Ready, current.Status.NiFiID)
+	}
+	if current.Status.ValidationStatus != "VALID" {
+		t.Fatalf("validation status = %q, want VALID", current.Status.ValidationStatus)
+	}
+}
+
+func TestNiFiFlowDeploymentReconcileCreatesTargetProcessGroup(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	parent := readyTestProcessGroup("platform", "pg-platform")
+	flowBundle := readyTestFlowBundle("payments", "sha256:abc123", "main")
+	flowDeployment := &nifiv1alpha1.NiFiFlowDeployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiFlowDeploymentSpec{
+			ClusterRef: nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			Source: nifiv1alpha1.FlowDeploymentSource{
+				BundleRef: &nifiv1alpha1.LocalObjectReference{Name: flowBundle.Name},
+			},
+			Target: nifiv1alpha1.FlowDeploymentTarget{
+				ParentProcessGroupRef: nifiv1alpha1.ProcessGroupReference{Name: parent.Name},
+				ProcessGroupName:      "Payments",
+			},
+		},
+	}
+	k8sClient := newCanvasTestClient(scheme, cluster, parent, flowBundle, flowDeployment)
+	nifiClient := &fakeProcessGroupClient{}
+	reconciler := &NiFiFlowDeploymentReconciler{Client: k8sClient, Scheme: scheme, ProcessGroupClient: nifiClient}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: flowDeployment.Name, Namespace: flowDeployment.Namespace}}
+
+	reconcileFlowDeploymentTwice(t, reconciler, request)
+
+	if len(nifiClient.created) != 1 {
+		t.Fatalf("created count = %d, want 1", len(nifiClient.created))
+	}
+	created := nifiClient.created[0]
+	if created.Component.Name != "Payments" {
+		t.Fatalf("process group name = %q, want Payments", created.Component.Name)
+	}
+	if created.Component.ParentGroupID != "pg-platform" {
+		t.Fatalf("parent id = %q, want pg-platform", created.Component.ParentGroupID)
+	}
+	current := &nifiv1alpha1.NiFiFlowDeployment{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if !current.Status.Ready || current.Status.ProcessGroupID != "pg-created" {
+		t.Fatalf("status ready/process group id = %v/%q, want true/pg-created", current.Status.Ready, current.Status.ProcessGroupID)
+	}
+	if current.Status.ArtifactDigest != "sha256:abc123" || current.Status.DeployedVersion != "main" {
+		t.Fatalf("status digest/version = %q/%q, want sha256:abc123/main", current.Status.ArtifactDigest, current.Status.DeployedVersion)
+	}
+}
+
 func TestNiFiFunnelReconcileCreatesFunnel(t *testing.T) {
 	scheme := testScheme()
 	cluster := readyTestCluster()
@@ -591,6 +735,25 @@ func readyTestOutputPort(name string, nifiID string, parentID string) *nifiv1alp
 	}
 }
 
+func readyTestFlowBundle(name string, artifactDigest string, resolvedRevision string) *nifiv1alpha1.NiFiFlowBundle {
+	return &nifiv1alpha1.NiFiFlowBundle{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiFlowBundleSpec{
+			Source:  nifiv1alpha1.FlowBundleSource{Git: &nifiv1alpha1.GitSource{URL: "https://example.test/flows.git", Ref: resolvedRevision}},
+			Version: resolvedRevision,
+		},
+		Status: nifiv1alpha1.NiFiFlowBundleStatus{
+			CommonStatus: nifiv1alpha1.CommonStatus{
+				Ready:              true,
+				ObservedGeneration: 1,
+				Dependencies:       nifiv1alpha1.DependencyStatus{Ready: true},
+			},
+			ArtifactDigest:   artifactDigest,
+			ResolvedRevision: resolvedRevision,
+		},
+	}
+}
+
 func newCanvasTestClient(scheme *runtime.Scheme, objects ...client.Object) client.Client {
 	return fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -598,6 +761,9 @@ func newCanvasTestClient(scheme *runtime.Scheme, objects ...client.Object) clien
 		WithStatusSubresource(
 			&nifiv1alpha1.NiFiCluster{},
 			&nifiv1alpha1.NiFiProcessGroup{},
+			&nifiv1alpha1.NiFiControllerService{},
+			&nifiv1alpha1.NiFiFlowBundle{},
+			&nifiv1alpha1.NiFiFlowDeployment{},
 			&nifiv1alpha1.NiFiProcessor{},
 			&nifiv1alpha1.NiFiInputPort{},
 			&nifiv1alpha1.NiFiOutputPort{},

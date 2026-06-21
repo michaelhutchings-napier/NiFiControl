@@ -45,6 +45,13 @@ type ProcessGroupClient interface {
 	DeleteProcessGroup(ctx context.Context, baseURI string, id string, revisionVersion int64) error
 }
 
+type ControllerServiceClient interface {
+	GetControllerService(ctx context.Context, baseURI string, id string) (*ControllerServiceEntity, error)
+	CreateControllerService(ctx context.Context, baseURI string, parentID string, entity ControllerServiceEntity) (*ControllerServiceEntity, error)
+	UpdateControllerService(ctx context.Context, baseURI string, entity ControllerServiceEntity) (*ControllerServiceEntity, error)
+	DeleteControllerService(ctx context.Context, baseURI string, id string, revisionVersion int64) error
+}
+
 type ProcessorClient interface {
 	GetProcessor(ctx context.Context, baseURI string, id string) (*ProcessorEntity, error)
 	CreateProcessor(ctx context.Context, baseURI string, parentID string, entity ProcessorEntity) (*ProcessorEntity, error)
@@ -96,6 +103,10 @@ type HTTPRegistryClientClient struct {
 }
 
 type HTTPProcessGroupClient struct {
+	Client *http.Client
+}
+
+type HTTPControllerServiceClient struct {
 	Client *http.Client
 }
 
@@ -212,6 +223,23 @@ type ProcessGroupComponent struct {
 	Comments         string              `json:"comments,omitempty"`
 	Position         *Position           `json:"position,omitempty"`
 	ParameterContext *ComponentReference `json:"parameterContext,omitempty"`
+}
+
+type ControllerServiceEntity struct {
+	ID        string                     `json:"id,omitempty"`
+	Revision  Revision                   `json:"revision,omitempty"`
+	Component ControllerServiceComponent `json:"component,omitempty"`
+}
+
+type ControllerServiceComponent struct {
+	ID               string            `json:"id,omitempty"`
+	ParentGroupID    string            `json:"parentGroupId,omitempty"`
+	Name             string            `json:"name,omitempty"`
+	Type             string            `json:"type,omitempty"`
+	Bundle           *Bundle           `json:"bundle,omitempty"`
+	Properties       map[string]string `json:"properties,omitempty"`
+	State            string            `json:"state,omitempty"`
+	ValidationStatus string            `json:"validationStatus,omitempty"`
 }
 
 type ProcessorEntity struct {
@@ -519,6 +547,59 @@ func (c HTTPProcessGroupClient) UpdateProcessGroup(ctx context.Context, baseURI 
 
 func (c HTTPProcessGroupClient) DeleteProcessGroup(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
 	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/%s", url.PathEscape(id)))
+	if err != nil {
+		return err
+	}
+	endpoint += fmt.Sprintf("?version=%d", revisionVersion)
+
+	return c.doJSON(ctx, http.MethodDelete, endpoint, nil, nil)
+}
+
+func (c HTTPControllerServiceClient) GetControllerService(ctx context.Context, baseURI string, id string) (*ControllerServiceEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/controller-services/%s", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response ControllerServiceEntity
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPControllerServiceClient) CreateControllerService(ctx context.Context, baseURI string, parentID string, entity ControllerServiceEntity) (*ControllerServiceEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/%s/controller-services", url.PathEscape(parentID)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response ControllerServiceEntity
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPControllerServiceClient) UpdateControllerService(ctx context.Context, baseURI string, entity ControllerServiceEntity) (*ControllerServiceEntity, error) {
+	id := entity.ID
+	if id == "" {
+		id = entity.Component.ID
+	}
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/controller-services/%s", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response ControllerServiceEntity
+	if err := c.doJSON(ctx, http.MethodPut, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPControllerServiceClient) DeleteControllerService(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/controller-services/%s", url.PathEscape(id)))
 	if err != nil {
 		return err
 	}
@@ -849,6 +930,10 @@ func (c HTTPRegistryClientClient) doJSON(ctx context.Context, method, endpoint s
 }
 
 func (c HTTPProcessGroupClient) doJSON(ctx context.Context, method, endpoint string, body any, out any) error {
+	return doJSON(ctx, c.Client, method, endpoint, body, out)
+}
+
+func (c HTTPControllerServiceClient) doJSON(ctx context.Context, method, endpoint string, body any, out any) error {
 	return doJSON(ctx, c.Client, method, endpoint, body, out)
 }
 

@@ -122,6 +122,23 @@ func markControllerServiceAccepted(ctx context.Context, c client.Client, obj *ni
 	return c.Status().Update(ctx, obj)
 }
 
+func markControllerServiceReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiControllerService, nifiID string, revisionVersion int64, validationStatus string) error {
+	obj.Status.CommonStatus.MarkReady(obj.Generation, "ControllerServiceReady", "The NiFi controller service is reconciled.")
+	obj.Status.NiFiID = nifiID
+	obj.Status.Revision.Version = revisionVersion
+	obj.Status.ValidationStatus = validationStatus
+	obj.Status.Sync.LastError = ""
+	return c.Status().Update(ctx, obj)
+}
+
+func markControllerServiceNotReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiControllerService, reason, message string) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, reason, message)
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.Sync.LastError = message
+	return c.Status().Update(ctx, obj)
+}
+
 func markUserAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiUser) error {
 	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
 	return c.Status().Update(ctx, obj)
@@ -179,6 +196,14 @@ func markFlowBundleAccepted(ctx context.Context, c client.Client, obj *nifiv1alp
 	return c.Status().Update(ctx, obj)
 }
 
+func markFlowBundleReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFlowBundle, artifactDigest string, resolvedRevision string) error {
+	obj.Status.CommonStatus.MarkReady(obj.Generation, "FlowBundleReady", "The NiFi flow bundle source is resolved.")
+	obj.Status.ArtifactDigest = artifactDigest
+	obj.Status.ResolvedRevision = resolvedRevision
+	obj.Status.Sync.LastError = ""
+	return c.Status().Update(ctx, obj)
+}
+
 func markFlowBundleWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFlowBundle, waitingFor []string) error {
 	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
 	return c.Status().Update(ctx, obj)
@@ -186,6 +211,26 @@ func markFlowBundleWaitingForDependencies(ctx context.Context, c client.Client, 
 
 func markFlowDeploymentAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFlowDeployment) error {
 	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+	return c.Status().Update(ctx, obj)
+}
+
+func markFlowDeploymentReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFlowDeployment, processGroupID string, revisionVersion int64, deployedVersion string, artifactDigest string, syncState string) error {
+	obj.Status.CommonStatus.MarkReady(obj.Generation, "FlowDeploymentReady", "The NiFi flow deployment target is reconciled.")
+	obj.Status.NiFiID = processGroupID
+	obj.Status.Revision.Version = revisionVersion
+	obj.Status.ProcessGroupID = processGroupID
+	obj.Status.DeployedVersion = deployedVersion
+	obj.Status.ArtifactDigest = artifactDigest
+	obj.Status.SyncState = syncState
+	obj.Status.Sync.LastError = ""
+	return c.Status().Update(ctx, obj)
+}
+
+func markFlowDeploymentNotReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFlowDeployment, reason, message string) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, reason, message)
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.Sync.LastError = message
 	return c.Status().Update(ctx, obj)
 }
 
