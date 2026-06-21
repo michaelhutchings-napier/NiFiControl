@@ -18,7 +18,10 @@ rules:
   - nififlowbundles
   - nififlowdeployments
   - nifiparametercontexts
+  - nifiprocessgroups
   - nifiregistryclients
+  - nifiusergroups
+  - nifiusers
   verbs:
   - create
   - delete
@@ -35,7 +38,10 @@ rules:
   - nififlowbundles/finalizers
   - nififlowdeployments/finalizers
   - nifiparametercontexts/finalizers
+  - nifiprocessgroups/finalizers
   - nifiregistryclients/finalizers
+  - nifiusergroups/finalizers
+  - nifiusers/finalizers
   verbs:
   - update
 - apiGroups:
@@ -46,7 +52,10 @@ rules:
   - nififlowbundles/status
   - nififlowdeployments/status
   - nifiparametercontexts/status
+  - nifiprocessgroups/status
   - nifiregistryclients/status
+  - nifiusergroups/status
+  - nifiusers/status
   verbs:
   - get
   - patch

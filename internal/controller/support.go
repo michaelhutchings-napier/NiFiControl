@@ -122,6 +122,36 @@ func markControllerServiceAccepted(ctx context.Context, c client.Client, obj *ni
 	return c.Status().Update(ctx, obj)
 }
 
+func markUserAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiUser) error {
+	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+	return c.Status().Update(ctx, obj)
+}
+
+func markUserWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiUser, waitingFor []string) error {
+	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
+	return c.Status().Update(ctx, obj)
+}
+
+func markUserGroupAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiUserGroup) error {
+	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+	return c.Status().Update(ctx, obj)
+}
+
+func markUserGroupWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiUserGroup, waitingFor []string) error {
+	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
+	return c.Status().Update(ctx, obj)
+}
+
+func markProcessGroupAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiProcessGroup) error {
+	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+	return c.Status().Update(ctx, obj)
+}
+
+func markProcessGroupWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiProcessGroup, waitingFor []string) error {
+	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
+	return c.Status().Update(ctx, obj)
+}
+
 func markControllerServiceWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiControllerService, waitingFor []string) error {
 	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
 	return c.Status().Update(ctx, obj)

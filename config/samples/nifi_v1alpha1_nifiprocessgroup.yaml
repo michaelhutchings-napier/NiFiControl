@@ -1,0 +1,14 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiProcessGroup
+metadata:
+  name: payments
+spec:
+  clusterRef:
+    name: production
+  displayName: Payments
+  comments: Payments processing flow root
+  position:
+    x: 0
+    y: 0
+  parameterContextRef:
+    name: payments-prod

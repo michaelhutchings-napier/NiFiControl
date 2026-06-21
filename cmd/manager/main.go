@@ -48,6 +48,15 @@ func main() {
 	if err := (&controller.NiFiParameterContextReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), ParameterContextClient: nifi.HTTPParameterContextClient{}}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
+	if err := (&controller.NiFiUserReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr); err != nil {
+		os.Exit(1)
+	}
+	if err := (&controller.NiFiUserGroupReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr); err != nil {
+		os.Exit(1)
+	}
+	if err := (&controller.NiFiProcessGroupReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr); err != nil {
+		os.Exit(1)
+	}
 	if err := (&controller.NiFiControllerServiceReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}

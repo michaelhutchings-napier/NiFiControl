@@ -26,6 +26,15 @@ import (
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiparametercontexts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiparametercontexts/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiparametercontexts/finalizers,verbs=update
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiusers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiusers/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiusers/finalizers,verbs=update
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiusergroups,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiusergroups/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiusergroups/finalizers,verbs=update
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiprocessgroups,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiprocessgroups/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiprocessgroups/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nificontrollerservices,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nificontrollerservices/status,verbs=get;update;patch
@@ -746,6 +755,146 @@ func shouldMarkParameterContextNotReady(instance *nifiv1alpha1.NiFiParameterCont
 	return true
 }
 
+type NiFiUserReconciler struct {
+	client.Client
+	Scheme *runtime.Scheme
+}
+
+func (r *NiFiUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	instance := &nifiv1alpha1.NiFiUser{}
+	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	if !instance.DeletionTimestamp.IsZero() {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markUserWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
+		return ctrl.Result{}, markUserAccepted(ctx, r.Client, instance)
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *NiFiUserReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &nifiv1alpha1.NiFiUser{}, clusterRefIndexField, indexUserClusterRef); err != nil {
+		return err
+	}
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&nifiv1alpha1.NiFiUser{}).
+		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCluster)).
+		Complete(r)
+}
+
+type NiFiUserGroupReconciler struct {
+	client.Client
+	Scheme *runtime.Scheme
+}
+
+func (r *NiFiUserGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	instance := &nifiv1alpha1.NiFiUserGroup{}
+	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	if !instance.DeletionTimestamp.IsZero() {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	waitingFor = append(waitingFor, userGroupMemberDependenciesWaitingFor(ctx, r.Client, instance)...)
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markUserGroupWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
+		return ctrl.Result{}, markUserGroupAccepted(ctx, r.Client, instance)
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *NiFiUserGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &nifiv1alpha1.NiFiUserGroup{}, clusterRefIndexField, indexUserGroupClusterRef); err != nil {
+		return err
+	}
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&nifiv1alpha1.NiFiUserGroup{}).
+		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCluster)).
+		Complete(r)
+}
+
+type NiFiProcessGroupReconciler struct {
+	client.Client
+	Scheme *runtime.Scheme
+}
+
+func (r *NiFiProcessGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	instance := &nifiv1alpha1.NiFiProcessGroup{}
+	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	if !instance.DeletionTimestamp.IsZero() {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	waitingFor = append(waitingFor, processGroupDependenciesWaitingFor(ctx, r.Client, instance)...)
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markProcessGroupWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
+		return ctrl.Result{}, markProcessGroupAccepted(ctx, r.Client, instance)
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *NiFiProcessGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &nifiv1alpha1.NiFiProcessGroup{}, clusterRefIndexField, indexProcessGroupClusterRef); err != nil {
+		return err
+	}
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&nifiv1alpha1.NiFiProcessGroup{}).
+		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCluster)).
+		Complete(r)
+}
+
 type NiFiControllerServiceReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -884,6 +1033,30 @@ func indexParameterContextClusterRef(obj client.Object) []string {
 	return indexClusterRef(parameterContext.Namespace, parameterContext.Spec.ClusterRef)
 }
 
+func indexUserClusterRef(obj client.Object) []string {
+	user, ok := obj.(*nifiv1alpha1.NiFiUser)
+	if !ok {
+		return nil
+	}
+	return indexClusterRef(user.Namespace, user.Spec.ClusterRef)
+}
+
+func indexUserGroupClusterRef(obj client.Object) []string {
+	userGroup, ok := obj.(*nifiv1alpha1.NiFiUserGroup)
+	if !ok {
+		return nil
+	}
+	return indexClusterRef(userGroup.Namespace, userGroup.Spec.ClusterRef)
+}
+
+func indexProcessGroupClusterRef(obj client.Object) []string {
+	processGroup, ok := obj.(*nifiv1alpha1.NiFiProcessGroup)
+	if !ok {
+		return nil
+	}
+	return indexClusterRef(processGroup.Namespace, processGroup.Spec.ClusterRef)
+}
+
 func indexControllerServiceClusterRef(obj client.Object) []string {
 	controllerService, ok := obj.(*nifiv1alpha1.NiFiControllerService)
 	if !ok {
@@ -932,6 +1105,42 @@ func (r *NiFiParameterContextReconciler) requestsForCluster(ctx context.Context,
 	return requests
 }
 
+func (r *NiFiUserReconciler) requestsForCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiUserList{}
+	if err := listByClusterRef(ctx, r.Client, obj, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+	}
+	return requests
+}
+
+func (r *NiFiUserGroupReconciler) requestsForCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiUserGroupList{}
+	if err := listByClusterRef(ctx, r.Client, obj, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+	}
+	return requests
+}
+
+func (r *NiFiProcessGroupReconciler) requestsForCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiProcessGroupList{}
+	if err := listByClusterRef(ctx, r.Client, obj, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+	}
+	return requests
+}
+
 func (r *NiFiControllerServiceReconciler) requestsForCluster(ctx context.Context, obj client.Object) []reconcile.Request {
 	list := &nifiv1alpha1.NiFiControllerServiceList{}
 	if err := listByClusterRef(ctx, r.Client, obj, list); err != nil {
@@ -959,4 +1168,58 @@ func (r *NiFiFlowDeploymentReconciler) requestsForCluster(ctx context.Context, o
 func listByClusterRef(ctx context.Context, c client.Client, cluster client.Object, list client.ObjectList) error {
 	indexValue := fmt.Sprintf("%s/%s", cluster.GetNamespace(), cluster.GetName())
 	return c.List(ctx, list, client.MatchingFields{clusterRefIndexField: indexValue})
+}
+
+func userGroupMemberDependenciesWaitingFor(ctx context.Context, c client.Client, userGroup *nifiv1alpha1.NiFiUserGroup) []string {
+	waitingFor := make([]string, 0)
+	for _, member := range userGroup.Spec.Users {
+		if member.UserRef.Name == "" {
+			waitingFor = append(waitingFor, "users[].userRef.name")
+			continue
+		}
+		namespace := userGroup.Namespace
+		if member.UserRef.Namespace != "" {
+			namespace = member.UserRef.Namespace
+		}
+		user := &nifiv1alpha1.NiFiUser{}
+		key := types.NamespacedName{Name: member.UserRef.Name, Namespace: namespace}
+		if err := c.Get(ctx, key, user); err != nil {
+			if apierrors.IsNotFound(err) {
+				waitingFor = append(waitingFor, fmt.Sprintf("NiFiUser/%s/%s", namespace, member.UserRef.Name))
+				continue
+			}
+			waitingFor = append(waitingFor, fmt.Sprintf("NiFiUser/%s/%s:GetError", namespace, member.UserRef.Name))
+			continue
+		}
+		if !user.Status.Ready {
+			waitingFor = append(waitingFor, fmt.Sprintf("NiFiUser/%s/%s:Ready", namespace, member.UserRef.Name))
+		}
+	}
+	return waitingFor
+}
+
+func processGroupDependenciesWaitingFor(ctx context.Context, c client.Client, processGroup *nifiv1alpha1.NiFiProcessGroup) []string {
+	if processGroup.Spec.ParameterContextRef == nil {
+		return nil
+	}
+	ref := *processGroup.Spec.ParameterContextRef
+	if ref.Name == "" {
+		return []string{"parameterContextRef.name"}
+	}
+	namespace := processGroup.Namespace
+	if ref.Namespace != "" {
+		namespace = ref.Namespace
+	}
+	parameterContext := &nifiv1alpha1.NiFiParameterContext{}
+	key := types.NamespacedName{Name: ref.Name, Namespace: namespace}
+	if err := c.Get(ctx, key, parameterContext); err != nil {
+		if apierrors.IsNotFound(err) {
+			return []string{fmt.Sprintf("NiFiParameterContext/%s/%s", namespace, ref.Name)}
+		}
+		return []string{fmt.Sprintf("NiFiParameterContext/%s/%s:GetError", namespace, ref.Name)}
+	}
+	if !parameterContext.Status.Ready {
+		return []string{fmt.Sprintf("NiFiParameterContext/%s/%s:Ready", namespace, ref.Name)}
+	}
+	return nil
 }

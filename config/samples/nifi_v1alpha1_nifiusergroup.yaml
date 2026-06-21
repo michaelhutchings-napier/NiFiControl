@@ -1,0 +1,11 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiUserGroup
+metadata:
+  name: operators
+spec:
+  clusterRef:
+    name: production
+  identity: operators
+  users:
+    - userRef:
+        name: alice

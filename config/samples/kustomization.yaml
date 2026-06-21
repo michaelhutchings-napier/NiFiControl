@@ -2,7 +2,9 @@ resources:
   - nifi_v1alpha1_nificluster.yaml
   - nifi_v1alpha1_nifiregistryclient.yaml
   - nifi_v1alpha1_nifiparametercontext.yaml
+  - nifi_v1alpha1_nifiuser.yaml
+  - nifi_v1alpha1_nifiusergroup.yaml
+  - nifi_v1alpha1_nifiprocessgroup.yaml
   - nifi_v1alpha1_nificontrollerservice.yaml
   - nifi_v1alpha1_nififlowbundle.yaml
   - nifi_v1alpha1_nififlowdeployment.yaml
-

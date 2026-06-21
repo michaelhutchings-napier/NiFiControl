@@ -1,0 +1,11 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiUser
+metadata:
+  name: alice
+spec:
+  clusterRef:
+    name: production
+  identity: alice@example.com
+  certificate:
+    create: true
+    secretName: alice-nifi-client
