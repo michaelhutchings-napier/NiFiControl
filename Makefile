@@ -1,6 +1,7 @@
 CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.5
 HELM ?= helm
 HELM_CHART ?= charts/nificontrol
+HELM_CLUSTER_CHART ?= charts/nifi-cluster
 
 .PHONY: all
 all: test
@@ -27,11 +28,14 @@ helm-crds-check:
 .PHONY: helm-lint
 helm-lint: helm-crds-check
 	$(HELM) lint $(HELM_CHART)
+	$(HELM) lint $(HELM_CLUSTER_CHART)
 
 .PHONY: helm-template
 helm-template: helm-crds-check
 	$(HELM) template nificontrol $(HELM_CHART) --namespace nificontrol-system --include-crds >/dev/null
 	$(HELM) template custom $(HELM_CHART) --namespace operators --set rbac.create=false --set serviceAccount.create=false --set serviceAccount.name=existing --set metrics.service.enabled=false --set podDisruptionBudget.enabled=true >/dev/null
+	$(HELM) template production $(HELM_CLUSTER_CHART) --namespace dataflows >/dev/null
+	$(HELM) template clustered $(HELM_CLUSTER_CHART) --namespace dataflows --set replicas=3 --set coordination.zookeeperConnectString=zookeeper.dataflows.svc:2181 >/dev/null
 
 .PHONY: helm-verify
 helm-verify: helm-lint helm-template

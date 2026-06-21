@@ -4,10 +4,26 @@ metadata:
   name: production
 spec:
   mode: Internal
-  image: apache/nifi:2.0.0
-  replicas: 3
-  api:
-    uri: https://nifi.example.com
-  deletionPolicy: Orphan
+  image: apache/nifi:1.28.0
+  replicas: 1
+  service:
+    type: ClusterIP
+    port: 8080
+  storage:
+    enabled: true
+    size: 10Gi
+    accessModes:
+      - ReadWriteOnce
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  jvm:
+    heapInitial: 1g
+    heapMax: 2g
+  deletionPolicy: Delete
   driftPolicy:
-    mode: Warn
+    mode: Reconcile

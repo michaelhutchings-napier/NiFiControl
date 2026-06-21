@@ -7,6 +7,7 @@ import (
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/nifi"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -21,6 +22,8 @@ import (
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nificlusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nificlusters/finalizers,verbs=update
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services;persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiregistryclients,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiregistryclients/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiregistryclients/finalizers,verbs=update
@@ -83,11 +86,13 @@ func (r *NiFiClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 	if !instance.DeletionTimestamp.IsZero() {
-		_, err := removeFinalizer(ctx, r.Client, instance)
-		return ctrl.Result{}, err
+		return r.reconcileClusterDelete(ctx, instance)
 	}
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
+	}
+	if resolvedClusterMode(instance) == nifiv1alpha1.ClusterModeInternal {
+		return r.reconcileManagedCluster(ctx, instance)
 	}
 	if instance.Spec.API != nil && instance.Spec.API.URI != "" {
 		timeout := time.Duration(0)
@@ -116,7 +121,11 @@ func (r *NiFiClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 }
 
 func (r *NiFiClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).For(&nifiv1alpha1.NiFiCluster{}).Complete(r)
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&nifiv1alpha1.NiFiCluster{}).
+		Watches(&appsv1.StatefulSet{}, handler.EnqueueRequestsFromMapFunc(r.requestsForManagedClusterResource)).
+		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(r.requestsForManagedClusterResource)).
+		Complete(r)
 }
 
 type NiFiRegistryClientReconciler struct {

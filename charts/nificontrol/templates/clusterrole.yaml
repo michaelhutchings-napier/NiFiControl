@@ -7,6 +7,31 @@ metadata:
     {{- include "nificontrol.labels" . | nindent 4 }}
 rules:
   - apiGroups:
+      - ""
+    resources:
+      - persistentvolumeclaims
+      - services
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - apps
+    resources:
+      - statefulsets
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
       - coordination.k8s.io
     resources:
       - leases

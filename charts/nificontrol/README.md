@@ -2,7 +2,8 @@
 
 This chart installs the NiFiControl Kubernetes operator and its CRDs. It does
 not install an Apache NiFi cluster; `NiFiCluster` resources point the operator
-at NiFi API endpoints that already exist.
+at existing NiFi APIs or ask it to provision managed NiFi workloads. Use the
+separate `charts/nifi-cluster` chart for an operator-managed NiFi release.
 
 ## Install
 

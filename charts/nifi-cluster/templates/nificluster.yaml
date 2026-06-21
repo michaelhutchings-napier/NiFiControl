@@ -1,0 +1,55 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiCluster
+metadata:
+  name: {{ include "nifi-cluster.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nifi-cluster.labels" . | nindent 4 }}
+spec:
+  mode: Internal
+  image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+  imagePullPolicy: {{ .Values.image.pullPolicy }}
+  replicas: {{ .Values.replicas }}
+  service:
+    type: {{ .Values.service.type }}
+    port: {{ .Values.service.port }}
+    {{- if gt (int .Values.service.nodePort) 0 }}
+    nodePort: {{ .Values.service.nodePort }}
+    {{- end }}
+    {{- with .Values.service.annotations }}
+    annotations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  storage:
+    enabled: {{ .Values.storage.enabled }}
+    size: {{ .Values.storage.size }}
+    {{- with .Values.storage.storageClassName }}
+    storageClassName: {{ . | quote }}
+    {{- end }}
+    accessModes:
+      {{- toYaml .Values.storage.accessModes | nindent 6 }}
+  resources:
+    {{- toYaml .Values.resources | nindent 4 }}
+  jvm:
+    heapInitial: {{ .Values.jvm.heapInitial | quote }}
+    heapMax: {{ .Values.jvm.heapMax | quote }}
+  {{- with .Values.coordination.zookeeperConnectString }}
+  coordination:
+    zookeeperConnectString: {{ . | quote }}
+    zookeeperRootNode: {{ $.Values.coordination.zookeeperRootNode | quote }}
+    electionMaxWait: {{ $.Values.coordination.electionMaxWait | quote }}
+  {{- end }}
+  {{- with .Values.api.uri }}
+  api:
+    uri: {{ . | quote }}
+    {{- with $.Values.api.timeout }}
+    timeout: {{ . | quote }}
+    {{- end }}
+  {{- end }}
+  {{- with .Values.additionalEnv }}
+  additionalEnv:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  deletionPolicy: {{ .Values.deletionPolicy }}
+  driftPolicy:
+    mode: {{ .Values.driftPolicy.mode }}

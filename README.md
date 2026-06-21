@@ -44,7 +44,17 @@ helm upgrade --install nificontrol ./charts/nificontrol \
 ```
 
 The Helm chart installs the operator and its CRDs. It does not install an
-Apache NiFi cluster.
+Apache NiFi cluster by itself. Install a managed NiFi cluster as a separate
+Helm release so the operator remains available for upgrades and finalization:
+
+```bash
+helm upgrade --install production ./charts/nifi-cluster \
+  --namespace dataflows \
+  --create-namespace
+```
+
+The `nifi-cluster` chart creates a `NiFiCluster` resource; NiFiControl then
+provisions its Services, StatefulSet, and persistent storage.
 
 Render the sample resources with:
 

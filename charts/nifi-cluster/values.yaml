@@ -1,0 +1,52 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: apache/nifi
+  tag: 1.28.0
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+service:
+  type: ClusterIP
+  port: 8080
+  nodePort: 0
+  annotations: {}
+
+storage:
+  enabled: true
+  size: 10Gi
+  storageClassName: ""
+  accessModes:
+    - ReadWriteOnce
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 2Gi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+
+jvm:
+  heapInitial: 1g
+  heapMax: 2g
+
+# Required when replicas is greater than one. NiFiControl does not provision
+# ZooKeeper in this first managed-cluster release.
+coordination:
+  zookeeperConnectString: ""
+  zookeeperRootNode: /nifi
+  electionMaxWait: 2 mins
+
+# Override the internal service endpoint, for example when an ingress is used.
+api:
+  uri: ""
+  timeout: ""
+
+additionalEnv: []
+
+deletionPolicy: Delete
+driftPolicy:
+  mode: Reconcile

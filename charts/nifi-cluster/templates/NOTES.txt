@@ -1,0 +1,7 @@
+NiFiCluster {{ include "nifi-cluster.fullname" . }} has been submitted to NiFiControl.
+
+Watch provisioning:
+  kubectl get nificluster {{ include "nifi-cluster.fullname" . }} -n {{ .Release.Namespace }} -w
+
+Check the managed StatefulSet:
+  kubectl get statefulset {{ include "nifi-cluster.fullname" . }}-nifi -n {{ .Release.Namespace }}
