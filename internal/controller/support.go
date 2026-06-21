@@ -162,6 +162,11 @@ func markFlowBundleAccepted(ctx context.Context, c client.Client, obj *nifiv1alp
 	return c.Status().Update(ctx, obj)
 }
 
+func markFlowBundleWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFlowBundle, waitingFor []string) error {
+	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
+	return c.Status().Update(ctx, obj)
+}
+
 func markFlowDeploymentAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFlowDeployment) error {
 	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
 	return c.Status().Update(ctx, obj)

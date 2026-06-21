@@ -98,11 +98,117 @@ func TestNiFiProcessGroupReconcileWaitsForParameterContext(t *testing.T) {
 	}
 }
 
+func TestNiFiControllerServiceReconcileWaitsForParentProcessGroup(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	controllerService := &nifiv1alpha1.NiFiControllerService{
+		ObjectMeta: metav1.ObjectMeta{Name: "dbcp", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiControllerServiceSpec{
+			ClusterRef:            nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			ParentProcessGroupRef: nifiv1alpha1.ProcessGroupReference{Name: "payments"},
+			Type:                  "org.apache.nifi.dbcp.DBCPConnectionPool",
+		},
+	}
+	k8sClient := newIdentityCanvasTestClient(scheme, cluster, controllerService)
+	reconciler := &NiFiControllerServiceReconciler{Client: k8sClient, Scheme: scheme}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: controllerService.Name, Namespace: controllerService.Namespace}}
+
+	reconcileControllerServiceTwice(t, reconciler, request)
+
+	current := &nifiv1alpha1.NiFiControllerService{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if current.Status.Dependencies.Ready {
+		t.Fatal("dependencies ready = true, want false")
+	}
+	if len(current.Status.Dependencies.WaitingFor) != 1 || current.Status.Dependencies.WaitingFor[0] != "NiFiProcessGroup/default/payments" {
+		t.Fatalf("waitingFor = %#v, want missing process group", current.Status.Dependencies.WaitingFor)
+	}
+}
+
+func TestNiFiFlowBundleReconcileWaitsForRegistryClient(t *testing.T) {
+	scheme := testScheme()
+	flowBundle := &nifiv1alpha1.NiFiFlowBundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiFlowBundleSpec{
+			Source: nifiv1alpha1.FlowBundleSource{
+				Registry: &nifiv1alpha1.RegistryFlowSource{
+					RegistryClientRef: nifiv1alpha1.LocalObjectReference{Name: "platform-flows"},
+					BucketID:          "bucket-1",
+					FlowID:            "flow-1",
+				},
+			},
+		},
+	}
+	k8sClient := newIdentityCanvasTestClient(scheme, flowBundle)
+	reconciler := &NiFiFlowBundleReconciler{Client: k8sClient, Scheme: scheme}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: flowBundle.Name, Namespace: flowBundle.Namespace}}
+
+	reconcileFlowBundleTwice(t, reconciler, request)
+
+	current := &nifiv1alpha1.NiFiFlowBundle{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if current.Status.Dependencies.Ready {
+		t.Fatal("dependencies ready = true, want false")
+	}
+	if len(current.Status.Dependencies.WaitingFor) != 1 || current.Status.Dependencies.WaitingFor[0] != "NiFiRegistryClient/default/platform-flows" {
+		t.Fatalf("waitingFor = %#v, want missing registry client", current.Status.Dependencies.WaitingFor)
+	}
+}
+
+func TestNiFiFlowDeploymentReconcileWaitsForBundleAndParameterContext(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	flowDeployment := &nifiv1alpha1.NiFiFlowDeployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiFlowDeploymentSpec{
+			ClusterRef:          nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			Source:              nifiv1alpha1.FlowDeploymentSource{BundleRef: &nifiv1alpha1.LocalObjectReference{Name: "payments"}},
+			ParameterContextRef: &nifiv1alpha1.LocalObjectReference{Name: "payments-prod"},
+		},
+	}
+	k8sClient := newIdentityCanvasTestClient(scheme, cluster, flowDeployment)
+	reconciler := &NiFiFlowDeploymentReconciler{Client: k8sClient, Scheme: scheme}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: flowDeployment.Name, Namespace: flowDeployment.Namespace}}
+
+	reconcileFlowDeploymentTwice(t, reconciler, request)
+
+	current := &nifiv1alpha1.NiFiFlowDeployment{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if current.Status.Dependencies.Ready {
+		t.Fatal("dependencies ready = true, want false")
+	}
+	want := []string{"NiFiFlowBundle/default/payments", "NiFiParameterContext/default/payments-prod"}
+	if len(current.Status.Dependencies.WaitingFor) != len(want) {
+		t.Fatalf("waitingFor = %#v, want %#v", current.Status.Dependencies.WaitingFor, want)
+	}
+	for i := range want {
+		if current.Status.Dependencies.WaitingFor[i] != want[i] {
+			t.Fatalf("waitingFor = %#v, want %#v", current.Status.Dependencies.WaitingFor, want)
+		}
+	}
+}
+
 func newIdentityCanvasTestClient(scheme *runtime.Scheme, objects ...client.Object) client.Client {
 	return fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objects...).
-		WithStatusSubresource(&nifiv1alpha1.NiFiCluster{}, &nifiv1alpha1.NiFiUser{}, &nifiv1alpha1.NiFiUserGroup{}, &nifiv1alpha1.NiFiProcessGroup{}).
+		WithStatusSubresource(
+			&nifiv1alpha1.NiFiCluster{},
+			&nifiv1alpha1.NiFiRegistryClient{},
+			&nifiv1alpha1.NiFiParameterContext{},
+			&nifiv1alpha1.NiFiUser{},
+			&nifiv1alpha1.NiFiUserGroup{},
+			&nifiv1alpha1.NiFiProcessGroup{},
+			&nifiv1alpha1.NiFiControllerService{},
+			&nifiv1alpha1.NiFiFlowBundle{},
+			&nifiv1alpha1.NiFiFlowDeployment{},
+		).
 		Build()
 }
 
@@ -127,6 +233,36 @@ func reconcileUserGroupTwice(t *testing.T, reconciler *NiFiUserGroupReconciler, 
 }
 
 func reconcileProcessGroupTwice(t *testing.T, reconciler *NiFiProcessGroupReconciler, request ctrl.Request) {
+	t.Helper()
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func reconcileControllerServiceTwice(t *testing.T, reconciler *NiFiControllerServiceReconciler, request ctrl.Request) {
+	t.Helper()
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func reconcileFlowBundleTwice(t *testing.T, reconciler *NiFiFlowBundleReconciler, request ctrl.Request) {
+	t.Helper()
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func reconcileFlowDeploymentTwice(t *testing.T, reconciler *NiFiFlowDeploymentReconciler, request ctrl.Request) {
 	t.Helper()
 	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
 		t.Fatal(err)

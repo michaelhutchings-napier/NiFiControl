@@ -892,6 +892,8 @@ func (r *NiFiProcessGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&nifiv1alpha1.NiFiProcessGroup{}).
 		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCluster)).
+		Watches(&nifiv1alpha1.NiFiParameterContext{}, handler.EnqueueRequestsFromMapFunc(r.requestsForParameterContext)).
+		Watches(&nifiv1alpha1.NiFiProcessGroup{}, handler.EnqueueRequestsFromMapFunc(r.requestsForProcessGroup)).
 		Complete(r)
 }
 
@@ -919,6 +921,7 @@ func (r *NiFiControllerServiceReconciler) Reconcile(ctx context.Context, req ctr
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	waitingFor = append(waitingFor, controllerServiceDependenciesWaitingFor(ctx, r.Client, instance)...)
 	if len(waitingFor) > 0 {
 		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
 			return ctrl.Result{}, markControllerServiceWaitingForDependencies(ctx, r.Client, instance, waitingFor)
@@ -938,6 +941,8 @@ func (r *NiFiControllerServiceReconciler) SetupWithManager(mgr ctrl.Manager) err
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&nifiv1alpha1.NiFiControllerService{}).
 		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCluster)).
+		Watches(&nifiv1alpha1.NiFiParameterContext{}, handler.EnqueueRequestsFromMapFunc(r.requestsForParameterContext)).
+		Watches(&nifiv1alpha1.NiFiProcessGroup{}, handler.EnqueueRequestsFromMapFunc(r.requestsForProcessGroup)).
 		Complete(r)
 }
 
@@ -961,14 +966,24 @@ func (r *NiFiFlowBundleReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
 	}
-	if instance.Status.ObservedGeneration != instance.Generation {
+	waitingFor := flowBundleDependenciesWaitingFor(ctx, r.Client, instance)
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markFlowBundleWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
 		return ctrl.Result{}, markFlowBundleAccepted(ctx, r.Client, instance)
 	}
 	return ctrl.Result{}, nil
 }
 
 func (r *NiFiFlowBundleReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).For(&nifiv1alpha1.NiFiFlowBundle{}).Complete(r)
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&nifiv1alpha1.NiFiFlowBundle{}).
+		Watches(&nifiv1alpha1.NiFiRegistryClient{}, handler.EnqueueRequestsFromMapFunc(r.requestsForRegistryClient)).
+		Complete(r)
 }
 
 type NiFiFlowDeploymentReconciler struct {
@@ -995,6 +1010,7 @@ func (r *NiFiFlowDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.R
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	waitingFor = append(waitingFor, flowDeploymentDependenciesWaitingFor(ctx, r.Client, instance)...)
 	if len(waitingFor) > 0 {
 		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
 			return ctrl.Result{}, markFlowDeploymentWaitingForDependencies(ctx, r.Client, instance, waitingFor)
@@ -1014,6 +1030,9 @@ func (r *NiFiFlowDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&nifiv1alpha1.NiFiFlowDeployment{}).
 		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCluster)).
+		Watches(&nifiv1alpha1.NiFiFlowBundle{}, handler.EnqueueRequestsFromMapFunc(r.requestsForFlowBundle)).
+		Watches(&nifiv1alpha1.NiFiParameterContext{}, handler.EnqueueRequestsFromMapFunc(r.requestsForParameterContext)).
+		Watches(&nifiv1alpha1.NiFiProcessGroup{}, handler.EnqueueRequestsFromMapFunc(r.requestsForProcessGroup)).
 		Complete(r)
 }
 
@@ -1165,6 +1184,118 @@ func (r *NiFiFlowDeploymentReconciler) requestsForCluster(ctx context.Context, o
 	return requests
 }
 
+func (r *NiFiProcessGroupReconciler) requestsForParameterContext(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiProcessGroupList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		if item.Spec.ParameterContextRef != nil && localObjectReferenceMatches(item.Namespace, *item.Spec.ParameterContextRef, obj) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
+func (r *NiFiProcessGroupReconciler) requestsForProcessGroup(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiProcessGroupList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		if processGroupReferenceMatches(item.Namespace, item.Spec.ParentProcessGroupRef, obj) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
+func (r *NiFiControllerServiceReconciler) requestsForParameterContext(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiControllerServiceList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		if item.Spec.ParameterContextRef != nil && localObjectReferenceMatches(item.Namespace, *item.Spec.ParameterContextRef, obj) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
+func (r *NiFiControllerServiceReconciler) requestsForProcessGroup(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiControllerServiceList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		if processGroupReferenceMatches(item.Namespace, item.Spec.ParentProcessGroupRef, obj) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
+func (r *NiFiFlowBundleReconciler) requestsForRegistryClient(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiFlowBundleList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		if item.Spec.Source.Registry != nil && localObjectReferenceMatches(item.Namespace, item.Spec.Source.Registry.RegistryClientRef, obj) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
+func (r *NiFiFlowDeploymentReconciler) requestsForFlowBundle(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiFlowDeploymentList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		if item.Spec.Source.BundleRef != nil && localObjectReferenceMatches(item.Namespace, *item.Spec.Source.BundleRef, obj) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
+func (r *NiFiFlowDeploymentReconciler) requestsForParameterContext(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiFlowDeploymentList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		if item.Spec.ParameterContextRef != nil && localObjectReferenceMatches(item.Namespace, *item.Spec.ParameterContextRef, obj) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
+func (r *NiFiFlowDeploymentReconciler) requestsForProcessGroup(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiFlowDeploymentList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		if processGroupReferenceMatches(item.Namespace, item.Spec.Target.ParentProcessGroupRef, obj) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
 func listByClusterRef(ctx context.Context, c client.Client, cluster client.Object, list client.ObjectList) error {
 	indexValue := fmt.Sprintf("%s/%s", cluster.GetNamespace(), cluster.GetName())
 	return c.List(ctx, list, client.MatchingFields{clusterRefIndexField: indexValue})
@@ -1199,27 +1330,145 @@ func userGroupMemberDependenciesWaitingFor(ctx context.Context, c client.Client,
 }
 
 func processGroupDependenciesWaitingFor(ctx context.Context, c client.Client, processGroup *nifiv1alpha1.NiFiProcessGroup) []string {
-	if processGroup.Spec.ParameterContextRef == nil {
+	waitingFor := processGroupReferenceDependencyWaitingFor(ctx, c, processGroup.Namespace, processGroup.Spec.ParentProcessGroupRef, "parentProcessGroupRef")
+	waitingFor = append(waitingFor, parameterContextDependencyWaitingFor(ctx, c, processGroup.Namespace, processGroup.Spec.ParameterContextRef, "parameterContextRef")...)
+	return waitingFor
+}
+
+func controllerServiceDependenciesWaitingFor(ctx context.Context, c client.Client, controllerService *nifiv1alpha1.NiFiControllerService) []string {
+	waitingFor := processGroupReferenceDependencyWaitingFor(ctx, c, controllerService.Namespace, controllerService.Spec.ParentProcessGroupRef, "parentProcessGroupRef")
+	waitingFor = append(waitingFor, parameterContextDependencyWaitingFor(ctx, c, controllerService.Namespace, controllerService.Spec.ParameterContextRef, "parameterContextRef")...)
+	return waitingFor
+}
+
+func flowBundleDependenciesWaitingFor(ctx context.Context, c client.Client, flowBundle *nifiv1alpha1.NiFiFlowBundle) []string {
+	if flowBundle.Spec.Source.Registry == nil {
 		return nil
 	}
-	ref := *processGroup.Spec.ParameterContextRef
+	return registryClientDependencyWaitingFor(ctx, c, flowBundle.Namespace, flowBundle.Spec.Source.Registry.RegistryClientRef, "source.registry.registryClientRef")
+}
+
+func flowDeploymentDependenciesWaitingFor(ctx context.Context, c client.Client, flowDeployment *nifiv1alpha1.NiFiFlowDeployment) []string {
+	waitingFor := flowBundleDependencyWaitingFor(ctx, c, flowDeployment.Namespace, flowDeployment.Spec.Source.BundleRef, "source.bundleRef")
+	waitingFor = append(waitingFor, flowBundleSourceDependenciesWaitingFor(ctx, c, flowDeployment.Namespace, flowDeployment.Spec.Source.Inline, "source.inline")...)
+	waitingFor = append(waitingFor, processGroupReferenceDependencyWaitingFor(ctx, c, flowDeployment.Namespace, flowDeployment.Spec.Target.ParentProcessGroupRef, "target.parentProcessGroupRef")...)
+	waitingFor = append(waitingFor, parameterContextDependencyWaitingFor(ctx, c, flowDeployment.Namespace, flowDeployment.Spec.ParameterContextRef, "parameterContextRef")...)
+	return waitingFor
+}
+
+func flowBundleSourceDependenciesWaitingFor(ctx context.Context, c client.Client, namespace string, source *nifiv1alpha1.FlowBundleSource, fieldPath string) []string {
+	if source == nil || source.Registry == nil {
+		return nil
+	}
+	return registryClientDependencyWaitingFor(ctx, c, namespace, source.Registry.RegistryClientRef, fieldPath+".registry.registryClientRef")
+}
+
+func parameterContextDependencyWaitingFor(ctx context.Context, c client.Client, namespace string, ref *nifiv1alpha1.LocalObjectReference, fieldPath string) []string {
+	if ref == nil {
+		return nil
+	}
 	if ref.Name == "" {
-		return []string{"parameterContextRef.name"}
+		return []string{fieldPath + ".name"}
 	}
-	namespace := processGroup.Namespace
-	if ref.Namespace != "" {
-		namespace = ref.Namespace
-	}
+	refNamespace := localObjectRefNamespace(namespace, *ref)
 	parameterContext := &nifiv1alpha1.NiFiParameterContext{}
-	key := types.NamespacedName{Name: ref.Name, Namespace: namespace}
+	key := types.NamespacedName{Name: ref.Name, Namespace: refNamespace}
 	if err := c.Get(ctx, key, parameterContext); err != nil {
 		if apierrors.IsNotFound(err) {
-			return []string{fmt.Sprintf("NiFiParameterContext/%s/%s", namespace, ref.Name)}
+			return []string{fmt.Sprintf("NiFiParameterContext/%s/%s", refNamespace, ref.Name)}
 		}
-		return []string{fmt.Sprintf("NiFiParameterContext/%s/%s:GetError", namespace, ref.Name)}
+		return []string{fmt.Sprintf("NiFiParameterContext/%s/%s:GetError", refNamespace, ref.Name)}
 	}
 	if !parameterContext.Status.Ready {
-		return []string{fmt.Sprintf("NiFiParameterContext/%s/%s:Ready", namespace, ref.Name)}
+		return []string{fmt.Sprintf("NiFiParameterContext/%s/%s:Ready", refNamespace, ref.Name)}
 	}
 	return nil
+}
+
+func flowBundleDependencyWaitingFor(ctx context.Context, c client.Client, namespace string, ref *nifiv1alpha1.LocalObjectReference, fieldPath string) []string {
+	if ref == nil {
+		return nil
+	}
+	if ref.Name == "" {
+		return []string{fieldPath + ".name"}
+	}
+	refNamespace := localObjectRefNamespace(namespace, *ref)
+	flowBundle := &nifiv1alpha1.NiFiFlowBundle{}
+	key := types.NamespacedName{Name: ref.Name, Namespace: refNamespace}
+	if err := c.Get(ctx, key, flowBundle); err != nil {
+		if apierrors.IsNotFound(err) {
+			return []string{fmt.Sprintf("NiFiFlowBundle/%s/%s", refNamespace, ref.Name)}
+		}
+		return []string{fmt.Sprintf("NiFiFlowBundle/%s/%s:GetError", refNamespace, ref.Name)}
+	}
+	if !flowBundle.Status.Ready {
+		return []string{fmt.Sprintf("NiFiFlowBundle/%s/%s:Ready", refNamespace, ref.Name)}
+	}
+	return nil
+}
+
+func registryClientDependencyWaitingFor(ctx context.Context, c client.Client, namespace string, ref nifiv1alpha1.LocalObjectReference, fieldPath string) []string {
+	if ref.Name == "" {
+		return []string{fieldPath + ".name"}
+	}
+	refNamespace := localObjectRefNamespace(namespace, ref)
+	registryClient := &nifiv1alpha1.NiFiRegistryClient{}
+	key := types.NamespacedName{Name: ref.Name, Namespace: refNamespace}
+	if err := c.Get(ctx, key, registryClient); err != nil {
+		if apierrors.IsNotFound(err) {
+			return []string{fmt.Sprintf("NiFiRegistryClient/%s/%s", refNamespace, ref.Name)}
+		}
+		return []string{fmt.Sprintf("NiFiRegistryClient/%s/%s:GetError", refNamespace, ref.Name)}
+	}
+	if !registryClient.Status.Ready {
+		return []string{fmt.Sprintf("NiFiRegistryClient/%s/%s:Ready", refNamespace, ref.Name)}
+	}
+	return nil
+}
+
+func processGroupReferenceDependencyWaitingFor(ctx context.Context, c client.Client, namespace string, ref nifiv1alpha1.ProcessGroupReference, _ string) []string {
+	if ref.Root || ref.Name == "" {
+		return nil
+	}
+	refNamespace := processGroupRefNamespace(namespace, ref)
+	processGroup := &nifiv1alpha1.NiFiProcessGroup{}
+	key := types.NamespacedName{Name: ref.Name, Namespace: refNamespace}
+	if err := c.Get(ctx, key, processGroup); err != nil {
+		if apierrors.IsNotFound(err) {
+			return []string{fmt.Sprintf("NiFiProcessGroup/%s/%s", refNamespace, ref.Name)}
+		}
+		return []string{fmt.Sprintf("NiFiProcessGroup/%s/%s:GetError", refNamespace, ref.Name)}
+	}
+	if !processGroup.Status.Ready {
+		return []string{fmt.Sprintf("NiFiProcessGroup/%s/%s:Ready", refNamespace, ref.Name)}
+	}
+	return nil
+}
+
+func localObjectReferenceMatches(defaultNamespace string, ref nifiv1alpha1.LocalObjectReference, obj client.Object) bool {
+	if ref.Name == "" {
+		return false
+	}
+	return ref.Name == obj.GetName() && localObjectRefNamespace(defaultNamespace, ref) == obj.GetNamespace()
+}
+
+func processGroupReferenceMatches(defaultNamespace string, ref nifiv1alpha1.ProcessGroupReference, obj client.Object) bool {
+	if ref.Root || ref.Name == "" {
+		return false
+	}
+	return ref.Name == obj.GetName() && processGroupRefNamespace(defaultNamespace, ref) == obj.GetNamespace()
+}
+
+func localObjectRefNamespace(defaultNamespace string, ref nifiv1alpha1.LocalObjectReference) string {
+	if ref.Namespace != "" {
+		return ref.Namespace
+	}
+	return defaultNamespace
+}
+
+func processGroupRefNamespace(defaultNamespace string, ref nifiv1alpha1.ProcessGroupReference) string {
+	if ref.Namespace != "" {
+		return ref.Namespace
+	}
+	return defaultNamespace
 }
