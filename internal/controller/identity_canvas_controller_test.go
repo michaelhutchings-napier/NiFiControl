@@ -284,6 +284,8 @@ func newIdentityCanvasTestClient(scheme *runtime.Scheme, objects ...client.Objec
 			&nifiv1alpha1.NiFiOutputPort{},
 			&nifiv1alpha1.NiFiConnection{},
 			&nifiv1alpha1.NiFiReportingTask{},
+			&nifiv1alpha1.NiFiFunnel{},
+			&nifiv1alpha1.NiFiLabel{},
 		).
 		Build()
 }

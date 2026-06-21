@@ -18,7 +18,9 @@ rules:
   - nificontrollerservices
   - nififlowbundles
   - nififlowdeployments
+  - nififunnels
   - nifiinputports
+  - nifilabels
   - nifioutputports
   - nifiparametercontexts
   - nifiprocessgroups
@@ -43,7 +45,9 @@ rules:
   - nificontrollerservices/finalizers
   - nififlowbundles/finalizers
   - nififlowdeployments/finalizers
+  - nififunnels/finalizers
   - nifiinputports/finalizers
+  - nifilabels/finalizers
   - nifioutputports/finalizers
   - nifiparametercontexts/finalizers
   - nifiprocessgroups/finalizers
@@ -62,7 +66,9 @@ rules:
   - nificontrollerservices/status
   - nififlowbundles/status
   - nififlowdeployments/status
+  - nififunnels/status
   - nifiinputports/status
+  - nifilabels/status
   - nifioutputports/status
   - nifiparametercontexts/status
   - nifiprocessgroups/status

@@ -60,6 +60,12 @@ import (
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifireportingtasks,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifireportingtasks/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifireportingtasks/finalizers,verbs=update
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nififunnels,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nififunnels/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nififunnels/finalizers,verbs=update
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifilabels,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifilabels/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifilabels/finalizers,verbs=update
 
 type NiFiClusterReconciler struct {
 	client.Client
@@ -1243,6 +1249,7 @@ func (r *NiFiConnectionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&nifiv1alpha1.NiFiProcessor{}, handler.EnqueueRequestsFromMapFunc(r.requestsForProcessor)).
 		Watches(&nifiv1alpha1.NiFiInputPort{}, handler.EnqueueRequestsFromMapFunc(r.requestsForInputPort)).
 		Watches(&nifiv1alpha1.NiFiOutputPort{}, handler.EnqueueRequestsFromMapFunc(r.requestsForOutputPort)).
+		Watches(&nifiv1alpha1.NiFiFunnel{}, handler.EnqueueRequestsFromMapFunc(r.requestsForFunnel)).
 		Complete(r)
 }
 
@@ -1289,6 +1296,102 @@ func (r *NiFiReportingTaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&nifiv1alpha1.NiFiReportingTask{}).
 		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCluster)).
+		Complete(r)
+}
+
+type NiFiFunnelReconciler struct {
+	client.Client
+	Scheme *runtime.Scheme
+}
+
+func (r *NiFiFunnelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	instance := &nifiv1alpha1.NiFiFunnel{}
+	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	if !instance.DeletionTimestamp.IsZero() {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	waitingFor = append(waitingFor, funnelDependenciesWaitingFor(ctx, r.Client, instance)...)
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markFunnelWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
+		return ctrl.Result{}, markFunnelAccepted(ctx, r.Client, instance)
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *NiFiFunnelReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &nifiv1alpha1.NiFiFunnel{}, clusterRefIndexField, indexFunnelClusterRef); err != nil {
+		return err
+	}
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&nifiv1alpha1.NiFiFunnel{}).
+		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCluster)).
+		Watches(&nifiv1alpha1.NiFiProcessGroup{}, handler.EnqueueRequestsFromMapFunc(r.requestsForProcessGroup)).
+		Complete(r)
+}
+
+type NiFiLabelReconciler struct {
+	client.Client
+	Scheme *runtime.Scheme
+}
+
+func (r *NiFiLabelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	instance := &nifiv1alpha1.NiFiLabel{}
+	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	if !instance.DeletionTimestamp.IsZero() {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	waitingFor = append(waitingFor, labelDependenciesWaitingFor(ctx, r.Client, instance)...)
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markLabelWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
+		return ctrl.Result{}, markLabelAccepted(ctx, r.Client, instance)
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *NiFiLabelReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &nifiv1alpha1.NiFiLabel{}, clusterRefIndexField, indexLabelClusterRef); err != nil {
+		return err
+	}
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&nifiv1alpha1.NiFiLabel{}).
+		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCluster)).
+		Watches(&nifiv1alpha1.NiFiProcessGroup{}, handler.EnqueueRequestsFromMapFunc(r.requestsForProcessGroup)).
 		Complete(r)
 }
 
@@ -1386,6 +1489,22 @@ func indexReportingTaskClusterRef(obj client.Object) []string {
 		return nil
 	}
 	return indexClusterRef(reportingTask.Namespace, reportingTask.Spec.ClusterRef)
+}
+
+func indexFunnelClusterRef(obj client.Object) []string {
+	funnel, ok := obj.(*nifiv1alpha1.NiFiFunnel)
+	if !ok {
+		return nil
+	}
+	return indexClusterRef(funnel.Namespace, funnel.Spec.ClusterRef)
+}
+
+func indexLabelClusterRef(obj client.Object) []string {
+	label, ok := obj.(*nifiv1alpha1.NiFiLabel)
+	if !ok {
+		return nil
+	}
+	return indexClusterRef(label.Namespace, label.Spec.ClusterRef)
 }
 
 func indexClusterRef(namespace string, ref nifiv1alpha1.ClusterReference) []string {
@@ -1530,6 +1649,30 @@ func (r *NiFiConnectionReconciler) requestsForCluster(ctx context.Context, obj c
 
 func (r *NiFiReportingTaskReconciler) requestsForCluster(ctx context.Context, obj client.Object) []reconcile.Request {
 	list := &nifiv1alpha1.NiFiReportingTaskList{}
+	if err := listByClusterRef(ctx, r.Client, obj, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+	}
+	return requests
+}
+
+func (r *NiFiFunnelReconciler) requestsForCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiFunnelList{}
+	if err := listByClusterRef(ctx, r.Client, obj, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+	}
+	return requests
+}
+
+func (r *NiFiLabelReconciler) requestsForCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiLabelList{}
 	if err := listByClusterRef(ctx, r.Client, obj, list); err != nil {
 		return nil
 	}
@@ -1720,6 +1863,10 @@ func (r *NiFiConnectionReconciler) requestsForOutputPort(ctx context.Context, ob
 	return r.requestsForConnectable(ctx, obj, nifiv1alpha1.ConnectableTypeOutputPort)
 }
 
+func (r *NiFiConnectionReconciler) requestsForFunnel(ctx context.Context, obj client.Object) []reconcile.Request {
+	return r.requestsForConnectable(ctx, obj, nifiv1alpha1.ConnectableTypeFunnel)
+}
+
 func (r *NiFiConnectionReconciler) requestsForConnectable(ctx context.Context, obj client.Object, connectableType nifiv1alpha1.ConnectableType) []reconcile.Request {
 	list := &nifiv1alpha1.NiFiConnectionList{}
 	if err := r.List(ctx, list); err != nil {
@@ -1729,6 +1876,34 @@ func (r *NiFiConnectionReconciler) requestsForConnectable(ctx context.Context, o
 	for _, item := range list.Items {
 		if connectableReferenceMatches(item.Namespace, item.Spec.Source, connectableType, obj) ||
 			connectableReferenceMatches(item.Namespace, item.Spec.Destination, connectableType, obj) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
+func (r *NiFiFunnelReconciler) requestsForProcessGroup(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiFunnelList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		if processGroupReferenceMatches(item.Namespace, item.Spec.ParentProcessGroupRef, obj) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
+}
+
+func (r *NiFiLabelReconciler) requestsForProcessGroup(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiLabelList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		if processGroupReferenceMatches(item.Namespace, item.Spec.ParentProcessGroupRef, obj) {
 			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
 		}
 	}
@@ -1812,6 +1987,14 @@ func connectionDependenciesWaitingFor(ctx context.Context, c client.Client, conn
 	waitingFor = append(waitingFor, connectableReferenceDependencyWaitingFor(ctx, c, connection.Namespace, connection.Spec.Source, "source")...)
 	waitingFor = append(waitingFor, connectableReferenceDependencyWaitingFor(ctx, c, connection.Namespace, connection.Spec.Destination, "destination")...)
 	return waitingFor
+}
+
+func funnelDependenciesWaitingFor(ctx context.Context, c client.Client, funnel *nifiv1alpha1.NiFiFunnel) []string {
+	return processGroupReferenceDependencyWaitingFor(ctx, c, funnel.Namespace, funnel.Spec.ParentProcessGroupRef, "parentProcessGroupRef")
+}
+
+func labelDependenciesWaitingFor(ctx context.Context, c client.Client, label *nifiv1alpha1.NiFiLabel) []string {
+	return processGroupReferenceDependencyWaitingFor(ctx, c, label.Namespace, label.Spec.ParentProcessGroupRef, "parentProcessGroupRef")
 }
 
 func flowBundleSourceDependenciesWaitingFor(ctx context.Context, c client.Client, namespace string, source *nifiv1alpha1.FlowBundleSource, fieldPath string) []string {
@@ -1949,8 +2132,16 @@ func connectableReferenceDependencyWaitingFor(ctx context.Context, c client.Clie
 			return []string{fmt.Sprintf("NiFiOutputPort/%s/%s:Ready", refNamespace, ref.Name)}
 		}
 	case nifiv1alpha1.ConnectableTypeFunnel:
-		if ref.NiFiID == "" {
-			return []string{fieldPath + ".nifiId"}
+		funnel := &nifiv1alpha1.NiFiFunnel{}
+		key := types.NamespacedName{Name: ref.Name, Namespace: refNamespace}
+		if err := c.Get(ctx, key, funnel); err != nil {
+			if apierrors.IsNotFound(err) {
+				return []string{fmt.Sprintf("NiFiFunnel/%s/%s", refNamespace, ref.Name)}
+			}
+			return []string{fmt.Sprintf("NiFiFunnel/%s/%s:GetError", refNamespace, ref.Name)}
+		}
+		if !funnel.Status.Ready {
+			return []string{fmt.Sprintf("NiFiFunnel/%s/%s:Ready", refNamespace, ref.Name)}
 		}
 	default:
 		return []string{fieldPath + ".type"}

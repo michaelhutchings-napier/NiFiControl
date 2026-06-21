@@ -13,3 +13,5 @@ resources:
   - nifi_v1alpha1_nifioutputport.yaml
   - nifi_v1alpha1_nificonnection.yaml
   - nifi_v1alpha1_nifireportingtask.yaml
+  - nifi_v1alpha1_nififunnel.yaml
+  - nifi_v1alpha1_nifilabel.yaml

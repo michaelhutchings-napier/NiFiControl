@@ -227,6 +227,26 @@ func markReportingTaskWaitingForDependencies(ctx context.Context, c client.Clien
 	return c.Status().Update(ctx, obj)
 }
 
+func markFunnelAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFunnel) error {
+	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+	return c.Status().Update(ctx, obj)
+}
+
+func markFunnelWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFunnel, waitingFor []string) error {
+	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
+	return c.Status().Update(ctx, obj)
+}
+
+func markLabelAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiLabel) error {
+	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+	return c.Status().Update(ctx, obj)
+}
+
+func markLabelWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiLabel, waitingFor []string) error {
+	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
+	return c.Status().Update(ctx, obj)
+}
+
 func clusterDependencyWaitingFor(ctx context.Context, c client.Client, namespace string, ref nifiv1alpha1.ClusterReference) ([]string, error) {
 	cluster, waitingFor, err := clusterDependency(ctx, c, namespace, ref)
 	if err != nil || cluster == nil {

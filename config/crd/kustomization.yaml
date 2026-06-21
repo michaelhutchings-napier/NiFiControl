@@ -4,7 +4,9 @@ resources:
   - bases/nifi.controlnifi.io_nificontrollerservices.yaml
   - bases/nifi.controlnifi.io_nififlowbundles.yaml
   - bases/nifi.controlnifi.io_nififlowdeployments.yaml
+  - bases/nifi.controlnifi.io_nififunnels.yaml
   - bases/nifi.controlnifi.io_nifiinputports.yaml
+  - bases/nifi.controlnifi.io_nifilabels.yaml
   - bases/nifi.controlnifi.io_nifioutputports.yaml
   - bases/nifi.controlnifi.io_nifiparametercontexts.yaml
   - bases/nifi.controlnifi.io_nifiprocessgroups.yaml

@@ -1,0 +1,12 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiFunnel
+metadata:
+  name: payments-merge
+spec:
+  clusterRef:
+    name: production
+  parentProcessGroupRef:
+    name: payments
+  position:
+    x: 360
+    y: 200

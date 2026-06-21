@@ -1,0 +1,18 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiLabel
+metadata:
+  name: payments-note
+spec:
+  clusterRef:
+    name: production
+  parentProcessGroupRef:
+    name: payments
+  text: Payments ingress, enrichment, and publishing flow.
+  position:
+    x: 0
+    y: 0
+  width: 420
+  height: 80
+  style:
+    font-size: 14px
+    background-color: '#f8fafc'
