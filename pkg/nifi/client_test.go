@@ -277,3 +277,202 @@ func TestHTTPRegistryClientClientDeleteRegistryClient(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestHTTPProcessGroupClientCreateProcessGroup(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/process-groups/root/process-groups" {
+			t.Fatalf("path = %s, want /nifi-api/process-groups/root/process-groups", r.URL.Path)
+		}
+		var got ProcessGroupEntity
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Component.Name != "payments" {
+			t.Fatalf("name = %q, want payments", got.Component.Name)
+		}
+		_ = json.NewEncoder(w).Encode(ProcessGroupEntity{
+			ID:       "pg-1",
+			Revision: Revision{Version: 0},
+			Component: ProcessGroupComponent{
+				ID:   "pg-1",
+				Name: got.Component.Name,
+			},
+		})
+	}))
+	defer server.Close()
+
+	created, err := (HTTPProcessGroupClient{}).CreateProcessGroup(t.Context(), server.URL, "root", ProcessGroupEntity{
+		Component: ProcessGroupComponent{Name: "payments"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID != "pg-1" {
+		t.Fatalf("created id = %q, want pg-1", created.ID)
+	}
+}
+
+func TestHTTPProcessGroupClientGetProcessGroup(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/process-groups/pg-1" {
+			t.Fatalf("path = %s, want /nifi-api/process-groups/pg-1", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(ProcessGroupEntity{ID: "pg-1"})
+	}))
+	defer server.Close()
+
+	got, err := (HTTPProcessGroupClient{}).GetProcessGroup(t.Context(), server.URL, "pg-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "pg-1" {
+		t.Fatalf("id = %q, want pg-1", got.ID)
+	}
+}
+
+func TestHTTPProcessGroupClientUpdateProcessGroup(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Fatalf("method = %s, want PUT", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/process-groups/pg-1" {
+			t.Fatalf("path = %s, want /nifi-api/process-groups/pg-1", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(ProcessGroupEntity{ID: "pg-1", Revision: Revision{Version: 2}})
+	}))
+	defer server.Close()
+
+	got, err := (HTTPProcessGroupClient{}).UpdateProcessGroup(t.Context(), server.URL, ProcessGroupEntity{ID: "pg-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Revision.Version != 2 {
+		t.Fatalf("revision = %d, want 2", got.Revision.Version)
+	}
+}
+
+func TestHTTPProcessGroupClientDeleteProcessGroup(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Fatalf("method = %s, want DELETE", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/process-groups/pg-1" {
+			t.Fatalf("path = %s, want /nifi-api/process-groups/pg-1", r.URL.Path)
+		}
+		if r.URL.Query().Get("version") != "12" {
+			t.Fatalf("version = %q, want 12", r.URL.Query().Get("version"))
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	if err := (HTTPProcessGroupClient{}).DeleteProcessGroup(t.Context(), server.URL, "pg-1", 12); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHTTPProcessorClientCreateProcessor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/process-groups/pg-1/processors" {
+			t.Fatalf("path = %s, want /nifi-api/process-groups/pg-1/processors", r.URL.Path)
+		}
+		var got ProcessorEntity
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Component.Type != "org.apache.nifi.processors.standard.GenerateFlowFile" {
+			t.Fatalf("type = %q, want GenerateFlowFile", got.Component.Type)
+		}
+		_ = json.NewEncoder(w).Encode(ProcessorEntity{
+			ID:       "processor-1",
+			Revision: Revision{Version: 0},
+			Component: ProcessorComponent{
+				ID:   "processor-1",
+				Name: got.Component.Name,
+				Type: got.Component.Type,
+			},
+		})
+	}))
+	defer server.Close()
+
+	created, err := (HTTPProcessorClient{}).CreateProcessor(t.Context(), server.URL, "pg-1", ProcessorEntity{
+		Component: ProcessorComponent{Name: "generate", Type: "org.apache.nifi.processors.standard.GenerateFlowFile"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID != "processor-1" {
+		t.Fatalf("created id = %q, want processor-1", created.ID)
+	}
+}
+
+func TestHTTPProcessorClientGetProcessor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/processors/processor-1" {
+			t.Fatalf("path = %s, want /nifi-api/processors/processor-1", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(ProcessorEntity{ID: "processor-1"})
+	}))
+	defer server.Close()
+
+	got, err := (HTTPProcessorClient{}).GetProcessor(t.Context(), server.URL, "processor-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "processor-1" {
+		t.Fatalf("id = %q, want processor-1", got.ID)
+	}
+}
+
+func TestHTTPProcessorClientUpdateProcessor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Fatalf("method = %s, want PUT", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/processors/processor-1" {
+			t.Fatalf("path = %s, want /nifi-api/processors/processor-1", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(ProcessorEntity{ID: "processor-1", Revision: Revision{Version: 2}})
+	}))
+	defer server.Close()
+
+	got, err := (HTTPProcessorClient{}).UpdateProcessor(t.Context(), server.URL, ProcessorEntity{ID: "processor-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Revision.Version != 2 {
+		t.Fatalf("revision = %d, want 2", got.Revision.Version)
+	}
+}
+
+func TestHTTPProcessorClientDeleteProcessor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Fatalf("method = %s, want DELETE", r.Method)
+		}
+		if r.URL.Path != "/nifi-api/processors/processor-1" {
+			t.Fatalf("path = %s, want /nifi-api/processors/processor-1", r.URL.Path)
+		}
+		if r.URL.Query().Get("version") != "12" {
+			t.Fatalf("version = %q, want 12", r.URL.Query().Get("version"))
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	if err := (HTTPProcessorClient{}).DeleteProcessor(t.Context(), server.URL, "processor-1", 12); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -38,6 +38,34 @@ type RegistryClientClient interface {
 	DeleteRegistryClient(ctx context.Context, baseURI string, id string, revisionVersion int64) error
 }
 
+type ProcessGroupClient interface {
+	GetProcessGroup(ctx context.Context, baseURI string, id string) (*ProcessGroupEntity, error)
+	CreateProcessGroup(ctx context.Context, baseURI string, parentID string, entity ProcessGroupEntity) (*ProcessGroupEntity, error)
+	UpdateProcessGroup(ctx context.Context, baseURI string, entity ProcessGroupEntity) (*ProcessGroupEntity, error)
+	DeleteProcessGroup(ctx context.Context, baseURI string, id string, revisionVersion int64) error
+}
+
+type ProcessorClient interface {
+	GetProcessor(ctx context.Context, baseURI string, id string) (*ProcessorEntity, error)
+	CreateProcessor(ctx context.Context, baseURI string, parentID string, entity ProcessorEntity) (*ProcessorEntity, error)
+	UpdateProcessor(ctx context.Context, baseURI string, entity ProcessorEntity) (*ProcessorEntity, error)
+	DeleteProcessor(ctx context.Context, baseURI string, id string, revisionVersion int64) error
+}
+
+type FunnelClient interface {
+	GetFunnel(ctx context.Context, baseURI string, id string) (*FunnelEntity, error)
+	CreateFunnel(ctx context.Context, baseURI string, parentID string, entity FunnelEntity) (*FunnelEntity, error)
+	UpdateFunnel(ctx context.Context, baseURI string, entity FunnelEntity) (*FunnelEntity, error)
+	DeleteFunnel(ctx context.Context, baseURI string, id string, revisionVersion int64) error
+}
+
+type LabelClient interface {
+	GetLabel(ctx context.Context, baseURI string, id string) (*LabelEntity, error)
+	CreateLabel(ctx context.Context, baseURI string, parentID string, entity LabelEntity) (*LabelEntity, error)
+	UpdateLabel(ctx context.Context, baseURI string, entity LabelEntity) (*LabelEntity, error)
+	DeleteLabel(ctx context.Context, baseURI string, id string, revisionVersion int64) error
+}
+
 type HTTPParameterContextClient struct {
 	Client *http.Client
 }
@@ -46,8 +74,39 @@ type HTTPRegistryClientClient struct {
 	Client *http.Client
 }
 
+type HTTPProcessGroupClient struct {
+	Client *http.Client
+}
+
+type HTTPProcessorClient struct {
+	Client *http.Client
+}
+
+type HTTPFunnelClient struct {
+	Client *http.Client
+}
+
+type HTTPLabelClient struct {
+	Client *http.Client
+}
+
 type Revision struct {
 	Version int64 `json:"version,omitempty"`
+}
+
+type Position struct {
+	X int64 `json:"x,omitempty"`
+	Y int64 `json:"y,omitempty"`
+}
+
+type ComponentReference struct {
+	ID string `json:"id,omitempty"`
+}
+
+type Bundle struct {
+	Group    string `json:"group,omitempty"`
+	Artifact string `json:"artifact,omitempty"`
+	Version  string `json:"version,omitempty"`
 }
 
 type ParameterContextEntity struct {
@@ -105,6 +164,75 @@ type RegistryClientComponent struct {
 	Type        string            `json:"type,omitempty"`
 	Description string            `json:"description,omitempty"`
 	Properties  map[string]string `json:"properties,omitempty"`
+}
+
+type ProcessGroupEntity struct {
+	ID        string                `json:"id,omitempty"`
+	Revision  Revision              `json:"revision,omitempty"`
+	Component ProcessGroupComponent `json:"component,omitempty"`
+}
+
+type ProcessGroupComponent struct {
+	ID               string              `json:"id,omitempty"`
+	ParentGroupID    string              `json:"parentGroupId,omitempty"`
+	Name             string              `json:"name,omitempty"`
+	Comments         string              `json:"comments,omitempty"`
+	Position         *Position           `json:"position,omitempty"`
+	ParameterContext *ComponentReference `json:"parameterContext,omitempty"`
+}
+
+type ProcessorEntity struct {
+	ID        string             `json:"id,omitempty"`
+	Revision  Revision           `json:"revision,omitempty"`
+	Component ProcessorComponent `json:"component,omitempty"`
+}
+
+type ProcessorComponent struct {
+	ID               string          `json:"id,omitempty"`
+	ParentGroupID    string          `json:"parentGroupId,omitempty"`
+	Name             string          `json:"name,omitempty"`
+	Type             string          `json:"type,omitempty"`
+	Bundle           *Bundle         `json:"bundle,omitempty"`
+	Position         *Position       `json:"position,omitempty"`
+	State            string          `json:"state,omitempty"`
+	ValidationStatus string          `json:"validationStatus,omitempty"`
+	Config           ProcessorConfig `json:"config,omitempty"`
+}
+
+type ProcessorConfig struct {
+	Properties                       map[string]string `json:"properties,omitempty"`
+	SchedulingStrategy               string            `json:"schedulingStrategy,omitempty"`
+	SchedulingPeriod                 string            `json:"schedulingPeriod,omitempty"`
+	ConcurrentlySchedulableTaskCount int32             `json:"concurrentlySchedulableTaskCount,omitempty"`
+	AutoTerminatedRelationships      []string          `json:"autoTerminatedRelationships,omitempty"`
+}
+
+type FunnelEntity struct {
+	ID        string          `json:"id,omitempty"`
+	Revision  Revision        `json:"revision,omitempty"`
+	Component FunnelComponent `json:"component,omitempty"`
+}
+
+type FunnelComponent struct {
+	ID            string    `json:"id,omitempty"`
+	ParentGroupID string    `json:"parentGroupId,omitempty"`
+	Position      *Position `json:"position,omitempty"`
+}
+
+type LabelEntity struct {
+	ID        string         `json:"id,omitempty"`
+	Revision  Revision       `json:"revision,omitempty"`
+	Component LabelComponent `json:"component,omitempty"`
+}
+
+type LabelComponent struct {
+	ID            string            `json:"id,omitempty"`
+	ParentGroupID string            `json:"parentGroupId,omitempty"`
+	Label         string            `json:"label,omitempty"`
+	Position      *Position         `json:"position,omitempty"`
+	Width         int32             `json:"width,omitempty"`
+	Height        int32             `json:"height,omitempty"`
+	Style         map[string]string `json:"style,omitempty"`
 }
 
 func (c HTTPReachabilityChecker) CheckReachable(ctx context.Context, baseURI string, timeout time.Duration) error {
@@ -271,11 +399,239 @@ func (c HTTPRegistryClientClient) DeleteRegistryClient(ctx context.Context, base
 	return c.doJSON(ctx, http.MethodDelete, endpoint, nil, nil)
 }
 
+func (c HTTPProcessGroupClient) GetProcessGroup(ctx context.Context, baseURI string, id string) (*ProcessGroupEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/%s", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response ProcessGroupEntity
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPProcessGroupClient) CreateProcessGroup(ctx context.Context, baseURI string, parentID string, entity ProcessGroupEntity) (*ProcessGroupEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/%s/process-groups", url.PathEscape(parentID)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response ProcessGroupEntity
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPProcessGroupClient) UpdateProcessGroup(ctx context.Context, baseURI string, entity ProcessGroupEntity) (*ProcessGroupEntity, error) {
+	id := entity.ID
+	if id == "" {
+		id = entity.Component.ID
+	}
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/%s", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response ProcessGroupEntity
+	if err := c.doJSON(ctx, http.MethodPut, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPProcessGroupClient) DeleteProcessGroup(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/%s", url.PathEscape(id)))
+	if err != nil {
+		return err
+	}
+	endpoint += fmt.Sprintf("?version=%d", revisionVersion)
+
+	return c.doJSON(ctx, http.MethodDelete, endpoint, nil, nil)
+}
+
+func (c HTTPProcessorClient) GetProcessor(ctx context.Context, baseURI string, id string) (*ProcessorEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/processors/%s", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response ProcessorEntity
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPProcessorClient) CreateProcessor(ctx context.Context, baseURI string, parentID string, entity ProcessorEntity) (*ProcessorEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/%s/processors", url.PathEscape(parentID)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response ProcessorEntity
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPProcessorClient) UpdateProcessor(ctx context.Context, baseURI string, entity ProcessorEntity) (*ProcessorEntity, error) {
+	id := entity.ID
+	if id == "" {
+		id = entity.Component.ID
+	}
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/processors/%s", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response ProcessorEntity
+	if err := c.doJSON(ctx, http.MethodPut, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPProcessorClient) DeleteProcessor(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/processors/%s", url.PathEscape(id)))
+	if err != nil {
+		return err
+	}
+	endpoint += fmt.Sprintf("?version=%d", revisionVersion)
+
+	return c.doJSON(ctx, http.MethodDelete, endpoint, nil, nil)
+}
+
+func (c HTTPFunnelClient) GetFunnel(ctx context.Context, baseURI string, id string) (*FunnelEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/funnels/%s", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response FunnelEntity
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPFunnelClient) CreateFunnel(ctx context.Context, baseURI string, parentID string, entity FunnelEntity) (*FunnelEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/%s/funnels", url.PathEscape(parentID)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response FunnelEntity
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPFunnelClient) UpdateFunnel(ctx context.Context, baseURI string, entity FunnelEntity) (*FunnelEntity, error) {
+	id := entity.ID
+	if id == "" {
+		id = entity.Component.ID
+	}
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/funnels/%s", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response FunnelEntity
+	if err := c.doJSON(ctx, http.MethodPut, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPFunnelClient) DeleteFunnel(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/funnels/%s", url.PathEscape(id)))
+	if err != nil {
+		return err
+	}
+	endpoint += fmt.Sprintf("?version=%d", revisionVersion)
+
+	return c.doJSON(ctx, http.MethodDelete, endpoint, nil, nil)
+}
+
+func (c HTTPLabelClient) GetLabel(ctx context.Context, baseURI string, id string) (*LabelEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/labels/%s", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response LabelEntity
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPLabelClient) CreateLabel(ctx context.Context, baseURI string, parentID string, entity LabelEntity) (*LabelEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/%s/labels", url.PathEscape(parentID)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response LabelEntity
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPLabelClient) UpdateLabel(ctx context.Context, baseURI string, entity LabelEntity) (*LabelEntity, error) {
+	id := entity.ID
+	if id == "" {
+		id = entity.Component.ID
+	}
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/labels/%s", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+
+	var response LabelEntity
+	if err := c.doJSON(ctx, http.MethodPut, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPLabelClient) DeleteLabel(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/labels/%s", url.PathEscape(id)))
+	if err != nil {
+		return err
+	}
+	endpoint += fmt.Sprintf("?version=%d", revisionVersion)
+
+	return c.doJSON(ctx, http.MethodDelete, endpoint, nil, nil)
+}
+
 func (c HTTPParameterContextClient) doJSON(ctx context.Context, method, endpoint string, body any, out any) error {
 	return doJSON(ctx, c.Client, method, endpoint, body, out)
 }
 
 func (c HTTPRegistryClientClient) doJSON(ctx context.Context, method, endpoint string, body any, out any) error {
+	return doJSON(ctx, c.Client, method, endpoint, body, out)
+}
+
+func (c HTTPProcessGroupClient) doJSON(ctx context.Context, method, endpoint string, body any, out any) error {
+	return doJSON(ctx, c.Client, method, endpoint, body, out)
+}
+
+func (c HTTPProcessorClient) doJSON(ctx context.Context, method, endpoint string, body any, out any) error {
+	return doJSON(ctx, c.Client, method, endpoint, body, out)
+}
+
+func (c HTTPFunnelClient) doJSON(ctx context.Context, method, endpoint string, body any, out any) error {
+	return doJSON(ctx, c.Client, method, endpoint, body, out)
+}
+
+func (c HTTPLabelClient) doJSON(ctx context.Context, method, endpoint string, body any, out any) error {
 	return doJSON(ctx, c.Client, method, endpoint, body, out)
 }
 

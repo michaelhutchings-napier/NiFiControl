@@ -54,7 +54,7 @@ func main() {
 	if err := (&controller.NiFiUserGroupReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
-	if err := (&controller.NiFiProcessGroupReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.NiFiProcessGroupReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), ProcessGroupClient: nifi.HTTPProcessGroupClient{}}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
 	if err := (&controller.NiFiControllerServiceReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr); err != nil {
@@ -66,7 +66,7 @@ func main() {
 	if err := (&controller.NiFiFlowDeploymentReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
-	if err := (&controller.NiFiProcessorReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.NiFiProcessorReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), ProcessorClient: nifi.HTTPProcessorClient{}}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
 	if err := (&controller.NiFiInputPortReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr); err != nil {
@@ -81,10 +81,10 @@ func main() {
 	if err := (&controller.NiFiReportingTaskReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
-	if err := (&controller.NiFiFunnelReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.NiFiFunnelReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), FunnelClient: nifi.HTTPFunnelClient{}}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
-	if err := (&controller.NiFiLabelReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.NiFiLabelReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), LabelClient: nifi.HTTPLabelClient{}}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
 

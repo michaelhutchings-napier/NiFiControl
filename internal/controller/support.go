@@ -147,6 +147,23 @@ func markProcessGroupAccepted(ctx context.Context, c client.Client, obj *nifiv1a
 	return c.Status().Update(ctx, obj)
 }
 
+func markProcessGroupReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiProcessGroup, nifiID string, revisionVersion int64, parentProcessGroupID string) error {
+	obj.Status.CommonStatus.MarkReady(obj.Generation, "ProcessGroupReady", "The NiFi process group is reconciled.")
+	obj.Status.NiFiID = nifiID
+	obj.Status.Revision.Version = revisionVersion
+	obj.Status.ParentProcessGroupID = parentProcessGroupID
+	obj.Status.Sync.LastError = ""
+	return c.Status().Update(ctx, obj)
+}
+
+func markProcessGroupNotReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiProcessGroup, reason, message string) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, reason, message)
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.Sync.LastError = message
+	return c.Status().Update(ctx, obj)
+}
+
 func markProcessGroupWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiProcessGroup, waitingFor []string) error {
 	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
 	return c.Status().Update(ctx, obj)
@@ -179,6 +196,24 @@ func markFlowDeploymentWaitingForDependencies(ctx context.Context, c client.Clie
 
 func markProcessorAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiProcessor) error {
 	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+	return c.Status().Update(ctx, obj)
+}
+
+func markProcessorReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiProcessor, nifiID string, revisionVersion int64, parentProcessGroupID string, validationStatus string) error {
+	obj.Status.CommonStatus.MarkReady(obj.Generation, "ProcessorReady", "The NiFi processor is reconciled.")
+	obj.Status.NiFiID = nifiID
+	obj.Status.Revision.Version = revisionVersion
+	obj.Status.ParentProcessGroupID = parentProcessGroupID
+	obj.Status.ValidationStatus = validationStatus
+	obj.Status.Sync.LastError = ""
+	return c.Status().Update(ctx, obj)
+}
+
+func markProcessorNotReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiProcessor, reason, message string) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, reason, message)
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.Sync.LastError = message
 	return c.Status().Update(ctx, obj)
 }
 
@@ -232,6 +267,23 @@ func markFunnelAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.
 	return c.Status().Update(ctx, obj)
 }
 
+func markFunnelReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFunnel, nifiID string, revisionVersion int64, parentProcessGroupID string) error {
+	obj.Status.CommonStatus.MarkReady(obj.Generation, "FunnelReady", "The NiFi funnel is reconciled.")
+	obj.Status.NiFiID = nifiID
+	obj.Status.Revision.Version = revisionVersion
+	obj.Status.ParentProcessGroupID = parentProcessGroupID
+	obj.Status.Sync.LastError = ""
+	return c.Status().Update(ctx, obj)
+}
+
+func markFunnelNotReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFunnel, reason, message string) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, reason, message)
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.Sync.LastError = message
+	return c.Status().Update(ctx, obj)
+}
+
 func markFunnelWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFunnel, waitingFor []string) error {
 	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
 	return c.Status().Update(ctx, obj)
@@ -239,6 +291,23 @@ func markFunnelWaitingForDependencies(ctx context.Context, c client.Client, obj 
 
 func markLabelAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiLabel) error {
 	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+	return c.Status().Update(ctx, obj)
+}
+
+func markLabelReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiLabel, nifiID string, revisionVersion int64, parentProcessGroupID string) error {
+	obj.Status.CommonStatus.MarkReady(obj.Generation, "LabelReady", "The NiFi label is reconciled.")
+	obj.Status.NiFiID = nifiID
+	obj.Status.Revision.Version = revisionVersion
+	obj.Status.ParentProcessGroupID = parentProcessGroupID
+	obj.Status.Sync.LastError = ""
+	return c.Status().Update(ctx, obj)
+}
+
+func markLabelNotReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiLabel, reason, message string) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, reason, message)
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.Sync.LastError = message
 	return c.Status().Update(ctx, obj)
 }
 
