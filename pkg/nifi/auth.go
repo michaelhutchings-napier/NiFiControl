@@ -24,6 +24,11 @@ type HTTPClientConfig struct {
 	BearerToken        string
 	Username           string
 	Password           string
+	// ClientCertData and ClientKeyData are PEM-encoded client certificate material the
+	// operator presents for mutual TLS. They are mutually exclusive with the bearer and
+	// username/password modes.
+	ClientCertData []byte
+	ClientKeyData  []byte
 }
 
 var registeredHTTPClients sync.Map
@@ -38,6 +43,16 @@ func RegisterHTTPClient(baseURI string, client *http.Client) error {
 }
 
 func NewHTTPClient(config HTTPClientConfig) (*http.Client, error) {
+	usingClientCert := len(config.ClientCertData) > 0 || len(config.ClientKeyData) > 0
+	usingBearer := config.BearerToken != ""
+	usingBasic := config.Username != "" || config.Password != ""
+	if usingClientCert && (usingBearer || usingBasic) {
+		return nil, fmt.Errorf("mTLS client certificate authentication is mutually exclusive with bearer token and username/password")
+	}
+	if usingBearer && usingBasic {
+		return nil, fmt.Errorf("bearer token and username/password authentication are mutually exclusive")
+	}
+
 	rootCAs, err := x509.SystemCertPool()
 	if err != nil || rootCAs == nil {
 		rootCAs = x509.NewCertPool()
@@ -45,14 +60,22 @@ func NewHTTPClient(config HTTPClientConfig) (*http.Client, error) {
 	if len(config.CAData) > 0 && !rootCAs.AppendCertsFromPEM(config.CAData) {
 		return nil, fmt.Errorf("configured CA data does not contain a PEM certificate")
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{
+	tlsConfig := &tls.Config{
 		RootCAs:            rootCAs,
 		ServerName:         config.ServerName,
 		InsecureSkipVerify: config.InsecureSkipVerify, // #nosec G402 -- explicitly configured by the cluster owner.
 	}
+	if usingClientCert {
+		certificate, err := tls.X509KeyPair(config.ClientCertData, config.ClientKeyData)
+		if err != nil {
+			return nil, fmt.Errorf("load client certificate key pair: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{certificate}
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsConfig
 	var roundTripper http.RoundTripper = transport
-	if config.BearerToken != "" || config.Username != "" || config.Password != "" {
+	if usingBearer || usingBasic {
 		roundTripper = &bearerTokenRoundTripper{
 			baseURI:     config.BaseURI,
 			transport:   transport,

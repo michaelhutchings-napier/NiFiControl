@@ -63,6 +63,50 @@ prop_replace 'nifi.cluster.flow.election.max.wait.time' "${NIFI_ELECTION_MAX_WAI
 prop_replace 'nifi.cluster.flow.election.max.candidates' "${NIFI_ELECTION_MAX_CANDIDATES:-}"
 exec "${NIFI_HOME}/bin/nifi.sh" run`
 
+// managedNiFiStartCommandTLS configures NiFi 2.10 for HTTPS and certificate
+// authentication. The PKCS12 keystore/truststore are mounted from a cert-manager (or
+// externally supplied) Secret; the password is injected from a Secret, never a literal.
+// The operator-rendered authorizers.xml is copied over the seeded conf file so the
+// initial admin identity matches the operator client certificate. login-identity-
+// providers.xml is intentionally left untouched: pure certificate authentication needs
+// only the managed authorizer.
+const managedNiFiStartCommandTLS = `. /opt/nifi/scripts/common.sh
+prop_replace 'java.arg.2' "-Xms${NIFI_JVM_HEAP_INIT}" "${nifi_bootstrap_file}"
+prop_replace 'java.arg.3' "-Xmx${NIFI_JVM_HEAP_MAX}" "${nifi_bootstrap_file}"
+uncomment 'nifi.python.command' "${nifi_props_file}"
+prop_replace 'nifi.python.extensions.source.directory.default' "${NIFI_HOME}/python_extensions"
+prop_replace 'nifi.nar.library.autoload.directory' "${NIFI_HOME}/nar_extensions"
+prop_replace 'nifi.web.http.host' ''
+prop_replace 'nifi.web.http.port' ''
+prop_replace 'nifi.web.https.host' '0.0.0.0'
+prop_replace 'nifi.web.https.port' "${NIFI_WEB_HTTPS_PORT}"
+prop_replace 'nifi.web.proxy.host' "${NIFI_WEB_PROXY_HOST}"
+prop_replace 'nifi.security.keystore' "${NIFI_SECURITY_DIR}/keystore.p12"
+prop_replace 'nifi.security.keystoreType' 'PKCS12'
+prop_replace 'nifi.security.keystorePasswd' "${NIFI_KEYSTORE_PASSWORD}"
+prop_replace 'nifi.security.keyPasswd' "${NIFI_KEYSTORE_PASSWORD}"
+prop_replace 'nifi.security.truststore' "${NIFI_SECURITY_DIR}/truststore.p12"
+prop_replace 'nifi.security.truststoreType' 'PKCS12'
+prop_replace 'nifi.security.truststorePasswd' "${NIFI_KEYSTORE_PASSWORD}"
+prop_replace 'nifi.security.needClientAuth' 'true'
+prop_replace 'nifi.security.allow.anonymous.authentication' 'false'
+prop_replace 'nifi.security.user.authorizer' 'managed-authorizer'
+prop_replace 'nifi.security.user.login.identity.provider' ''
+prop_replace 'nifi.remote.input.host' "${NIFI_REMOTE_INPUT_HOST:-${HOSTNAME}}"
+prop_replace 'nifi.remote.input.socket.port' "${NIFI_REMOTE_INPUT_SOCKET_PORT:-10000}"
+prop_replace 'nifi.remote.input.secure' 'true'
+prop_replace 'nifi.cluster.protocol.is.secure' "${NIFI_CLUSTER_IS_NODE:-false}"
+prop_replace 'nifi.cluster.is.node' "${NIFI_CLUSTER_IS_NODE:-false}"
+prop_replace 'nifi.cluster.node.address' "${NIFI_CLUSTER_ADDRESS:-${HOSTNAME}}"
+prop_replace 'nifi.cluster.node.protocol.port' "${NIFI_CLUSTER_NODE_PROTOCOL_PORT:-}"
+prop_replace 'nifi.cluster.load.balance.host' "${NIFI_CLUSTER_LOAD_BALANCE_HOST:-}"
+prop_replace 'nifi.zookeeper.connect.string' "${NIFI_ZK_CONNECT_STRING:-}"
+prop_replace 'nifi.zookeeper.root.node' "${NIFI_ZK_ROOT_NODE:-/nifi}"
+prop_replace 'nifi.cluster.flow.election.max.wait.time' "${NIFI_ELECTION_MAX_WAIT:-2 mins}"
+prop_replace 'nifi.cluster.flow.election.max.candidates' "${NIFI_ELECTION_MAX_CANDIDATES:-}"
+cp "${NIFI_CONFIG_DIR}/authorizers.xml" "${NIFI_HOME}/conf/authorizers.xml"
+exec "${NIFI_HOME}/bin/nifi.sh" run`
+
 var managedDataDirectories = []string{
 	"conf",
 	"database_repository",
@@ -92,13 +136,26 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 		return ctrl.Result{}, nil
 	}
 
+	var tlsMaterials *clusterTLSMaterials
+	if internalTLSEnabled(cluster) {
+		materials, ready, err := r.reconcileManagedClusterTLS(ctx, cluster)
+		if err != nil {
+			return r.managedClusterReconcileFailed(ctx, cluster, "TLSReconcileFailed", err)
+		}
+		if !ready {
+			// reconcileManagedClusterTLS already recorded the pending/error status.
+			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		}
+		tlsMaterials = materials
+	}
+
 	if err := r.reconcileManagedClusterService(ctx, cluster, false); err != nil {
 		return r.managedClusterReconcileFailed(ctx, cluster, "ServiceReconcileFailed", err)
 	}
 	if err := r.reconcileManagedClusterService(ctx, cluster, true); err != nil {
 		return r.managedClusterReconcileFailed(ctx, cluster, "ServiceReconcileFailed", err)
 	}
-	statefulSet, err := r.reconcileManagedClusterStatefulSet(ctx, cluster)
+	statefulSet, err := r.reconcileManagedClusterStatefulSet(ctx, cluster, tlsMaterials)
 	if err != nil {
 		return r.managedClusterReconcileFailed(ctx, cluster, "StatefulSetReconcileFailed", err)
 	}
@@ -195,7 +252,7 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterService(ctx context.Conte
 	return err
 }
 
-func (r *NiFiClusterReconciler) reconcileManagedClusterStatefulSet(ctx context.Context, cluster *nifiv1alpha1.NiFiCluster) (*appsv1.StatefulSet, error) {
+func (r *NiFiClusterReconciler) reconcileManagedClusterStatefulSet(ctx context.Context, cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials) (*appsv1.StatefulSet, error) {
 	name := managedClusterResourceName(cluster)
 	statefulSet := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cluster.Namespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, statefulSet, func() error {
@@ -204,7 +261,7 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterStatefulSet(ctx context.C
 		}
 		statefulSet.Labels = managedClusterLabels(cluster)
 		statefulSet.Annotations = managedClusterAnnotations(cluster)
-		desired := desiredManagedClusterStatefulSetSpec(cluster)
+		desired := desiredManagedClusterStatefulSetSpec(cluster, tls)
 		if statefulSet.ResourceVersion != "" {
 			desired.ServiceName = statefulSet.Spec.ServiceName
 			if statefulSet.Spec.Selector != nil {
@@ -218,38 +275,29 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterStatefulSet(ctx context.C
 	return statefulSet, err
 }
 
-func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster) appsv1.StatefulSetSpec {
+func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials) appsv1.StatefulSetSpec {
 	podLabels := managedClusterPodLabels(cluster)
+	webPort := defaultNiFiWebPort
+	startCommand := managedNiFiStartCommand
+	if tls != nil {
+		webPort = tls.httpsPort
+		startCommand = managedNiFiStartCommandTLS
+	}
 	container := corev1.Container{
 		Name:            "nifi",
 		Image:           managedClusterImage(cluster),
 		ImagePullPolicy: managedClusterImagePullPolicy(cluster),
-		Command:         []string{"/bin/bash", "-ec", managedNiFiStartCommand},
-		Env:             managedClusterEnvironment(cluster),
+		Command:         []string{"/bin/bash", "-ec", startCommand},
+		Env:             managedClusterEnvironment(cluster, tls),
 		Ports: []corev1.ContainerPort{
-			{Name: "web", ContainerPort: defaultNiFiWebPort, Protocol: corev1.ProtocolTCP},
+			{Name: "web", ContainerPort: webPort, Protocol: corev1.ProtocolTCP},
 			{Name: "cluster", ContainerPort: defaultClusterPort, Protocol: corev1.ProtocolTCP},
 		},
-		Resources: cluster.Spec.Resources,
-		StartupProbe: &corev1.Probe{
-			ProbeHandler:     httpProbeHandler("/nifi-api/flow/about", "web"),
-			PeriodSeconds:    10,
-			TimeoutSeconds:   3,
-			FailureThreshold: 60,
-		},
-		LivenessProbe: &corev1.Probe{
-			ProbeHandler:     httpProbeHandler("/nifi-api/flow/about", "web"),
-			PeriodSeconds:    20,
-			TimeoutSeconds:   3,
-			FailureThreshold: 3,
-		},
-		ReadinessProbe: &corev1.Probe{
-			ProbeHandler:     httpProbeHandler("/nifi-api/flow/about", "web"),
-			PeriodSeconds:    10,
-			TimeoutSeconds:   3,
-			FailureThreshold: 3,
-		},
-		VolumeMounts: managedClusterVolumeMounts(),
+		Resources:      cluster.Spec.Resources,
+		StartupProbe:   managedClusterStartupProbe(tls),
+		LivenessProbe:  managedClusterLivenessProbe(tls),
+		ReadinessProbe: managedClusterReadinessProbe(tls),
+		VolumeMounts:   managedClusterVolumeMounts(tls),
 	}
 	podSpec := corev1.PodSpec{
 		SecurityContext: &corev1.PodSecurityContext{
@@ -258,14 +306,11 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster) app
 		},
 		InitContainers: []corev1.Container{managedClusterDataInitializer(cluster)},
 		Containers:     []corev1.Container{container},
+		Volumes:        managedClusterVolumes(cluster, tls),
 	}
-	if !managedClusterStorageEnabled(cluster) {
-		podSpec.Volumes = []corev1.Volume{{
-			Name: managedDataVolume,
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{},
-			},
-		}}
+	annotations := managedClusterAnnotations(cluster)
+	if tls != nil && tls.checksum != "" {
+		annotations[managedTLSChecksumAnnotation] = tls.checksum
 	}
 	spec := appsv1.StatefulSetSpec{
 		ServiceName:          managedClusterHeadlessServiceName(cluster),
@@ -277,7 +322,7 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster) app
 		Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{
 				Labels:      podLabels,
-				Annotations: managedClusterAnnotations(cluster),
+				Annotations: annotations,
 			},
 			Spec: podSpec,
 		},
@@ -286,6 +331,64 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster) app
 		spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{managedClusterVolumeClaim(cluster)}
 	}
 	return spec
+}
+
+// managedClusterVolumes returns the pod volumes, adding read-only mounts for the TLS
+// Secret and operator-rendered config when internal TLS is enabled.
+func managedClusterVolumes(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials) []corev1.Volume {
+	volumes := []corev1.Volume{}
+	if !managedClusterStorageEnabled(cluster) {
+		volumes = append(volumes, corev1.Volume{
+			Name:         managedDataVolume,
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		})
+	}
+	if tls != nil {
+		volumes = append(volumes,
+			corev1.Volume{
+				Name: managedTLSVolume,
+				VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+					SecretName:  tls.serverSecretName,
+					DefaultMode: ptr.To[int32](0o440),
+				}},
+			},
+			corev1.Volume{
+				Name: managedTLSConfigVol,
+				VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: tls.configMapName},
+					DefaultMode:          ptr.To[int32](0o550),
+				}},
+			},
+		)
+	}
+	return volumes
+}
+
+func managedClusterStartupProbe(tls *clusterTLSMaterials) *corev1.Probe {
+	if tls != nil {
+		return &corev1.Probe{ProbeHandler: tlsReadinessExecHandler(), PeriodSeconds: 10, TimeoutSeconds: 5, FailureThreshold: 60}
+	}
+	return &corev1.Probe{ProbeHandler: httpProbeHandler("/nifi-api/flow/about", "web"), PeriodSeconds: 10, TimeoutSeconds: 3, FailureThreshold: 60}
+}
+
+func managedClusterLivenessProbe(tls *clusterTLSMaterials) *corev1.Probe {
+	if tls != nil {
+		// Liveness only needs the secured port to be accepting connections; an httpGet
+		// probe cannot present a client certificate under needClientAuth.
+		return &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstrFromString("web")}}, PeriodSeconds: 20, TimeoutSeconds: 3, FailureThreshold: 3}
+	}
+	return &corev1.Probe{ProbeHandler: httpProbeHandler("/nifi-api/flow/about", "web"), PeriodSeconds: 20, TimeoutSeconds: 3, FailureThreshold: 3}
+}
+
+func managedClusterReadinessProbe(tls *clusterTLSMaterials) *corev1.Probe {
+	if tls != nil {
+		return &corev1.Probe{ProbeHandler: tlsReadinessExecHandler(), PeriodSeconds: 10, TimeoutSeconds: 5, FailureThreshold: 3}
+	}
+	return &corev1.Probe{ProbeHandler: httpProbeHandler("/nifi-api/flow/about", "web"), PeriodSeconds: 10, TimeoutSeconds: 3, FailureThreshold: 3}
+}
+
+func tlsReadinessExecHandler() corev1.ProbeHandler {
+	return corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"/bin/bash", managedTLSConfigDir + "/tls-readiness.sh"}}}
 }
 
 func managedClusterDataInitializer(cluster *nifiv1alpha1.NiFiCluster) corev1.Container {
@@ -302,14 +405,20 @@ func managedClusterDataInitializer(cluster *nifiv1alpha1.NiFiCluster) corev1.Con
 	}
 }
 
-func managedClusterVolumeMounts() []corev1.VolumeMount {
-	mounts := make([]corev1.VolumeMount, 0, len(managedDataDirectories))
+func managedClusterVolumeMounts(tls *clusterTLSMaterials) []corev1.VolumeMount {
+	mounts := make([]corev1.VolumeMount, 0, len(managedDataDirectories)+2)
 	for _, directory := range managedDataDirectories {
 		mounts = append(mounts, corev1.VolumeMount{
 			Name:      managedDataVolume,
 			MountPath: "/opt/nifi/nifi-current/" + directory,
 			SubPath:   directory,
 		})
+	}
+	if tls != nil {
+		mounts = append(mounts,
+			corev1.VolumeMount{Name: managedTLSVolume, MountPath: managedTLSSecurityDir, ReadOnly: true},
+			corev1.VolumeMount{Name: managedTLSConfigVol, MountPath: managedTLSConfigDir, ReadOnly: true},
+		)
 	}
 	return mounts
 }
@@ -336,14 +445,29 @@ func managedClusterVolumeClaim(cluster *nifiv1alpha1.NiFiCluster) corev1.Persist
 	}
 }
 
-func managedClusterEnvironment(cluster *nifiv1alpha1.NiFiCluster) []corev1.EnvVar {
+func managedClusterEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials) []corev1.EnvVar {
 	environment := []corev1.EnvVar{
 		{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
 		{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
-		{Name: "NIFI_WEB_HTTP_HOST", Value: "0.0.0.0"},
-		{Name: "NIFI_WEB_HTTP_PORT", Value: strconv.Itoa(int(defaultNiFiWebPort))},
 		{Name: "NIFI_JVM_HEAP_INIT", Value: managedClusterHeapInitial(cluster)},
 		{Name: "NIFI_JVM_HEAP_MAX", Value: managedClusterHeapMax(cluster)},
+	}
+	if tls != nil {
+		environment = append(environment,
+			corev1.EnvVar{Name: "NIFI_WEB_HTTPS_PORT", Value: strconv.Itoa(int(tls.httpsPort))},
+			corev1.EnvVar{Name: "NIFI_SECURITY_DIR", Value: managedTLSSecurityDir},
+			corev1.EnvVar{Name: "NIFI_CONFIG_DIR", Value: managedTLSConfigDir},
+			corev1.EnvVar{Name: "NIFI_WEB_PROXY_HOST", Value: tls.proxyHosts},
+			corev1.EnvVar{Name: "NIFI_KEYSTORE_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: tls.passwordSecretName},
+				Key:                  tls.passwordSecretKey,
+			}}},
+		)
+	} else {
+		environment = append(environment,
+			corev1.EnvVar{Name: "NIFI_WEB_HTTP_HOST", Value: "0.0.0.0"},
+			corev1.EnvVar{Name: "NIFI_WEB_HTTP_PORT", Value: strconv.Itoa(int(defaultNiFiWebPort))},
+		)
 	}
 	if managedClusterReplicas(cluster) > 1 {
 		coordination := cluster.Spec.Coordination
@@ -552,7 +676,11 @@ func managedClusterEndpoint(cluster *nifiv1alpha1.NiFiCluster) string {
 	if cluster.Spec.API != nil && cluster.Spec.API.URI != "" {
 		return cluster.Spec.API.URI
 	}
-	return fmt.Sprintf("http://%s.%s.svc:%d", managedClusterResourceName(cluster), cluster.Namespace, managedClusterServicePort(cluster))
+	scheme := "http"
+	if internalTLSEnabled(cluster) {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s.%s.svc:%d", scheme, managedClusterResourceName(cluster), cluster.Namespace, managedClusterServicePort(cluster))
 }
 
 func managedClusterImage(cluster *nifiv1alpha1.NiFiCluster) string {
@@ -577,6 +705,11 @@ func managedClusterReplicas(cluster *nifiv1alpha1.NiFiCluster) int32 {
 }
 
 func managedClusterServicePort(cluster *nifiv1alpha1.NiFiCluster) int32 {
+	// In TLS mode the managed Service always exposes the HTTPS port; spec.service.port
+	// applies to HTTP (development) mode only.
+	if internalTLSEnabled(cluster) {
+		return managedClusterHTTPSPort(cluster)
+	}
 	if cluster.Spec.Service.Port > 0 {
 		return cluster.Spec.Service.Port
 	}

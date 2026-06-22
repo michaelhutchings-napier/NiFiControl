@@ -1,0 +1,29 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiCluster
+metadata:
+  name: production-tls-selfsigned
+spec:
+  mode: Internal
+  image: apache/nifi:2.10.0
+  replicas: 1
+  storage:
+    enabled: true
+    size: 10Gi
+    accessModes:
+      - ReadWriteOnce
+  jvm:
+    heapInitial: 1g
+    heapMax: 2g
+  # Operator-managed HTTPS and mutual TLS using an operator-created, namespaced
+  # two-stage self-signed CA chain. Requires cert-manager to be installed.
+  internalTLS:
+    enabled: true
+    httpsPort: 8443
+    selfSigned:
+      caDuration: 8760h
+    certificate:
+      duration: 2160h
+      renewBefore: 360h
+  deletionPolicy: Delete
+  driftPolicy:
+    mode: Reconcile

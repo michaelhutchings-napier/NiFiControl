@@ -1,0 +1,33 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiCluster
+metadata:
+  name: production-tls-external
+spec:
+  mode: Internal
+  image: apache/nifi:2.10.0
+  replicas: 1
+  storage:
+    enabled: true
+    size: 10Gi
+  jvm:
+    heapInitial: 1g
+    heapMax: 2g
+  # Operator-managed HTTPS and mutual TLS using externally supplied PKCS12 materials.
+  # The operator does not generate or rotate these Secrets; each referenced Secret must
+  # contain keystore.p12, truststore.p12, and ca.crt (the client Secret must also carry
+  # PEM tls.crt and tls.key for the operator's mTLS REST client). The initial admin and
+  # node identities must match the supplied certificate subject DNs exactly.
+  internalTLS:
+    enabled: true
+    httpsPort: 8443
+    external:
+      serverSecretName: nifi-server-tls
+      clientSecretName: nifi-operator-tls
+      keystorePasswordSecretRef:
+        name: nifi-keystore-password
+        key: password
+      initialAdminIdentity: "CN=nifi-operator,O=Example"
+      nodeIdentity: "CN=nifi-node,O=Example"
+  deletionPolicy: Delete
+  driftPolicy:
+    mode: Reconcile

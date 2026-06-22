@@ -1,0 +1,32 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiCluster
+metadata:
+  name: production-tls-issuer
+spec:
+  mode: Internal
+  image: apache/nifi:2.10.0
+  replicas: 1
+  storage:
+    enabled: true
+    size: 10Gi
+  jvm:
+    heapInitial: 1g
+    heapMax: 2g
+  # Operator-managed HTTPS and mutual TLS signed by an existing cert-manager issuer.
+  # Set kind to Issuer for a namespaced issuer or ClusterIssuer for a cluster-scoped one.
+  internalTLS:
+    enabled: true
+    httpsPort: 8443
+    issuerRef:
+      name: corporate-ca
+      kind: ClusterIssuer
+      group: cert-manager.io
+    certificate:
+      duration: 2160h
+      renewBefore: 360h
+      # Add an ingress host name to the server certificate when proxying externally.
+      additionalServerSANs:
+        - nifi.example.com
+  deletionPolicy: Delete
+  driftPolicy:
+    mode: Reconcile

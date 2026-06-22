@@ -495,6 +495,30 @@ func configureClusterHTTPClient(ctx context.Context, c client.Client, cluster *n
 		return nil
 	}
 	config := nifi.HTTPClientConfig{BaseURI: endpoint}
+
+	// Operator-managed internal TLS: present the operator client certificate for mutual
+	// TLS and trust the cluster CA. Never disable verification for a managed cluster.
+	if internalTLSEnabled(cluster) {
+		if cluster.Status.TLS == nil || !cluster.Status.TLS.Ready || cluster.Status.TLS.ClientSecretName == "" {
+			return nil
+		}
+		material, err := tlsClientMaterial(ctx, c, cluster.Namespace, cluster.Status.TLS.ClientSecretName)
+		if err != nil {
+			return fmt.Errorf("resolve operator client certificate: %w", err)
+		}
+		config.ClientCertData = material.cert
+		config.ClientKeyData = material.key
+		config.CAData = material.ca
+		if cluster.Spec.API != nil && cluster.Spec.API.Timeout != nil {
+			config.Timeout = cluster.Spec.API.Timeout.Duration
+		}
+		httpClient, err := nifi.NewHTTPClient(config)
+		if err != nil {
+			return err
+		}
+		return nifi.RegisterHTTPClient(endpoint, httpClient)
+	}
+
 	if api := cluster.Spec.API; api != nil {
 		if api.Timeout != nil {
 			config.Timeout = api.Timeout.Duration
@@ -512,11 +536,14 @@ func configureClusterHTTPClient(ctx context.Context, c client.Client, cluster *n
 		}
 		if api.Auth != nil {
 			var err error
-			if api.Auth.BearerTokenSecretKeyRef != nil {
+			switch {
+			case api.Auth.ClientCertificate != nil:
+				config.ClientCertData, config.ClientKeyData, err = clientCertificateMaterial(ctx, c, cluster.Namespace, api.Auth.ClientCertificate)
+			case api.Auth.BearerTokenSecretKeyRef != nil:
 				value, valueErr := secretKeyValue(ctx, c, cluster.Namespace, api.Auth.BearerTokenSecretKeyRef)
 				err = valueErr
 				config.BearerToken = strings.TrimSpace(string(value))
-			} else {
+			default:
 				username, usernameErr := secretKeyValue(ctx, c, cluster.Namespace, api.Auth.UsernameSecretKeyRef)
 				password, passwordErr := secretKeyValue(ctx, c, cluster.Namespace, api.Auth.PasswordSecretKeyRef)
 				if usernameErr != nil {
@@ -537,6 +564,50 @@ func configureClusterHTTPClient(ctx context.Context, c client.Client, cluster *n
 		return err
 	}
 	return nifi.RegisterHTTPClient(endpoint, httpClient)
+}
+
+type tlsClientMaterials struct {
+	cert []byte
+	key  []byte
+	ca   []byte
+}
+
+// tlsClientMaterial loads the PEM client certificate, key, and CA from a cert-manager
+// issued Secret (tls.crt, tls.key, ca.crt) for the operator's mTLS REST client.
+func tlsClientMaterial(ctx context.Context, c client.Client, namespace, secretName string) (tlsClientMaterials, error) {
+	secret := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, secret); err != nil {
+		return tlsClientMaterials{}, err
+	}
+	cert := secret.Data[tlsCertKey]
+	key := secret.Data[tlsKeyKey]
+	if len(cert) == 0 || len(key) == 0 {
+		return tlsClientMaterials{}, fmt.Errorf("Secret %s/%s is missing %s or %s", namespace, secretName, tlsCertKey, tlsKeyKey)
+	}
+	return tlsClientMaterials{cert: cert, key: key, ca: secret.Data[tlsCAKey]}, nil
+}
+
+// clientCertificateMaterial loads PEM client certificate and key from a Secret referenced
+// by an external cluster's mTLS auth configuration.
+func clientCertificateMaterial(ctx context.Context, c client.Client, namespace string, ref *nifiv1alpha1.NiFiAPIClientCertificate) ([]byte, []byte, error) {
+	secret := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Name: ref.SecretName, Namespace: namespace}, secret); err != nil {
+		return nil, nil, err
+	}
+	certKey := ref.CertKey
+	if certKey == "" {
+		certKey = tlsCertKey
+	}
+	keyKey := ref.KeyKey
+	if keyKey == "" {
+		keyKey = tlsKeyKey
+	}
+	cert := secret.Data[certKey]
+	key := secret.Data[keyKey]
+	if len(cert) == 0 || len(key) == 0 {
+		return nil, nil, fmt.Errorf("Secret %s/%s is missing %s or %s", namespace, ref.SecretName, certKey, keyKey)
+	}
+	return cert, key, nil
 }
 
 func secretKeyValue(ctx context.Context, c client.Client, namespace string, ref *nifiv1alpha1.SecretKeyRef) ([]byte, error) {

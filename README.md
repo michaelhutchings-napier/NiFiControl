@@ -62,7 +62,8 @@ spec:
         key: password
 ```
 
-Use `auth.bearerTokenSecretKeyRef` instead when a token is managed externally.
+The three external API authentication modes — `auth.clientCertificate` (mTLS),
+`auth.bearerTokenSecretKeyRef`, and username/password — are mutually exclusive.
 Username/password authentication exchanges credentials at NiFi's
 `/nifi-api/access/token` endpoint and caches the returned JWT until refresh.
 
@@ -71,6 +72,33 @@ Git, OCI, and NiFi Registry sources accept `credentials` with
 `caSecretKeyRef`. Configure either a token or a username/password pair.
 `insecureSkipVerify` is available for controlled development environments.
 Referenced Secret changes automatically trigger reconciliation.
+
+### Managed internal HTTPS and mTLS
+
+Operator-managed (`mode: Internal`) clusters can run HTTPS with certificate
+authentication, backed by [cert-manager](https://cert-manager.io). Select one
+certificate provider — an operator-managed two-stage self-signed CA, an existing
+Issuer/ClusterIssuer, or externally supplied PKCS12 Secrets:
+
+```yaml
+spec:
+  mode: Internal
+  internalTLS:
+    enabled: true
+    httpsPort: 8443
+    selfSigned:
+      caDuration: 8760h
+```
+
+cert-manager must be installed separately; if its CRDs are absent the cluster reports
+`TLSReady=False` (`CertManagerMissing`) rather than falling back to HTTP. The operator
+issues a server/node certificate (`serverAuth`+`clientAuth`, wildcard headless SANs) and
+an operator client certificate (`clientAuth`), consumes the cert-manager PKCS12 keystores
+directly, derives the NiFi initial admin and node identities from predictable common
+names, and rolls pods on certificate rotation. See
+[docs/internal-tls.md](docs/internal-tls.md) for the trust model, ownership, rotation
+behaviour, the shared node-identity limitation, and migration from development HTTP.
+`insecureSkipVerify` is never used for managed clusters.
 
 ## Flow Safety
 

@@ -213,6 +213,12 @@ spec:
               api:
                 properties:
                   auth:
+                    description: |-
+                      NiFiAPIAuthSpec selects exactly one authentication mode for the operator's NiFi
+                      REST client. mTLS client-certificate, static bearer token, and username/password
+                      JWT exchange are mutually exclusive. Combined behaviour (for example presenting a
+                      client certificate for transport while exchanging a token for identity) is not yet
+                      proven against live NiFi 2.10 and is therefore rejected.
                     properties:
                       bearerTokenSecretKeyRef:
                         properties:
@@ -237,6 +243,24 @@ spec:
                         - key
                         type: object
                         x-kubernetes-map-type: atomic
+                      clientCertificate:
+                        description: |-
+                          NiFiAPIClientCertificate references a Secret containing a PEM client certificate and
+                          private key that the operator presents to an external NiFi cluster for mTLS client
+                          authentication.
+                        properties:
+                          certKey:
+                            default: tls.crt
+                            type: string
+                          keyKey:
+                            default: tls.key
+                            type: string
+                          secretName:
+                            minLength: 1
+                            type: string
+                        required:
+                        - secretName
+                        type: object
                       passwordSecretKeyRef:
                         properties:
                           key:
@@ -285,12 +309,17 @@ spec:
                         x-kubernetes-map-type: atomic
                     type: object
                     x-kubernetes-validations:
-                    - message: configure a bearer token or both username and password
+                    - message: 'configure exactly one of: clientCertificate, bearer
+                        token, or username and password'
                       rule: has(self.bearerTokenSecretKeyRef) || (has(self.usernameSecretKeyRef)
-                        && has(self.passwordSecretKeyRef))
-                    - message: bearer token and username/password authentication are
-                        mutually exclusive
+                        && has(self.passwordSecretKeyRef)) || has(self.clientCertificate)
+                    - message: bearer token authentication is mutually exclusive with
+                        the other modes
                       rule: '!(has(self.bearerTokenSecretKeyRef) && (has(self.usernameSecretKeyRef)
+                        || has(self.passwordSecretKeyRef) || has(self.clientCertificate)))'
+                    - message: mTLS client certificate authentication is mutually
+                        exclusive with username/password
+                      rule: '!(has(self.clientCertificate) && (has(self.usernameSecretKeyRef)
                         || has(self.passwordSecretKeyRef)))'
                   timeout:
                     type: string
@@ -378,6 +407,157 @@ spec:
                 - Never
                 - IfNotPresent
                 type: string
+              internalTLS:
+                description: |-
+                  NiFiClusterInternalTLSSpec configures operator-managed HTTPS and mutual TLS for an
+                  Internal (operator-managed) NiFi cluster. Exactly one certificate provider must be
+                  selected: an existing cert-manager issuerRef, an operator-managed self-signed CA
+                  chain, or externally supplied PKCS12 Secrets.
+                properties:
+                  certificate:
+                    description: Certificate tunes the operator-generated leaf certificates.
+                      Ignored in external mode.
+                    properties:
+                      additionalServerSANs:
+                        description: |-
+                          AdditionalServerSANs are extra DNS names added to the server/node certificate, for
+                          example an Ingress host. Service and wildcard headless DNS names are always included.
+                        items:
+                          type: string
+                        type: array
+                      duration:
+                        default: 2160h
+                        description: Duration is the validity period of the leaf certificates
+                          (Go duration form).
+                        type: string
+                      nodeCommonName:
+                        description: |-
+                          NodeCommonName overrides the common name of the shared server/node certificate.
+                          The resulting NiFi node identity is "CN=<value>".
+                        type: string
+                      operatorCommonName:
+                        description: |-
+                          OperatorCommonName overrides the common name of the operator client certificate.
+                          The resulting NiFi initial admin identity is "CN=<value>".
+                        type: string
+                      renewBefore:
+                        default: 360h
+                        description: RenewBefore is how long before expiry cert-manager
+                          renews the leaf certificates.
+                        type: string
+                    type: object
+                  enabled:
+                    default: false
+                    description: Enabled turns on HTTPS and mutual TLS for the managed
+                      StatefulSet.
+                    type: boolean
+                  external:
+                    description: External consumes PKCS12 keystores and CA material
+                      supplied outside the operator.
+                    properties:
+                      clientSecretName:
+                        description: |-
+                          ClientSecretName is the Secret holding the operator client keystore.p12, ca.crt, plus
+                          PEM tls.crt and tls.key used by the operator's mTLS REST client.
+                        minLength: 1
+                        type: string
+                      initialAdminIdentity:
+                        description: InitialAdminIdentity is the exact NiFi identity
+                          (client certificate subject DN) granted initial admin.
+                        minLength: 1
+                        type: string
+                      keystorePasswordSecretRef:
+                        description: KeystorePasswordSecretRef references the password
+                          protecting the supplied PKCS12 stores.
+                        properties:
+                          key:
+                            description: The key of the secret to select from.  Must
+                              be a valid secret key.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the Secret or its key must
+                              be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      nodeIdentity:
+                        description: NodeIdentity is the exact NiFi identity (server/node
+                          certificate subject DN) trusted as a cluster node.
+                        minLength: 1
+                        type: string
+                      serverSecretName:
+                        description: ServerSecretName is the Secret holding the server/node
+                          keystore.p12, truststore.p12, and ca.crt.
+                        minLength: 1
+                        type: string
+                    required:
+                    - clientSecretName
+                    - initialAdminIdentity
+                    - keystorePasswordSecretRef
+                    - nodeIdentity
+                    - serverSecretName
+                    type: object
+                  httpsPort:
+                    default: 8443
+                    description: HTTPSPort is the secure web port exposed by NiFi
+                      and the managed Services.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  issuerRef:
+                    description: |-
+                      IssuerRef references an existing cert-manager Issuer or ClusterIssuer that signs
+                      the server and operator-client certificates directly.
+                    properties:
+                      group:
+                        default: cert-manager.io
+                        type: string
+                      kind:
+                        default: Issuer
+                        enum:
+                        - Issuer
+                        - ClusterIssuer
+                        type: string
+                      name:
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  selfSigned:
+                    description: |-
+                      SelfSigned requests an operator-managed, namespaced two-stage self-signed CA chain
+                      (a self-signed Issuer that signs a CA certificate, backing a CA Issuer that signs
+                      the leaf certificates).
+                    properties:
+                      caCommonName:
+                        description: CACommonName overrides the common name of the
+                          generated CA certificate.
+                        type: string
+                      caDuration:
+                        default: 8760h
+                        description: CADuration is the validity period of the CA certificate
+                          (Go duration form).
+                        type: string
+                    type: object
+                type: object
+                x-kubernetes-validations:
+                - message: when internalTLS is enabled, set exactly one of issuerRef,
+                    selfSigned, or external
+                  rule: '!self.enabled || [has(self.issuerRef), has(self.selfSigned),
+                    has(self.external)].exists_one(x, x)'
               jvm:
                 properties:
                   heapInitial:
@@ -515,6 +695,9 @@ spec:
               rule: self.mode != 'External' || has(self.api)
             - message: coordination is required when replicas is greater than one
               rule: self.replicas <= 1 || has(self.coordination)
+            - message: internalTLS only applies to operator-managed (Internal) clusters
+              rule: '!has(self.internalTLS) || !self.internalTLS.enabled || self.mode
+                != ''External'''
           status:
             properties:
               conditions:
@@ -622,6 +805,42 @@ spec:
                     type: string
                   lastSuccessfulTime:
                     format: date-time
+                    type: string
+                type: object
+              tls:
+                description: NiFiClusterTLSStatus reports the resolved internal TLS
+                  materials.
+                properties:
+                  clientSecretName:
+                    description: ClientSecretName is the Secret the operator loads
+                      for its mTLS REST client.
+                    type: string
+                  initialAdminIdentity:
+                    description: InitialAdminIdentity is the NiFi identity granted
+                      initial admin (operator client DN).
+                    type: string
+                  issuerKind:
+                    description: IssuerKind is Issuer or ClusterIssuer.
+                    type: string
+                  issuerName:
+                    description: IssuerName is the cert-manager issuer that signs
+                      the leaf certificates.
+                    type: string
+                  mode:
+                    description: 'Mode is the resolved provider: CertManagerIssuer,
+                      SelfSigned, or External.'
+                    type: string
+                  nodeIdentity:
+                    description: NodeIdentity is the NiFi identity trusted as a cluster
+                      node (server certificate DN).
+                    type: string
+                  ready:
+                    description: Ready is true once keystore.p12, truststore.p12,
+                      and CA material are available.
+                    type: boolean
+                  serverSecretName:
+                    description: ServerSecretName is the Secret consumed by the NiFi
+                      StatefulSet.
                     type: string
                 type: object
               workload:

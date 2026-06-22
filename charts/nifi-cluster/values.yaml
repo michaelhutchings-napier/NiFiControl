@@ -45,6 +45,40 @@ api:
   uri: ""
   timeout: ""
 
+# Operator-managed HTTPS and mutual TLS. Requires cert-manager to be installed in the
+# cluster; this chart never installs cert-manager itself. Select exactly one provider:
+# selfSigned (operator-managed two-stage CA), issuerRef (existing Issuer/ClusterIssuer),
+# or external (externally supplied PKCS12 Secrets).
+internalTLS:
+  enabled: false
+  httpsPort: 8443
+  # Operator-managed two-stage self-signed CA chain (used when enabled and neither
+  # issuerRef.name nor external.serverSecretName is set).
+  selfSigned:
+    caCommonName: ""
+    caDuration: 8760h
+  # Reference an existing cert-manager Issuer or ClusterIssuer.
+  issuerRef:
+    name: ""
+    kind: Issuer
+    group: cert-manager.io
+  # Consume externally supplied PKCS12 Secrets (keystore.p12, truststore.p12, ca.crt).
+  external:
+    serverSecretName: ""
+    clientSecretName: ""
+    keystorePasswordSecretRef:
+      name: ""
+      key: password
+    initialAdminIdentity: ""
+    nodeIdentity: ""
+  # Leaf-certificate tuning for selfSigned / issuerRef modes.
+  certificate:
+    duration: 2160h
+    renewBefore: 360h
+    additionalServerSANs: []
+    operatorCommonName: ""
+    nodeCommonName: ""
+
 additionalEnv: []
 
 deletionPolicy: Delete

@@ -40,8 +40,10 @@ import (
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiprocessgroups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiprocessgroups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiprocessgroups/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cert-manager.io,resources=certificates;issuers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cert-manager.io,resources=clusterissuers,verbs=get;list;watch
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nificontrollerservices,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nificontrollerservices/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nificontrollerservices/finalizers,verbs=update
@@ -2906,6 +2908,14 @@ func (r *NiFiFlowBundleReconciler) requestsForRegistryClient(ctx context.Context
 }
 
 func (r *NiFiClusterReconciler) requestsForAPISecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	// A managed TLS Secret (keystore/truststore/CA) is owned by its NiFiCluster; enqueue
+	// the owner directly so certificate rotation re-reconciles and rolls the StatefulSet
+	// through the TLS checksum annotation.
+	if secret, ok := obj.(*corev1.Secret); ok {
+		if owner, found := managedClusterSecretOwner(secret); found {
+			return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: owner, Namespace: obj.GetNamespace()}}}
+		}
+	}
 	list := &nifiv1alpha1.NiFiClusterList{}
 	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace())); err != nil {
 		return nil
@@ -2957,6 +2967,9 @@ func clusterAPIReferencesSecret(cluster *nifiv1alpha1.NiFiCluster, secretName st
 	}
 	if cluster.Spec.API.Auth != nil {
 		refs = append(refs, cluster.Spec.API.Auth.BearerTokenSecretKeyRef, cluster.Spec.API.Auth.UsernameSecretKeyRef, cluster.Spec.API.Auth.PasswordSecretKeyRef)
+		if cluster.Spec.API.Auth.ClientCertificate != nil && cluster.Spec.API.Auth.ClientCertificate.SecretName == secretName {
+			return true
+		}
 	}
 	return secretRefsContainName(refs, secretName)
 }

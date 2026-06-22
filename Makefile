@@ -51,3 +51,7 @@ test: generate fmt
 .PHONY: integration-nifi
 integration-nifi:
 	./hack/test-nifi-2.10.sh
+
+.PHONY: integration-nifi-tls
+integration-nifi-tls:
+	./hack/test-nifi-2.10-tls.sh

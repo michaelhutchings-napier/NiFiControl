@@ -48,8 +48,12 @@ rules:
     resources:
       - secrets
     verbs:
+      - create
+      - delete
       - get
       - list
+      - patch
+      - update
       - watch
   - apiGroups:
       - ""
@@ -59,8 +63,33 @@ rules:
       - create
       - delete
       - get
+      - list
       - patch
       - update
+      - watch
+  # cert-manager resources for operator-managed internal TLS (internalTLS). cert-manager
+  # itself must be installed separately; this chart never installs it.
+  - apiGroups:
+      - cert-manager.io
+    resources:
+      - certificates
+      - issuers
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - cert-manager.io
+    resources:
+      - clusterissuers
+    verbs:
+      - get
+      - list
+      - watch
   - apiGroups:
       - nifi.controlnifi.io
     resources:

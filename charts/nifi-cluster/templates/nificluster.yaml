@@ -46,6 +46,47 @@ spec:
     timeout: {{ . | quote }}
     {{- end }}
   {{- end }}
+  {{- if .Values.internalTLS.enabled }}
+  internalTLS:
+    enabled: true
+    httpsPort: {{ .Values.internalTLS.httpsPort }}
+    {{- if .Values.internalTLS.external.serverSecretName }}
+    external:
+      serverSecretName: {{ .Values.internalTLS.external.serverSecretName | quote }}
+      clientSecretName: {{ .Values.internalTLS.external.clientSecretName | quote }}
+      keystorePasswordSecretRef:
+        name: {{ .Values.internalTLS.external.keystorePasswordSecretRef.name | quote }}
+        key: {{ .Values.internalTLS.external.keystorePasswordSecretRef.key | quote }}
+      initialAdminIdentity: {{ .Values.internalTLS.external.initialAdminIdentity | quote }}
+      nodeIdentity: {{ .Values.internalTLS.external.nodeIdentity | quote }}
+    {{- else if .Values.internalTLS.issuerRef.name }}
+    issuerRef:
+      name: {{ .Values.internalTLS.issuerRef.name | quote }}
+      kind: {{ .Values.internalTLS.issuerRef.kind }}
+      group: {{ .Values.internalTLS.issuerRef.group }}
+    {{- else }}
+    selfSigned:
+      {{- with .Values.internalTLS.selfSigned.caCommonName }}
+      caCommonName: {{ . | quote }}
+      {{- end }}
+      caDuration: {{ .Values.internalTLS.selfSigned.caDuration | quote }}
+    {{- end }}
+    {{- if not .Values.internalTLS.external.serverSecretName }}
+    certificate:
+      duration: {{ .Values.internalTLS.certificate.duration | quote }}
+      renewBefore: {{ .Values.internalTLS.certificate.renewBefore | quote }}
+      {{- with .Values.internalTLS.certificate.additionalServerSANs }}
+      additionalServerSANs:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.internalTLS.certificate.operatorCommonName }}
+      operatorCommonName: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.internalTLS.certificate.nodeCommonName }}
+      nodeCommonName: {{ . | quote }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
   {{- with .Values.additionalEnv }}
   additionalEnv:
     {{- toYaml . | nindent 4 }}
