@@ -16,7 +16,23 @@ spec:
   parameterContextRef:
     name: payments-prod
   rollout:
-    strategy: ApplyOnly
+    strategy: StopAllThenApply
+    # Gate the rollout on the deployed flow being healthy before it is marked in sync.
+    readiness:
+      requireValidComponents: true
+      requireEnabledControllerServices: true
+      maxUnavailable: 0
+      timeoutSeconds: 300
+    # Drain queues before StopAllThenApply stops the group for replacement.
+    queuePolicy:
+      enabled: true
+      timeoutSeconds: 60
+      onTimeout: Fail
+    # Re-attempt a failed rollout before falling back to rollback.
+    retry:
+      maxRetries: 2
+    # Set to true to abort an in-flight rollout.
+    cancel: false
   rollback:
     enabled: true
     onFailure: PreviousSuccessful

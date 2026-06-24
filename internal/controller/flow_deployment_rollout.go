@@ -52,6 +52,19 @@ func (r *NiFiFlowDeploymentReconciler) prepareFlowRollout(ctx context.Context, d
 	}
 	switch active.Strategy {
 	case "StopAllThenApply":
+		// Drain queues while components are still running, before stopping the group.
+		drained, err := r.drainProcessGroupQueues(ctx, deployment, endpoint, deployment.Status.ProcessGroupID, active.StartedAt.Time)
+		if err != nil {
+			return false, fmt.Errorf("drain queues before %s rollout: %w", active.Strategy, err)
+		}
+		if !drained {
+			if deployment.Status.SyncState != "DrainingQueues" {
+				deployment.Status.CommonStatus.MarkNotReady(deployment.Generation, "DrainingQueues", "Draining queues before stopping the flow for replacement.")
+				deployment.Status.SyncState = "DrainingQueues"
+				return false, r.Status().Update(ctx, deployment)
+			}
+			return false, nil
+		}
 		if err := r.processGroupScheduler().ScheduleProcessGroup(ctx, endpoint, deployment.Status.ProcessGroupID, "STOPPED"); err != nil {
 			return false, fmt.Errorf("stop process group before %s rollout: %w", active.Strategy, err)
 		}

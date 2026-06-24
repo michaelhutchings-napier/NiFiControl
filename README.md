@@ -136,6 +136,13 @@ a failed switch is rolled back to the original group. See
 [docs/bluegreen-rollout.md](docs/bluegreen-rollout.md) for the lifecycle, port-matching
 rules, queue-drain policy, and limitations.
 
+Every strategy can be gated and controlled with `rollout.readiness` (wait for valid
+components and enabled controller services, with `maxUnavailable` and `timeoutSeconds`),
+`rollout.queuePolicy` (drain queues before `StopAllThenApply` stops the group, with a
+`Fail`/`Drop`/`Proceed` timeout policy), `rollout.retry.maxRetries` (bounded automatic
+re-attempts), and `rollout.cancel` (abort an in-flight rollout). See
+[docs/rollout-readiness.md](docs/rollout-readiness.md).
+
 ## Module
 
 ```text

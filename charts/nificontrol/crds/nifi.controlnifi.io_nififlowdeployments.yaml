@@ -168,6 +168,82 @@ spec:
                           services before validation.
                         type: boolean
                     type: object
+                  cancel:
+                    description: |-
+                      Cancel requests cancellation of an in-flight rollout. A BlueGreen rollout switches
+                      traffic back to blue; an in-place rollout cancels the NiFi replace request.
+                    type: boolean
+                  queuePolicy:
+                    description: QueuePolicy drains queues before a StopAllThenApply
+                      rollout stops the group.
+                    properties:
+                      enabled:
+                        default: false
+                        type: boolean
+                      onTimeout:
+                        default: Fail
+                        description: |-
+                          OnTimeout selects the behaviour when queues have not drained in time: Fail aborts
+                          the rollout, Drop discards the remaining flow files, Proceed continues regardless.
+                        enum:
+                        - Fail
+                        - Drop
+                        - Proceed
+                        type: string
+                      timeoutSeconds:
+                        default: 60
+                        description: TimeoutSeconds bounds how long to wait for queues
+                          to drain.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                    type: object
+                  readiness:
+                    description: |-
+                      Readiness gates a completed rollout on the deployed flow being healthy (valid
+                      components and enabled controller services) before it is marked in sync. It applies
+                      to every strategy.
+                    properties:
+                      maxUnavailable:
+                        default: 0
+                        description: |-
+                          MaxUnavailable is the number of invalid components tolerated while still treating
+                          the rollout as ready.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      requireEnabledControllerServices:
+                        default: true
+                        description: |-
+                          RequireEnabledControllerServices enables and waits for the deployed group's
+                          controller services before evaluating component validity.
+                        type: boolean
+                      requireValidComponents:
+                        default: true
+                        description: |-
+                          RequireValidComponents waits until the deployed group reports no more than
+                          maxUnavailable invalid components before the rollout is considered ready.
+                        type: boolean
+                      timeoutSeconds:
+                        default: 300
+                        description: TimeoutSeconds bounds how long to wait for readiness
+                          before failing the rollout.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                    type: object
+                  retry:
+                    description: Retry bounds automatic re-attempts of a failed rollout.
+                    properties:
+                      maxRetries:
+                        default: 0
+                        description: |-
+                          MaxRetries is the number of automatic re-attempts before the rollout is left failed
+                          pending a spec change. Zero disables automatic retries.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                    type: object
                   strategy:
                     default: ApplyOnly
                     enum:
@@ -669,6 +745,16 @@ spec:
                     type: string
                   previousVersion:
                     type: string
+                  readinessStartedAt:
+                    description: ReadinessStartedAt marks when the post-rollout readiness
+                      wait began.
+                    format: date-time
+                    type: string
+                  retryCount:
+                    description: RetryCount is the number of automatic re-attempts
+                      performed for this rollout.
+                    format: int32
+                    type: integer
                   startedAt:
                     format: date-time
                     type: string

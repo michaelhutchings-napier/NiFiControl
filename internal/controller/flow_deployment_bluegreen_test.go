@@ -220,9 +220,6 @@ func (f *fakeNiFi) SetComponentRunStatus(_ context.Context, _ string, _ string, 
 
 func (f *fakeNiFi) EnableControllerServices(_ context.Context, _ string, pgID string) error {
 	f.csEnabled[pgID] = true
-	if pg, ok := f.pgs[pgID]; ok {
-		pg.invalidCount = 0
-	}
 	return nil
 }
 

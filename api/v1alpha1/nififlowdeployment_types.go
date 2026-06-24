@@ -21,6 +21,62 @@ type RolloutStrategy struct {
 	// BlueGreen tunes the transactional BlueGreen rollout. It is ignored unless
 	// strategy is BlueGreen.
 	BlueGreen *BlueGreenStrategy `json:"blueGreen,omitempty"`
+	// Readiness gates a completed rollout on the deployed flow being healthy (valid
+	// components and enabled controller services) before it is marked in sync. It applies
+	// to every strategy.
+	Readiness *RolloutReadiness `json:"readiness,omitempty"`
+	// QueuePolicy drains queues before a StopAllThenApply rollout stops the group.
+	QueuePolicy *QueueDrainPolicy `json:"queuePolicy,omitempty"`
+	// Retry bounds automatic re-attempts of a failed rollout.
+	Retry *RolloutRetryPolicy `json:"retry,omitempty"`
+	// Cancel requests cancellation of an in-flight rollout. A BlueGreen rollout switches
+	// traffic back to blue; an in-place rollout cancels the NiFi replace request.
+	Cancel bool `json:"cancel,omitempty"`
+}
+
+// RolloutReadiness gates a completed rollout on component health.
+type RolloutReadiness struct {
+	// RequireValidComponents waits until the deployed group reports no more than
+	// maxUnavailable invalid components before the rollout is considered ready.
+	// +kubebuilder:default=true
+	RequireValidComponents *bool `json:"requireValidComponents,omitempty"`
+	// RequireEnabledControllerServices enables and waits for the deployed group's
+	// controller services before evaluating component validity.
+	// +kubebuilder:default=true
+	RequireEnabledControllerServices *bool `json:"requireEnabledControllerServices,omitempty"`
+	// MaxUnavailable is the number of invalid components tolerated while still treating
+	// the rollout as ready.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:default=0
+	MaxUnavailable int32 `json:"maxUnavailable,omitempty"`
+	// TimeoutSeconds bounds how long to wait for readiness before failing the rollout.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:default=300
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
+}
+
+// QueueDrainPolicy drains queues before a disruptive rollout step.
+type QueueDrainPolicy struct {
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled,omitempty"`
+	// TimeoutSeconds bounds how long to wait for queues to drain.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:default=60
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
+	// OnTimeout selects the behaviour when queues have not drained in time: Fail aborts
+	// the rollout, Drop discards the remaining flow files, Proceed continues regardless.
+	// +kubebuilder:validation:Enum=Fail;Drop;Proceed
+	// +kubebuilder:default=Fail
+	OnTimeout string `json:"onTimeout,omitempty"`
+}
+
+// RolloutRetryPolicy bounds automatic re-attempts of a failed rollout.
+type RolloutRetryPolicy struct {
+	// MaxRetries is the number of automatic re-attempts before the rollout is left failed
+	// pending a spec change. Zero disables automatic retries.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:default=0
+	MaxRetries int32 `json:"maxRetries,omitempty"`
 }
 
 // BlueGreenStrategy configures transactional BlueGreen rollouts. A candidate (green)
@@ -124,6 +180,10 @@ type FlowRolloutStatus struct {
 	PreviousVersion string      `json:"previousVersion,omitempty"`
 	PreviousDigest  string      `json:"previousDigest,omitempty"`
 	StartedAt       metav1.Time `json:"startedAt,omitempty"`
+	// ReadinessStartedAt marks when the post-rollout readiness wait began.
+	ReadinessStartedAt *metav1.Time `json:"readinessStartedAt,omitempty"`
+	// RetryCount is the number of automatic re-attempts performed for this rollout.
+	RetryCount int32 `json:"retryCount,omitempty"`
 	// BlueGreen carries the transactional BlueGreen rollout state between reconciles.
 	BlueGreen *BlueGreenRolloutStatus `json:"blueGreen,omitempty"`
 }

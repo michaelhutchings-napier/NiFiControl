@@ -229,6 +229,16 @@ func (r *NiFiFlowDeploymentReconciler) reconcileSnapshotFlowDeployment(ctx conte
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
+	// Cancel an in-flight rollout on request before any further rollout work.
+	if deployment.Spec.Rollout.Cancel && deployment.Status.ActiveRollout != nil {
+		return r.reconcileRolloutCancellation(ctx, deployment, endpoint)
+	}
+
+	// Resume a post-replace readiness wait for an in-place rollout.
+	if active := deployment.Status.ActiveRollout; active != nil && active.Operation == "Rollout" && active.Phase == bgPhaseAwaitingReadiness {
+		return r.reconcileRolloutReadiness(ctx, deployment, endpoint, version, digest, snapshot)
+	}
+
 	if pending := deployment.Status.LatestReplaceRequest; pending != nil && pending.ID != "" {
 		if pending.FailureReason != "" {
 			return r.handleFlowReplaceFailure(ctx, deployment, endpoint, flowSnapshots, processGroups, pending, fmt.Errorf("%s", pending.FailureReason))
@@ -439,30 +449,12 @@ func (r *NiFiFlowDeploymentReconciler) completeFlowReplace(ctx context.Context, 
 		}
 		return ctrl.Result{}, r.markSnapshotDeploymentRolledBack(ctx, deployment, current.Revision.Version, history, rollbackSnapshot)
 	}
-	mode := resolvedDriftPolicy(deployment)
-	desiredContentDigest := ""
-	liveContentDigest := ""
-	differences := []string{}
-	if mode == nifiv1alpha1.DriftPolicyIgnore {
-		_, desiredContentDigest, err = normalizeFlowSnapshot(targetSnapshot, deployment.Spec.DriftPolicy.IgnoreFields)
-		liveContentDigest = desiredContentDigest
-	} else {
-		liveSnapshot, downloadErr := r.snapshotReader().DownloadProcessGroup(ctx, endpoint, deployment.Status.ProcessGroupID)
-		if downloadErr != nil {
-			return r.snapshotDeploymentFailed(ctx, deployment, "DriftCheckFailed", fmt.Errorf("download replaced NiFi flow: %w", downloadErr))
-		}
-		desiredContentDigest, liveContentDigest, differences, err = compareFlowSnapshots(targetSnapshot, liveSnapshot, deployment.Spec.DriftPolicy.IgnoreFields)
+	// Gate marking the rollout in sync on the deployed flow becoming healthy.
+	if readinessGateEnabled(deployment) {
+		return r.enterRolloutReadiness(ctx, deployment, status.TargetVersion, status.TargetDigest)
 	}
-	if err != nil {
-		return r.snapshotDeploymentFailed(ctx, deployment, "DriftCheckFailed", err)
-	}
-	if err := r.markSnapshotDeploymentInSync(ctx, deployment, deployment.Status.ProcessGroupID, current.Revision.Version, status.TargetVersion, status.TargetDigest, desiredContentDigest, liveContentDigest, targetSnapshot); err != nil {
-		return ctrl.Result{}, err
-	}
-	if len(differences) > 0 && mode != nifiv1alpha1.DriftPolicyIgnore {
-		if err := r.markSnapshotDeploymentDrift(ctx, deployment, desiredContentDigest, liveContentDigest, differences, mode); err != nil {
-			return ctrl.Result{}, err
-		}
+	if result, err := r.finalizeSuccessfulRollout(ctx, deployment, endpoint, deployment.Status.ProcessGroupID, status.TargetVersion, status.TargetDigest, targetSnapshot); err != nil {
+		return result, err
 	}
 	return rolloutRequeue(), nil
 }
@@ -531,6 +523,10 @@ func (r *NiFiFlowDeploymentReconciler) handleFlowReplaceFailure(
 		deployment.Status.LatestReplaceRequest = failed
 		deployment.Status.ActiveRollout = nil
 		return r.snapshotDeploymentFailed(ctx, deployment, "RollbackFailed", fmt.Errorf("automatic rollback failed: %w", failure))
+	}
+	// Re-attempt the rollout before falling back to rollback when retries remain.
+	if retried, result, err := r.retryRolloutIfAllowed(ctx, deployment, failure.Error()); retried {
+		return result, err
 	}
 	if !deployment.Spec.Rollback.Enabled {
 		deployment.Status.LatestReplaceRequest = failed
