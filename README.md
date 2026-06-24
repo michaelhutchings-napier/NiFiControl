@@ -129,8 +129,12 @@ before comparison. `Ignore` skips live comparison, `Warn` reports differences,
 `StopAllThenApply` stops the whole group and starts it after replacement.
 `ChangedOnly` and `Rolling` use NiFi's native differential asynchronous replace
 workflow, which stops and restarts affected components in dependency order.
-`BlueGreen` is rejected until external connection switching is implemented;
-the operator does not approximate it in a way that could silently drop traffic.
+`BlueGreen` deploys the new version as a separate candidate process group, gates it
+on readiness, and transactionally switches the external boundary connections from the
+live group's ports to the candidate's matching ports before retiring the old group;
+a failed switch is rolled back to the original group. See
+[docs/bluegreen-rollout.md](docs/bluegreen-rollout.md) for the lifecycle, port-matching
+rules, queue-drain policy, and limitations.
 
 ## Module
 

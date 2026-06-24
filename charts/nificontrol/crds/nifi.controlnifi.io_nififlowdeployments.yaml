@@ -130,6 +130,44 @@ spec:
                 type: object
               rollout:
                 properties:
+                  blueGreen:
+                    description: |-
+                      BlueGreen tunes the transactional BlueGreen rollout. It is ignored unless
+                      strategy is BlueGreen.
+                    properties:
+                      drainTimeoutSeconds:
+                        default: 120
+                        description: |-
+                          DrainTimeoutSeconds bounds how long the operator waits for a boundary connection
+                          queue to drain before applying onDrainTimeout.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      onDrainTimeout:
+                        default: Fail
+                        description: |-
+                          OnDrainTimeout selects the behaviour when a boundary queue has not drained within
+                          drainTimeoutSeconds: Fail aborts and switches traffic back to blue; Drop discards
+                          the remaining flow files and proceeds.
+                        enum:
+                        - Fail
+                        - Drop
+                        type: string
+                      readinessTimeoutSeconds:
+                        default: 300
+                        description: |-
+                          ReadinessTimeoutSeconds bounds how long to wait for the candidate to become valid
+                          (no invalid components) before failing the rollout.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      requireEnabledControllerServices:
+                        default: true
+                        description: |-
+                          RequireEnabledControllerServices enables and waits for the candidate's controller
+                          services before validation.
+                        type: boolean
+                    type: object
                   strategy:
                     default: ApplyOnly
                     enum:
@@ -558,6 +596,71 @@ spec:
             properties:
               activeRollout:
                 properties:
+                  blueGreen:
+                    description: BlueGreen carries the transactional BlueGreen rollout
+                      state between reconciles.
+                    properties:
+                      blueProcessGroupId:
+                        description: BlueProcessGroupID is the live process group
+                          being replaced.
+                        type: string
+                      candidateProcessGroupId:
+                        description: CandidateProcessGroupID is the green process
+                          group being promoted.
+                        type: string
+                      externalConnections:
+                        description: |-
+                          ExternalConnections is the recorded boundary connection inventory used to switch
+                          traffic to green and, on failure, switch it back to blue.
+                        items:
+                          description: |-
+                            ExternalConnectionRecord captures a boundary connection crossing the deployment's
+                            process-group edge so it can be recreated against the green ports and, on rollback,
+                            restored against the blue ports.
+                          properties:
+                            definition:
+                              description: Definition is the JSON connection component
+                                recorded for faithful recreation.
+                              type: string
+                            direction:
+                              description: |-
+                                Direction is Inbound (external source -> deployment input port) or Outbound
+                                (deployment output port -> external destination).
+                              type: string
+                            drainStartedAt:
+                              description: |-
+                                DrainStartedAt marks when draining of this connection began, bounding the wait
+                                against the configured drain timeout.
+                              format: date-time
+                              type: string
+                            greenConnectionId:
+                              description: GreenConnectionID is the id of the connection
+                                created against the green port.
+                              type: string
+                            originalId:
+                              description: OriginalID is the connection id as it existed
+                                against blue.
+                              type: string
+                            portName:
+                              description: |-
+                                PortName is the deployment-side input or output port name used to match blue and
+                                green ports.
+                              type: string
+                            switched:
+                              description: Switched indicates the connection has been
+                                re-pointed to the green port.
+                              type: boolean
+                          type: object
+                        type: array
+                      inventoried:
+                        description: Inventoried marks that the external boundary
+                          connections have been recorded.
+                        type: boolean
+                      parentProcessGroupId:
+                        description: ParentProcessGroupID is the parent that owns
+                          the boundary connections.
+                        type: string
+                    type: object
                   operation:
                     type: string
                   phase:
@@ -729,6 +832,11 @@ spec:
                 type: string
               ready:
                 type: boolean
+              retiringProcessGroupId:
+                description: |-
+                  RetiringProcessGroupID is a promoted-away (blue) process group kept for one
+                  reconcile after a BlueGreen switch, then deleted.
+                type: string
               revision:
                 properties:
                   clientId:

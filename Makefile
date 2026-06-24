@@ -55,3 +55,7 @@ integration-nifi:
 .PHONY: integration-nifi-tls
 integration-nifi-tls:
 	./hack/test-nifi-2.10-tls.sh
+
+.PHONY: integration-bluegreen-kind
+integration-bluegreen-kind:
+	./hack/test-bluegreen-kind.sh

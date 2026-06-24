@@ -47,9 +47,6 @@ func ensureActiveFlowRollout(deployment *nifiv1alpha1.NiFiFlowDeployment, versio
 
 func (r *NiFiFlowDeploymentReconciler) prepareFlowRollout(ctx context.Context, deployment *nifiv1alpha1.NiFiFlowDeployment, endpoint string, version string, digest string) (bool, error) {
 	active := ensureActiveFlowRollout(deployment, version, digest, "Rollout")
-	if active.Strategy == "BlueGreen" {
-		return false, fmt.Errorf("BlueGreen rollout requires external connection switching, which is not implemented")
-	}
 	if active.Phase != "Preparing" {
 		return true, nil
 	}

@@ -1,0 +1,34 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiFlowDeployment
+metadata:
+  name: payments-bluegreen
+spec:
+  clusterRef:
+    name: production
+  source:
+    bundleRef:
+      name: payments
+    version: 2.0.0
+  target:
+    parentProcessGroupRef:
+      root: true
+    processGroupName: payments-release
+  parameterContextRef:
+    name: payments-prod
+  # Transactional BlueGreen: a green candidate is deployed beside the live group, gated on
+  # readiness, and the external boundary connections are switched from blue's ports to
+  # green's matching ports (matched by name) before blue is retired. Inbound boundary
+  # sources must be a processor or port so they can be stopped while the queue drains.
+  rollout:
+    strategy: BlueGreen
+    blueGreen:
+      # Wait up to two minutes for each boundary queue to drain before applying onDrainTimeout.
+      drainTimeoutSeconds: 120
+      # Fail switches traffic back to blue if a queue will not drain; Drop discards it and proceeds.
+      onDrainTimeout: Fail
+      # Bound how long to wait for the candidate to report no invalid components.
+      readinessTimeoutSeconds: 300
+      # Enable and wait for the candidate's controller services before validating.
+      requireEnabledControllerServices: true
+  driftPolicy:
+    mode: Warn

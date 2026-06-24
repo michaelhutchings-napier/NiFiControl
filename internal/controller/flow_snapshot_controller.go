@@ -221,6 +221,14 @@ func (r *NiFiFlowDeploymentReconciler) reconcileSnapshotFlowDeployment(ctx conte
 		processGroups = nifi.HTTPProcessGroupClient{}
 	}
 
+	// Retire a process group promoted away by a BlueGreen switch one reconcile earlier.
+	if deployment.Status.RetiringProcessGroupID != "" {
+		if err := r.retireBlueProcessGroup(ctx, deployment, endpoint); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+
 	if pending := deployment.Status.LatestReplaceRequest; pending != nil && pending.ID != "" {
 		if pending.FailureReason != "" {
 			return r.handleFlowReplaceFailure(ctx, deployment, endpoint, flowSnapshots, processGroups, pending, fmt.Errorf("%s", pending.FailureReason))
@@ -315,6 +323,12 @@ func (r *NiFiFlowDeploymentReconciler) reconcileSnapshotFlowDeployment(ctx conte
 			}
 			return rolloutRequeue(), nil
 		}
+	}
+
+	// Transactional BlueGreen deploys a candidate beside the live group and switches the
+	// external boundary connections, rather than replacing the live group's contents.
+	if resolvedRolloutStrategy(deployment) == "BlueGreen" {
+		return r.reconcileBlueGreenRollout(ctx, deployment, endpoint, parentID, snapshot, version, digest)
 	}
 
 	prepared, err := r.prepareFlowRollout(ctx, deployment, endpoint, version, digest)

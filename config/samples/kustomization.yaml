@@ -11,6 +11,7 @@ resources:
   - nifi_v1alpha1_nificontrollerservice.yaml
   - nifi_v1alpha1_nififlowbundle.yaml
   - nifi_v1alpha1_nififlowdeployment.yaml
+  - nifi_v1alpha1_nififlowdeployment_bluegreen.yaml
   - nifi_v1alpha1_nifiprocessor.yaml
   - nifi_v1alpha1_nifiinputport.yaml
   - nifi_v1alpha1_nifioutputport.yaml

@@ -2,8 +2,6 @@ package controller
 
 import (
 	"testing"
-
-	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 )
 
 func TestCompareFlowSnapshotsIgnoresMetadataAndComponentOrder(t *testing.T) {
@@ -50,13 +48,6 @@ func TestCompareFlowSnapshotsReportsAndIgnoresConfiguredDrift(t *testing.T) {
 	}
 }
 
-func TestBlueGreenRolloutIsRejectedBeforeMutation(t *testing.T) {
-	deployment := &nifiv1alpha1.NiFiFlowDeployment{
-		Spec:   nifiv1alpha1.NiFiFlowDeploymentSpec{Rollout: nifiv1alpha1.RolloutStrategy{Strategy: "BlueGreen"}},
-		Status: nifiv1alpha1.NiFiFlowDeploymentStatus{ProcessGroupID: "pg-1"},
-	}
-	prepared, err := (&NiFiFlowDeploymentReconciler{}).prepareFlowRollout(t.Context(), deployment, "https://nifi.example.com", "v2", "sha256:new")
-	if err == nil || prepared {
-		t.Fatalf("prepared/error = %v/%v, want explicit rejection", prepared, err)
-	}
-}
+// BlueGreen rollouts are now handled by the transactional state machine and are routed
+// away from the in-place replace path before prepareFlowRollout is reached. The
+// end-to-end behaviour is covered in flow_deployment_bluegreen_test.go.

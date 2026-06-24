@@ -3,6 +3,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
@@ -1320,6 +1322,7 @@ type NiFiFlowDeploymentReconciler struct {
 	FlowSnapshotClient    nifi.FlowSnapshotClient
 	FlowSnapshotReader    nifi.FlowSnapshotReader
 	ProcessGroupScheduler nifi.ProcessGroupScheduler
+	BlueGreenClient       nifi.BlueGreenClient
 	ArtifactResolver      flowartifact.Resolver
 }
 
@@ -3822,7 +3825,7 @@ func desiredConnection(ctx context.Context, c client.Client, connection *nifiv1a
 		Source:                        source,
 		Destination:                   destination,
 		SelectedRelationships:         connection.Spec.SelectedRelationships,
-		BackPressureObjectThreshold:   connection.Spec.BackPressureObjectThreshold,
+		BackPressureObjectThreshold:   parseBackPressureObjectThreshold(connection.Spec.BackPressureObjectThreshold),
 		BackPressureDataSizeThreshold: connection.Spec.BackPressureDataSizeThreshold,
 		FlowFileExpiration:            connection.Spec.FlowFileExpiration,
 		Prioritizers:                  connection.Spec.Prioritizers,
@@ -3900,6 +3903,21 @@ func nifiConnectableType(connectableType nifiv1alpha1.ConnectableType) string {
 	default:
 		return ""
 	}
+}
+
+// parseBackPressureObjectThreshold converts the connection's string spec value to the
+// numeric count NiFi expects. An empty or unparseable value yields 0, which omitempty
+// drops so NiFi applies its default threshold.
+func parseBackPressureObjectThreshold(value string) int64 {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return parsed
 }
 
 func connectionEntityID(entity nifi.ConnectionEntity) string {

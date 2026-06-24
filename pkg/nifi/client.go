@@ -176,12 +176,18 @@ type HTTPConnectionClient struct {
 }
 
 type Revision struct {
-	Version int64 `json:"version,omitempty"`
+	// Version must be serialized even when zero: NiFi requires an explicit "version": 0
+	// when creating a new component, so omitempty must not drop it.
+	Version int64 `json:"version"`
 }
 
 type Position struct {
-	X float64 `json:"x,omitempty"`
-	Y float64 `json:"y,omitempty"`
+	// X and Y must be serialized even when zero: NiFi rejects a position that omits a
+	// coordinate ("The x and y coordinate of the proposed position must be specified"),
+	// so omitempty must not drop a 0 value. A component with no position uses a nil
+	// *Position, which is omitted entirely.
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
 }
 
 type ComponentReference struct {
@@ -255,6 +261,12 @@ type ProcessGroupEntity struct {
 	ID        string                `json:"id,omitempty"`
 	Revision  Revision              `json:"revision,omitempty"`
 	Component ProcessGroupComponent `json:"component,omitempty"`
+	// Aggregate component counts reported by NiFi for the group (recursive). Used by
+	// BlueGreen readiness gating.
+	RunningCount  int32 `json:"runningCount,omitempty"`
+	StoppedCount  int32 `json:"stoppedCount,omitempty"`
+	InvalidCount  int32 `json:"invalidCount,omitempty"`
+	DisabledCount int32 `json:"disabledCount,omitempty"`
 }
 
 type ProcessGroupComponent struct {
@@ -385,6 +397,8 @@ type PortComponent struct {
 	Position                         *Position `json:"position,omitempty"`
 	State                            string    `json:"state,omitempty"`
 	ConcurrentlySchedulableTaskCount int32     `json:"concurrentlySchedulableTaskCount,omitempty"`
+	ValidationStatus                 string    `json:"validationStatus,omitempty"`
+	ValidationErrors                 []string  `json:"validationErrors,omitempty"`
 }
 
 type ConnectionEntity struct {
@@ -394,18 +408,19 @@ type ConnectionEntity struct {
 }
 
 type ConnectionComponent struct {
-	ID                            string      `json:"id,omitempty"`
-	ParentGroupID                 string      `json:"parentGroupId,omitempty"`
-	Source                        Connectable `json:"source,omitempty"`
-	Destination                   Connectable `json:"destination,omitempty"`
-	SelectedRelationships         []string    `json:"selectedRelationships,omitempty"`
-	BackPressureObjectThreshold   string      `json:"backPressureObjectThreshold,omitempty"`
-	BackPressureDataSizeThreshold string      `json:"backPressureDataSizeThreshold,omitempty"`
-	FlowFileExpiration            string      `json:"flowFileExpiration,omitempty"`
-	Prioritizers                  []string    `json:"prioritizers,omitempty"`
-	Bends                         []Position  `json:"bends,omitempty"`
-	LoadBalanceStrategy           string      `json:"loadBalanceStrategy,omitempty"`
-	LoadBalancePartitionAttribute string      `json:"loadBalancePartitionAttribute,omitempty"`
+	ID                    string      `json:"id,omitempty"`
+	ParentGroupID         string      `json:"parentGroupId,omitempty"`
+	Source                Connectable `json:"source,omitempty"`
+	Destination           Connectable `json:"destination,omitempty"`
+	SelectedRelationships []string    `json:"selectedRelationships,omitempty"`
+	// BackPressureObjectThreshold is a count; NiFi serializes it as a JSON number.
+	BackPressureObjectThreshold   int64      `json:"backPressureObjectThreshold,omitempty"`
+	BackPressureDataSizeThreshold string     `json:"backPressureDataSizeThreshold,omitempty"`
+	FlowFileExpiration            string     `json:"flowFileExpiration,omitempty"`
+	Prioritizers                  []string   `json:"prioritizers,omitempty"`
+	Bends                         []Position `json:"bends,omitempty"`
+	LoadBalanceStrategy           string     `json:"loadBalanceStrategy,omitempty"`
+	LoadBalancePartitionAttribute string     `json:"loadBalancePartitionAttribute,omitempty"`
 }
 
 type Connectable struct {
