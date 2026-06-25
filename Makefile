@@ -67,3 +67,7 @@ integration-offload-kind:
 .PHONY: integration-nodegroups-kind
 integration-nodegroups-kind:
 	./hack/test-nodegroups-kind.sh
+
+.PHONY: integration-hpa-kind
+integration-hpa-kind:
+	./hack/test-hpa-kind.sh
