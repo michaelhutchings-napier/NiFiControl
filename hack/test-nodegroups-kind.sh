@@ -11,11 +11,8 @@ set -euo pipefail
 cluster="${KIND_CLUSTER:-nificontrol-nodegroups}"
 ctx="kind-${cluster}"
 namespace="nifi-nodegroups"
-local_port="${NIFI_INTEGRATION_PORT:-18082}"
-pf_pid=""
 
 cleanup() {
-  [ -n "${pf_pid}" ] && kill "${pf_pid}" >/dev/null 2>&1 || true
   if [ "${KIND_DELETE:-0}" = "1" ]; then
     kind delete cluster --name "${cluster}" >/dev/null 2>&1 || true
   fi
@@ -75,9 +72,6 @@ spec:
               # cluster API can proxy between nodes. Binding 0.0.0.0 makes nodes report 0.0.0.0.
               prop_replace nifi.web.http.host "\${POD_NAME}.nifi-headless.${namespace}.svc"
               prop_replace nifi.web.http.port 8080
-              # Allow the port-forward Host header (the test reaches NiFi via 127.0.0.1:<port>),
-              # since binding the FQDN makes NiFi enforce the Host against its web/proxy hosts.
-              prop_replace nifi.web.proxy.host "127.0.0.1:${local_port},localhost:${local_port},127.0.0.1,localhost"
               prop_replace nifi.web.https.host ""
               prop_replace nifi.web.https.port ""
               prop_replace nifi.security.keystore ""
@@ -146,6 +140,7 @@ spec:
   selector: {app: nifi}
   ports: [{name: web, port: 8080, targetPort: web}]
 YAML
+echo "---"
 render_pool nifi primary
 echo "---"
 render_pool nifi-workers workers
@@ -155,21 +150,27 @@ echo "Waiting for both pools to become ready (the first run also pulls the ~2GB 
 kubectl --context "${ctx}" -n "${namespace}" rollout status statefulset/nifi --timeout=900s
 kubectl --context "${ctx}" -n "${namespace}" rollout status statefulset/nifi-workers --timeout=900s
 
-kubectl --context "${ctx}" -n "${namespace}" port-forward svc/nifi "${local_port}:8080" >/dev/null 2>&1 &
-pf_pid=$!
-
-base_uri="http://127.0.0.1:${local_port}"
+# Verify from inside the cluster via the node's headless DNS name. Clustered nodes bind that
+# FQDN (so NiFi advertises a per-node address) rather than 0.0.0.0, which means
+# `kubectl port-forward` (it dials 127.0.0.1 inside the pod) cannot reach NiFi — so the check
+# runs with `kubectl exec` against the FQDN, exactly as a peer node or the operator does.
+fqdn="nifi-0.nifi-headless.${namespace}.svc"
 echo "Waiting for both pools to join one cluster..."
 for _ in $(seq 1 90); do
-  count="$(curl -fsS "${base_uri}/nifi-api/controller/cluster" 2>/dev/null | grep -o '"status":"CONNECTED"' | wc -l || true)"
-  if [ "${count}" -ge 2 ]; then
-    echo "Cluster formed with ${count} connected nodes across both pools."
-    NIFI_API_URI="${base_uri}" go test -count=1 -tags=integration ./internal/controller -run NodeGroupFormsOneCluster -v
+  body="$(kubectl --context "${ctx}" -n "${namespace}" exec nifi-0 -c nifi -- \
+    curl -fsS "http://${fqdn}:8080/nifi-api/controller/cluster" 2>/dev/null || true)"
+  connected="$(printf '%s' "${body}" | grep -o '"status":"CONNECTED"' | wc -l)"
+  if [ "${connected}" -ge 2 ] \
+    && printf '%s' "${body}" | grep -q '"address":"nifi-0\.nifi-headless' \
+    && printf '%s' "${body}" | grep -q '"address":"nifi-workers-0\.nifi-headless'; then
+    echo "Cluster formed across both pools with ${connected} connected nodes:"
+    printf '%s' "${body}" | grep -o '"address":"[^"]*"'
+    echo "PASS: node groups joined one NiFi cluster with per-node FQDN addresses."
     exit 0
   fi
   sleep 5
 done
 
-echo "Pools did not join one cluster with 2 connected nodes" >&2
+echo "Pools did not join one cluster with 2 connected nodes from both pools" >&2
 kubectl --context "${ctx}" -n "${namespace}" get pods -o wide || true
 exit 1
