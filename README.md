@@ -14,6 +14,10 @@ services, and high-level flow deployments.
   [docs/production-cluster.md](docs/production-cluster.md). Scaling a clustered
   cluster down gracefully offloads each removed node's data through the NiFi cluster
   API before its pod is deleted; see [docs/node-lifecycle.md](docs/node-lifecycle.md).
+- Managed clusters expose a Kubernetes scale subresource, so they can be resized with
+  `kubectl scale`, a HorizontalPodAutoscaler, or KEDA (recommended, driven by queue
+  depth). Scale-downs run the graceful offload above. See
+  [docs/autoscaling.md](docs/autoscaling.md).
 - CRDs, RBAC, samples, and a controller-runtime manager are available.
 - Registry clients, parameter contexts, process groups, controller services,
   processors, ports, connections, funnels, and labels reconcile against NiFi.

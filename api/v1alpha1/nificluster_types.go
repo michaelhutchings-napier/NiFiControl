@@ -374,10 +374,17 @@ type NiFiClusterStatus struct {
 	Workload           *NiFiClusterWorkloadStatus  `json:"workload,omitempty"`
 	TLS                *NiFiClusterTLSStatus       `json:"tls,omitempty"`
 	ScaleDown          *NiFiClusterScaleDownStatus `json:"scaleDown,omitempty"`
+	// Replicas is the current number of ready NiFi nodes. It backs the scale subresource so
+	// HorizontalPodAutoscaler/KEDA can read the cluster's current size.
+	Replicas int32 `json:"replicas,omitempty"`
+	// Selector is the serialized label selector matching the managed NiFi pods. It backs the
+	// scale subresource so per-pod metric autoscalers can find the pods.
+	Selector string `json:"selector,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.selector
 type NiFiCluster struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

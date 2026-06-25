@@ -1,0 +1,29 @@
+# Autoscale a managed NiFiCluster with a plain HorizontalPodAutoscaler.
+# The HPA targets the NiFiCluster scale subresource, so scale-downs run the operator's
+# graceful node offload. Prefer KEDA + a queue-depth metric over CPU for dataflow load.
+# See docs/autoscaling.md.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: production-nifi
+spec:
+  scaleTargetRef:
+    apiVersion: nifi.controlnifi.io/v1alpha1
+    kind: NiFiCluster
+    name: production
+  minReplicas: 3
+  maxReplicas: 9
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 300
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

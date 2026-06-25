@@ -2062,6 +2062,12 @@ spec:
                 type: integer
               ready:
                 type: boolean
+              replicas:
+                description: |-
+                  Replicas is the current number of ready NiFi nodes. It backs the scale subresource so
+                  HorizontalPodAutoscaler/KEDA can read the cluster's current size.
+                format: int32
+                type: integer
               revision:
                 properties:
                   clientId:
@@ -2090,6 +2096,11 @@ spec:
                     format: date-time
                     type: string
                 type: object
+              selector:
+                description: |-
+                  Selector is the serialized label selector matching the managed NiFi pods. It backs the
+                  scale subresource so per-pod metric autoscalers can find the pods.
+                type: string
               sync:
                 properties:
                   lastAttemptTime:
@@ -2157,4 +2168,8 @@ spec:
     served: true
     storage: true
     subresources:
+      scale:
+        labelSelectorPath: .status.selector
+        specReplicasPath: .spec.replicas
+        statusReplicasPath: .status.replicas
       status: {}

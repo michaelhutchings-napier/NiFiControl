@@ -1,0 +1,17 @@
+# Scrape a managed NiFiCluster's Prometheus metrics into Prometheus (prometheus-operator).
+# This example targets an HTTP (development) cluster; a secure (mTLS) cluster requires the
+# scraper to present the operator client certificate. The managed Service is named
+# "<cluster>-nifi" and carries the labels below. See docs/autoscaling.md.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: production-nifi
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: apache-nifi
+      nifi.controlnifi.io/cluster: production-nifi
+  endpoints:
+    - port: web
+      path: /nifi-api/flow/metrics/prometheus
+      interval: 30s

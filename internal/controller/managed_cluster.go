@@ -17,6 +17,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
@@ -651,8 +652,17 @@ func markManagedClusterReady(ctx context.Context, c client.Client, cluster *nifi
 	cluster.Status.CommonStatus.SetCondition(nifiv1alpha1.ConditionClusterReachable, metav1.ConditionTrue, "ClusterReachable", "The managed NiFi API endpoint is reachable.", cluster.Generation)
 	cluster.Status.Endpoint = endpoint
 	cluster.Status.Workload = workload
+	setManagedClusterScaleStatus(cluster, workload)
 	cluster.Status.Sync.LastError = ""
 	return c.Status().Update(ctx, cluster)
+}
+
+// setManagedClusterScaleStatus populates the scale subresource status fields.
+func setManagedClusterScaleStatus(cluster *nifiv1alpha1.NiFiCluster, workload *nifiv1alpha1.NiFiClusterWorkloadStatus) {
+	cluster.Status.Selector = managedClusterScaleSelector(cluster)
+	if workload != nil {
+		cluster.Status.Replicas = workload.ReadyReplicas
+	}
 }
 
 func markManagedClusterNotReady(ctx context.Context, c client.Client, cluster *nifiv1alpha1.NiFiCluster, reason string, message string, endpoint string, workload *nifiv1alpha1.NiFiClusterWorkloadStatus) error {
@@ -662,6 +672,7 @@ func markManagedClusterNotReady(ctx context.Context, c client.Client, cluster *n
 	cluster.Status.CommonStatus.SetCondition(nifiv1alpha1.ConditionClusterReachable, metav1.ConditionFalse, reason, message, cluster.Generation)
 	cluster.Status.Endpoint = endpoint
 	cluster.Status.Workload = workload
+	setManagedClusterScaleStatus(cluster, workload)
 	cluster.Status.Sync.LastError = message
 	return c.Status().Update(ctx, cluster)
 }
@@ -671,6 +682,13 @@ func managedClusterStatusNeedsUpdate(cluster *nifiv1alpha1.NiFiCluster, ready bo
 		return true
 	}
 	if !managedWorkloadStatusEqual(cluster.Status.Workload, workload) {
+		return true
+	}
+	// Keep the scale subresource fields fresh (selector is static; replicas tracks readiness).
+	if cluster.Status.Selector != managedClusterScaleSelector(cluster) {
+		return true
+	}
+	if workload != nil && cluster.Status.Replicas != workload.ReadyReplicas {
 		return true
 	}
 	for _, condition := range cluster.Status.Conditions {
@@ -731,9 +749,15 @@ func managedClusterLabels(cluster *nifiv1alpha1.NiFiCluster) map[string]string {
 }
 
 func managedClusterPodLabels(cluster *nifiv1alpha1.NiFiCluster) map[string]string {
-	labels := managedClusterLabels(cluster)
-	labels["app.kubernetes.io/component"] = "nifi-node"
-	return labels
+	podLabels := managedClusterLabels(cluster)
+	podLabels["app.kubernetes.io/component"] = "nifi-node"
+	return podLabels
+}
+
+// managedClusterScaleSelector returns the serialized label selector matching the managed
+// NiFi pods, used for the NiFiCluster scale subresource.
+func managedClusterScaleSelector(cluster *nifiv1alpha1.NiFiCluster) string {
+	return labels.SelectorFromSet(managedClusterPodLabels(cluster)).String()
 }
 
 func managedClusterAnnotations(cluster *nifiv1alpha1.NiFiCluster) map[string]string {

@@ -200,3 +200,29 @@ func TestManagedClusterReconcileCreatesPDBAndIngress(t *testing.T) {
 		t.Fatalf("Ingress not created by reconcile: %v", err)
 	}
 }
+
+func TestManagedClusterPopulatesScaleSubresourceStatus(t *testing.T) {
+	scheme := managedClusterTestScheme()
+	cluster := hardeningCluster()
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).WithStatusSubresource(&nifiv1alpha1.NiFiCluster{}, &appsv1.StatefulSet{}).Build()
+	r := &NiFiClusterReconciler{Client: k8sClient, Scheme: scheme, ReachabilityChecker: fakeReachabilityChecker{}}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name, Namespace: cluster.Namespace}}
+	// The first reconcile only adds the finalizer; the second populates status.
+	for range 2 {
+		if _, err := r.Reconcile(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	current := &nifiv1alpha1.NiFiCluster{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	want := managedClusterScaleSelector(cluster)
+	if current.Status.Selector != want {
+		t.Fatalf("scale selector = %q, want %q", current.Status.Selector, want)
+	}
+	if !strings.Contains(current.Status.Selector, "app.kubernetes.io/component=nifi-node") {
+		t.Fatalf("scale selector should target NiFi nodes, got %q", current.Status.Selector)
+	}
+}

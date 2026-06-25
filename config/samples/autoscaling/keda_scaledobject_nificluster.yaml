@@ -1,0 +1,31 @@
+# Autoscale a managed NiFiCluster with KEDA, driven by queued-FlowFile depth.
+# Requires KEDA installed in the cluster and NiFi metrics available in Prometheus.
+# KEDA targets the NiFiCluster scale subresource, so scale-downs run the operator's
+# graceful node offload. See docs/autoscaling.md.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: production-nifi
+spec:
+  scaleTargetRef:
+    apiVersion: nifi.controlnifi.io/v1alpha1
+    kind: NiFiCluster
+    name: production
+  minReplicaCount: 3
+  maxReplicaCount: 9
+  cooldownPeriod: 600
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 600
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 300
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring.svc:9090
+        query: sum(nifi_amount_flowfiles_queued)
+        threshold: "10000"
