@@ -41,6 +41,7 @@ prop_replace 'java.arg.3' "-Xmx${NIFI_JVM_HEAP_MAX}" "${nifi_bootstrap_file}"
 uncomment 'nifi.python.command' "${nifi_props_file}"
 prop_replace 'nifi.python.extensions.source.directory.default' "${NIFI_HOME}/python_extensions"
 prop_replace 'nifi.nar.library.autoload.directory' "${NIFI_HOME}/nar_extensions"
+prop_replace 'nifi.sensitive.props.key' "${NIFI_SENSITIVE_PROPS_KEY:-}"
 prop_replace 'nifi.web.http.host' "${NIFI_WEB_HTTP_HOST:-0.0.0.0}"
 prop_replace 'nifi.web.http.port' "${NIFI_WEB_HTTP_PORT:-8080}"
 prop_replace 'nifi.web.proxy.host' "${NIFI_WEB_PROXY_HOST:-}"
@@ -63,6 +64,10 @@ prop_replace 'nifi.cluster.node.protocol.port' "${NIFI_CLUSTER_NODE_PROTOCOL_POR
 prop_replace 'nifi.cluster.load.balance.host' "${NIFI_CLUSTER_LOAD_BALANCE_HOST:-}"
 prop_replace 'nifi.zookeeper.connect.string' "${NIFI_ZK_CONNECT_STRING:-}"
 prop_replace 'nifi.zookeeper.root.node' "${NIFI_ZK_ROOT_NODE:-/nifi}"
+if [ -n "${NIFI_ZK_CONNECT_STRING:-}" ]; then
+  sed -i "s|<property name=\"Connect String\">[^<]*</property>|<property name=\"Connect String\">${NIFI_ZK_CONNECT_STRING}</property>|" "${NIFI_HOME}/conf/state-management.xml"
+  sed -i "s|<property name=\"Root Node\">[^<]*</property>|<property name=\"Root Node\">${NIFI_ZK_ROOT_NODE:-/nifi}</property>|" "${NIFI_HOME}/conf/state-management.xml"
+fi
 prop_replace 'nifi.cluster.flow.election.max.wait.time' "${NIFI_ELECTION_MAX_WAIT:-5 mins}"
 prop_replace 'nifi.cluster.flow.election.max.candidates' "${NIFI_ELECTION_MAX_CANDIDATES:-}"
 exec "${NIFI_HOME}/bin/nifi.sh" run`
@@ -80,6 +85,7 @@ prop_replace 'java.arg.3' "-Xmx${NIFI_JVM_HEAP_MAX}" "${nifi_bootstrap_file}"
 uncomment 'nifi.python.command' "${nifi_props_file}"
 prop_replace 'nifi.python.extensions.source.directory.default' "${NIFI_HOME}/python_extensions"
 prop_replace 'nifi.nar.library.autoload.directory' "${NIFI_HOME}/nar_extensions"
+prop_replace 'nifi.sensitive.props.key' "${NIFI_SENSITIVE_PROPS_KEY:-}"
 prop_replace 'nifi.web.http.host' ''
 prop_replace 'nifi.web.http.port' ''
 prop_replace 'nifi.web.https.host' '0.0.0.0'
@@ -107,6 +113,10 @@ prop_replace 'nifi.cluster.node.protocol.port' "${NIFI_CLUSTER_NODE_PROTOCOL_POR
 prop_replace 'nifi.cluster.load.balance.host' "${NIFI_CLUSTER_LOAD_BALANCE_HOST:-}"
 prop_replace 'nifi.zookeeper.connect.string' "${NIFI_ZK_CONNECT_STRING:-}"
 prop_replace 'nifi.zookeeper.root.node' "${NIFI_ZK_ROOT_NODE:-/nifi}"
+if [ -n "${NIFI_ZK_CONNECT_STRING:-}" ]; then
+  sed -i "s|<property name=\"Connect String\">[^<]*</property>|<property name=\"Connect String\">${NIFI_ZK_CONNECT_STRING}</property>|" "${NIFI_HOME}/conf/state-management.xml"
+  sed -i "s|<property name=\"Root Node\">[^<]*</property>|<property name=\"Root Node\">${NIFI_ZK_ROOT_NODE:-/nifi}</property>|" "${NIFI_HOME}/conf/state-management.xml"
+fi
 prop_replace 'nifi.cluster.flow.election.max.wait.time' "${NIFI_ELECTION_MAX_WAIT:-2 mins}"
 prop_replace 'nifi.cluster.flow.election.max.candidates' "${NIFI_ELECTION_MAX_CANDIDATES:-}"
 cp "${NIFI_CONFIG_DIR}/authorizers.xml" "${NIFI_HOME}/conf/authorizers.xml"
@@ -160,9 +170,43 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 	if err := r.reconcileManagedClusterService(ctx, cluster, true); err != nil {
 		return r.managedClusterReconcileFailed(ctx, cluster, "ServiceReconcileFailed", err)
 	}
-	statefulSet, err := r.reconcileManagedClusterStatefulSet(ctx, cluster, tlsMaterials)
+	if replicas > 1 {
+		if err := r.reconcileSensitivePropsKeySecret(ctx, cluster); err != nil {
+			return r.managedClusterReconcileFailed(ctx, cluster, "SensitivePropsKeyReconcileFailed", err)
+		}
+	}
+
+	endpoint := managedClusterEndpoint(cluster)
+
+	// Determine the replica count the StatefulSet should currently have, gracefully
+	// offloading NiFi nodes through the cluster API before their pods are removed.
+	existing := &appsv1.StatefulSet{}
+	if err := r.Get(ctx, types.NamespacedName{Name: managedClusterResourceName(cluster), Namespace: cluster.Namespace}, existing); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return r.managedClusterReconcileFailed(ctx, cluster, "StatefulSetReconcileFailed", err)
+		}
+		existing = nil
+	}
+	scaleDown, err := r.reconcileManagedClusterScaleDown(ctx, cluster, existing)
+	if err != nil {
+		return r.managedClusterReconcileFailed(ctx, cluster, "ScaleDownFailed", err)
+	}
+
+	statefulSet, err := r.reconcileManagedClusterStatefulSet(ctx, cluster, tlsMaterials, scaleDown.replicas)
 	if err != nil {
 		return r.managedClusterReconcileFailed(ctx, cluster, "StatefulSetReconcileFailed", err)
+	}
+	if scaleDown.active {
+		message := fmt.Sprintf("Gracefully offloading NiFi nodes during scale-down to %d replicas.", replicas)
+		if cluster.Status.ScaleDown != nil && cluster.Status.ScaleDown.NodeAddress != "" {
+			message = fmt.Sprintf("Scaling down: %s node %s.", cluster.Status.ScaleDown.Phase, cluster.Status.ScaleDown.NodeAddress)
+		}
+		if managedClusterStatusNeedsUpdate(cluster, false, endpoint, cluster.Status.Workload, "ScalingDown") {
+			if err := markManagedClusterNotReady(ctx, r.Client, cluster, "ScalingDown", message, endpoint, cluster.Status.Workload); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 	if err := r.reconcileManagedClusterPDB(ctx, cluster); err != nil {
 		return r.managedClusterReconcileFailed(ctx, cluster, "PodDisruptionBudgetReconcileFailed", err)
@@ -171,7 +215,6 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 		return r.managedClusterReconcileFailed(ctx, cluster, "IngressReconcileFailed", err)
 	}
 
-	endpoint := managedClusterEndpoint(cluster)
 	if err := configureClusterHTTPClient(ctx, r.Client, cluster); err != nil {
 		return r.managedClusterReconcileFailed(ctx, cluster, "APIClientConfigurationFailed", err)
 	}
@@ -271,7 +314,7 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterService(ctx context.Conte
 	return err
 }
 
-func (r *NiFiClusterReconciler) reconcileManagedClusterStatefulSet(ctx context.Context, cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials) (*appsv1.StatefulSet, error) {
+func (r *NiFiClusterReconciler) reconcileManagedClusterStatefulSet(ctx context.Context, cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials, replicas int32) (*appsv1.StatefulSet, error) {
 	name := managedClusterResourceName(cluster)
 	statefulSet := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cluster.Namespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, statefulSet, func() error {
@@ -281,6 +324,8 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterStatefulSet(ctx context.C
 		statefulSet.Labels = managedClusterLabels(cluster)
 		statefulSet.Annotations = managedClusterAnnotations(cluster)
 		desired := desiredManagedClusterStatefulSetSpec(cluster, tls)
+		// The effective replica count steps down gradually during a graceful scale-down.
+		desired.Replicas = ptr.To(replicas)
 		if statefulSet.ResourceVersion != "" {
 			desired.ServiceName = statefulSet.Spec.ServiceName
 			if statefulSet.Spec.Selector != nil {
@@ -497,6 +542,14 @@ func managedClusterEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTL
 	if managedClusterReplicas(cluster) > 1 {
 		coordination := cluster.Spec.Coordination
 		environment = append(environment,
+			// NiFi 2.x requires a shared, explicit sensitive properties key on every cluster
+			// node. The operator generates it once into a Secret (see
+			// reconcileSensitivePropsKeySecret) so it is stable across restarts and identical
+			// on all nodes.
+			corev1.EnvVar{Name: "NIFI_SENSITIVE_PROPS_KEY", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: managedClusterSensitivePropsSecretName(cluster)},
+				Key:                  sensitivePropsKeyKey,
+			}}},
 			corev1.EnvVar{Name: "NIFI_CLUSTER_IS_NODE", Value: "true"},
 			corev1.EnvVar{Name: "NIFI_CLUSTER_ADDRESS", Value: fmt.Sprintf("$(POD_NAME).%s.$(POD_NAMESPACE).svc", managedClusterHeadlessServiceName(cluster))},
 			corev1.EnvVar{Name: "NIFI_CLUSTER_NODE_PROTOCOL_PORT", Value: strconv.Itoa(int(defaultClusterPort))},

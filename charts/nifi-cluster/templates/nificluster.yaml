@@ -95,6 +95,10 @@ spec:
     {{- if ne (toString .Values.upgrade.partition) "<nil>" }}
     partition: {{ .Values.upgrade.partition }}
     {{- end }}
+  scaleDown:
+    offloadData: {{ .Values.scaleDown.offloadData }}
+    timeoutSeconds: {{ .Values.scaleDown.timeoutSeconds }}
+    onTimeout: {{ .Values.scaleDown.onTimeout }}
   {{- with .Values.coordination.zookeeperConnectString }}
   coordination:
     zookeeperConnectString: {{ . | quote }}

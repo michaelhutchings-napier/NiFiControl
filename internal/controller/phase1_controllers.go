@@ -85,6 +85,8 @@ type NiFiClusterReconciler struct {
 	client.Client
 	Scheme              *runtime.Scheme
 	ReachabilityChecker nifi.ReachabilityChecker
+	// ClusterNodeClient drives the NiFi cluster API for graceful node offload on scale-down.
+	ClusterNodeClient nifi.ClusterNodeClient
 }
 
 func (r *NiFiClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

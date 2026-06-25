@@ -70,3 +70,9 @@ PodDisruptionBudget and multiple replicas the upgrade preserves availability.
 Because all NiFi nodes in a cluster must run the same version and the flow is migrated on
 startup, take a backup before a major upgrade (flow-configuration backup and persistent
 repository snapshots are covered in a separate sub-milestone).
+
+## Graceful scale-down
+
+Reducing `spec.replicas` on a clustered cluster drains each removed node through NiFi's
+cluster offload API before its pod is deleted, so queued FlowFiles are redistributed rather
+than stranded on a removed node's volume. See [node-lifecycle.md](node-lifecycle.md).

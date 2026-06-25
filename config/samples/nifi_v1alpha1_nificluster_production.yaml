@@ -50,6 +50,11 @@ spec:
   upgrade:
     strategy: RollingUpdate
     minReadySeconds: 30
+  # Gracefully offload each node's data before removing its pod on a scale-down.
+  scaleDown:
+    offloadData: true
+    timeoutSeconds: 600
+    onTimeout: Fail
   deletionPolicy: Orphan
   driftPolicy:
     mode: Reconcile

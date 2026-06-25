@@ -67,6 +67,13 @@ upgrade:
   partition: null
   minReadySeconds: 0
 
+# Gracefully offload NiFi nodes through the cluster API before their pods are removed
+# when replicas is reduced.
+scaleDown:
+  offloadData: true
+  timeoutSeconds: 600
+  onTimeout: Fail           # Fail | Force
+
 # Required when replicas is greater than one. NiFiControl does not provision
 # ZooKeeper in this first managed-cluster release.
 coordination:

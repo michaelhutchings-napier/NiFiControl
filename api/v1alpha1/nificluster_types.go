@@ -44,8 +44,12 @@ type NiFiClusterSpec struct {
 	// NiFi's allowed proxy host and context path accordingly.
 	Ingress *NiFiClusterIngressSpec `json:"ingress,omitempty"`
 	// Upgrade controls how managed NiFi version changes roll out across the StatefulSet.
-	Upgrade       *NiFiClusterUpgradeSpec `json:"upgrade,omitempty"`
-	AdditionalEnv []corev1.EnvVar         `json:"additionalEnv,omitempty"`
+	Upgrade *NiFiClusterUpgradeSpec `json:"upgrade,omitempty"`
+	// ScaleDown controls how managed NiFi nodes are gracefully removed when replicas is
+	// reduced, offloading each node's data through the NiFi cluster API before its pod is
+	// deleted.
+	ScaleDown     *NiFiClusterScaleDownSpec `json:"scaleDown,omitempty"`
+	AdditionalEnv []corev1.EnvVar           `json:"additionalEnv,omitempty"`
 	// +kubebuilder:validation:Enum=Delete;Orphan
 	// +kubebuilder:default=Orphan
 	DeletionPolicy DeletionPolicy       `json:"deletionPolicy,omitempty"`
@@ -203,6 +207,39 @@ type NiFiClusterUpgradeSpec struct {
 	MinReadySeconds int32 `json:"minReadySeconds,omitempty"`
 }
 
+// NiFiClusterScaleDownSpec controls graceful removal of NiFi nodes when replicas is
+// reduced. The operator removes nodes from the highest ordinal down, one at a time:
+// each node is disconnected and offloaded through the NiFi cluster API (redistributing its
+// queued FlowFiles to the remaining nodes) and deleted from the cluster before its pod is
+// removed.
+type NiFiClusterScaleDownSpec struct {
+	// OffloadData drains a node through the NiFi cluster offload API before its pod is
+	// removed. When false, the StatefulSet shrinks immediately and queued FlowFiles on the
+	// removed nodes are left on their persistent volumes.
+	// +kubebuilder:default=true
+	OffloadData *bool `json:"offloadData,omitempty"`
+	// TimeoutSeconds bounds how long to wait for a single node to disconnect and offload
+	// before applying OnTimeout.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=600
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
+	// OnTimeout selects what happens when a node does not finish offloading within
+	// TimeoutSeconds. Fail halts the scale-down and reports an error for operator
+	// intervention; Force removes the node from the cluster and deletes its pod anyway,
+	// which may strand any FlowFiles still queued on the node.
+	// +kubebuilder:validation:Enum=Fail;Force
+	// +kubebuilder:default=Fail
+	OnTimeout ScaleDownTimeoutPolicy `json:"onTimeout,omitempty"`
+}
+
+// ScaleDownTimeoutPolicy selects behaviour when a node offload exceeds its timeout.
+type ScaleDownTimeoutPolicy string
+
+const (
+	ScaleDownTimeoutFail  ScaleDownTimeoutPolicy = "Fail"
+	ScaleDownTimeoutForce ScaleDownTimeoutPolicy = "Force"
+)
+
 // NiFiClusterInternalTLSSpec configures operator-managed HTTPS and mutual TLS for an
 // Internal (operator-managed) NiFi cluster. Exactly one certificate provider must be
 // selected: an existing cert-manager issuerRef, an operator-managed self-signed CA
@@ -319,12 +356,24 @@ type NiFiClusterWorkloadStatus struct {
 	ReadyReplicas   int32  `json:"readyReplicas,omitempty"`
 }
 
+// NiFiClusterScaleDownStatus reports the node currently being offloaded during a graceful
+// scale-down.
+type NiFiClusterScaleDownStatus struct {
+	// NodeAddress is the NiFi cluster address of the node being removed.
+	NodeAddress string `json:"nodeAddress,omitempty"`
+	// Phase is Disconnecting, Offloading, or Removing.
+	Phase string `json:"phase,omitempty"`
+	// StartedAt is when offloading of the current node began (used for the offload timeout).
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+}
+
 type NiFiClusterStatus struct {
 	CommonStatus       `json:",inline"`
-	RootProcessGroupID string                     `json:"rootProcessGroupId,omitempty"`
-	Endpoint           string                     `json:"endpoint,omitempty"`
-	Workload           *NiFiClusterWorkloadStatus `json:"workload,omitempty"`
-	TLS                *NiFiClusterTLSStatus      `json:"tls,omitempty"`
+	RootProcessGroupID string                      `json:"rootProcessGroupId,omitempty"`
+	Endpoint           string                      `json:"endpoint,omitempty"`
+	Workload           *NiFiClusterWorkloadStatus  `json:"workload,omitempty"`
+	TLS                *NiFiClusterTLSStatus       `json:"tls,omitempty"`
+	ScaleDown          *NiFiClusterScaleDownStatus `json:"scaleDown,omitempty"`
 }
 
 // +kubebuilder:object:root=true

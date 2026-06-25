@@ -59,3 +59,7 @@ integration-nifi-tls:
 .PHONY: integration-bluegreen-kind
 integration-bluegreen-kind:
 	./hack/test-bluegreen-kind.sh
+
+.PHONY: integration-offload-kind
+integration-offload-kind:
+	./hack/test-offload-kind.sh
