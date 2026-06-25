@@ -126,6 +126,7 @@ rules:
       - nififunnels
       - nifiinputports
       - nifilabels
+      - nifinodegroups
       - nifioutputports
       - nifiparametercontexts
       - nifiprocessgroups
@@ -155,6 +156,7 @@ rules:
       - nififunnels/finalizers
       - nifiinputports/finalizers
       - nifilabels/finalizers
+      - nifinodegroups/finalizers
       - nifioutputports/finalizers
       - nifiparametercontexts/finalizers
       - nifiprocessgroups/finalizers
@@ -178,6 +180,7 @@ rules:
       - nififunnels/status
       - nifiinputports/status
       - nifilabels/status
+      - nifinodegroups/status
       - nifioutputports/status
       - nifiparametercontexts/status
       - nifiprocessgroups/status

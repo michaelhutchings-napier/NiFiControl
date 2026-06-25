@@ -79,3 +79,21 @@ func TestClusteredEnvironmentInjectsSensitivePropsKey(t *testing.T) {
 		}
 	}
 }
+
+func TestClusteredEnvironmentAdvertisesPodHost(t *testing.T) {
+	// A clustered node must advertise its routable pod DNS name as the web host, because NiFi
+	// reports that as the node's address in /controller/cluster, which the operator matches
+	// when offloading on scale-down. A 0.0.0.0 web host would make every node indistinguishable.
+	cluster := scaleDownCluster(3)
+	wantHost := "$(POD_NAME).production-nifi-headless.$(POD_NAMESPACE).svc"
+	assertEnvironmentValue(t, managedClusterEnvironment(cluster, nil), "NIFI_WEB_HTTP_HOST", wantHost)
+
+	single := scaleDownCluster(1)
+	single.Spec.Coordination = nil
+	assertEnvironmentValue(t, managedClusterEnvironment(single, nil), "NIFI_WEB_HTTP_HOST", "0.0.0.0")
+
+	// The TLS start command honours the advertised host instead of hardcoding 0.0.0.0.
+	if !strings.Contains(managedNiFiStartCommandTLS, `"${NIFI_WEB_HTTPS_HOST:-0.0.0.0}"`) {
+		t.Fatal("TLS start command must set nifi.web.https.host from NIFI_WEB_HTTPS_HOST")
+	}
+}

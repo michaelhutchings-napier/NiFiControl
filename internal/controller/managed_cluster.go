@@ -89,7 +89,7 @@ prop_replace 'nifi.nar.library.autoload.directory' "${NIFI_HOME}/nar_extensions"
 prop_replace 'nifi.sensitive.props.key' "${NIFI_SENSITIVE_PROPS_KEY:-}"
 prop_replace 'nifi.web.http.host' ''
 prop_replace 'nifi.web.http.port' ''
-prop_replace 'nifi.web.https.host' '0.0.0.0'
+prop_replace 'nifi.web.https.host' "${NIFI_WEB_HTTPS_HOST:-0.0.0.0}"
 prop_replace 'nifi.web.https.port' "${NIFI_WEB_HTTPS_PORT}"
 prop_replace 'nifi.web.proxy.host' "${NIFI_WEB_PROXY_HOST}"
 prop_replace 'nifi.web.proxy.context.path' "${NIFI_WEB_PROXY_CONTEXT_PATH:-}"
@@ -403,8 +403,14 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls
 // managedClusterVolumes returns the pod volumes, adding read-only mounts for the TLS
 // Secret and operator-rendered config when internal TLS is enabled.
 func managedClusterVolumes(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials) []corev1.Volume {
+	return nodeVolumes(managedClusterStorageEnabled(cluster), tls)
+}
+
+// nodeVolumes returns the pod volumes for a node pool. When persistent storage is disabled
+// the data directory is an emptyDir; the TLS Secret and config volumes are added when set.
+func nodeVolumes(storageEnabled bool, tls *clusterTLSMaterials) []corev1.Volume {
 	volumes := []corev1.Volume{}
-	if !managedClusterStorageEnabled(cluster) {
+	if !storageEnabled {
 		volumes = append(volumes, corev1.Volume{
 			Name:         managedDataVolume,
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
@@ -459,10 +465,14 @@ func tlsReadinessExecHandler() corev1.ProbeHandler {
 }
 
 func managedClusterDataInitializer(cluster *nifiv1alpha1.NiFiCluster) corev1.Container {
+	return nodeDataInitializer(managedClusterImage(cluster), managedClusterImagePullPolicy(cluster))
+}
+
+func nodeDataInitializer(image string, pullPolicy corev1.PullPolicy) corev1.Container {
 	return corev1.Container{
 		Name:            "initialize-data",
-		Image:           managedClusterImage(cluster),
-		ImagePullPolicy: managedClusterImagePullPolicy(cluster),
+		Image:           image,
+		ImagePullPolicy: pullPolicy,
 		Command: []string{
 			"/bin/bash",
 			"-ec",
@@ -491,37 +501,68 @@ func managedClusterVolumeMounts(tls *clusterTLSMaterials) []corev1.VolumeMount {
 }
 
 func managedClusterVolumeClaim(cluster *nifiv1alpha1.NiFiCluster) corev1.PersistentVolumeClaim {
-	accessModes := cluster.Spec.Storage.AccessModes
+	return nodeVolumeClaim(cluster.Spec.Storage, managedClusterLabels(cluster), managedClusterAnnotations(cluster))
+}
+
+func nodeVolumeClaim(storage nifiv1alpha1.NiFiClusterStorageSpec, labels, annotations map[string]string) corev1.PersistentVolumeClaim {
+	accessModes := storage.AccessModes
 	if len(accessModes) == 0 {
 		accessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+	}
+	size := resource.MustParse("10Gi")
+	if !storage.Size.IsZero() {
+		size = storage.Size.DeepCopy()
 	}
 	return corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        managedDataVolume,
-			Labels:      managedClusterLabels(cluster),
-			Annotations: managedClusterAnnotations(cluster),
+			Labels:      labels,
+			Annotations: annotations,
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes:      accessModes,
-			StorageClassName: cluster.Spec.Storage.StorageClassName,
+			StorageClassName: storage.StorageClassName,
 			VolumeMode:       ptr.To(corev1.PersistentVolumeFilesystem),
 			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceStorage: managedClusterStorageSize(cluster)},
+				Requests: corev1.ResourceList{corev1.ResourceStorage: size},
 			},
 		},
 	}
 }
 
 func managedClusterEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials) []corev1.EnvVar {
+	return nodeEnvironment(cluster, tls, managedClusterHeapInitial(cluster), managedClusterHeapMax(cluster), cluster.Spec.AdditionalEnv, managedClusterReplicas(cluster) > 1)
+}
+
+// nodeEnvironment builds the container environment shared by the cluster's primary pool and
+// any NiFiNodeGroup pool. Heap, additional env, and whether the node joins a cluster vary by
+// pool; ZooKeeper, the sensitive-properties key, proxy host, and the cluster address are
+// shared from the parent cluster so every pool's nodes are peers in one NiFi cluster.
+func nodeEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials, heapInitial, heapMax string, additionalEnv []corev1.EnvVar, clustered bool) []corev1.EnvVar {
 	environment := []corev1.EnvVar{
 		{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
 		{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
-		{Name: "NIFI_JVM_HEAP_INIT", Value: managedClusterHeapInitial(cluster)},
-		{Name: "NIFI_JVM_HEAP_MAX", Value: managedClusterHeapMax(cluster)},
+		{Name: "NIFI_JVM_HEAP_INIT", Value: heapInitial},
+		{Name: "NIFI_JVM_HEAP_MAX", Value: heapMax},
+	}
+	// In a cluster, NiFi advertises the node's web host as its API address in
+	// /controller/cluster, which the operator matches when offloading a node on scale-down.
+	// Bind to (and advertise) the pod's stable headless DNS name so each node is uniquely
+	// addressable; a standalone node keeps binding 0.0.0.0. The name resolves to the pod IP,
+	// so the kubelet httpGet probe and Service routing still reach it.
+	webHTTPHost := "0.0.0.0"
+	webHTTPSHost := "0.0.0.0"
+	advertisedHost := ""
+	if clustered && cluster.Spec.Coordination != nil {
+		advertisedHost = fmt.Sprintf("$(POD_NAME).%s.$(POD_NAMESPACE).svc", managedClusterHeadlessServiceName(cluster))
+		webHTTPHost = advertisedHost
+		webHTTPSHost = advertisedHost
 	}
 	if tls != nil {
 		environment = append(environment,
+			corev1.EnvVar{Name: "NIFI_WEB_HTTPS_HOST", Value: webHTTPSHost},
 			corev1.EnvVar{Name: "NIFI_WEB_HTTPS_PORT", Value: strconv.Itoa(int(tls.httpsPort))},
+			corev1.EnvVar{Name: "NIFI_WEB_ADVERTISED_HOST", Value: advertisedHost},
 			corev1.EnvVar{Name: "NIFI_SECURITY_DIR", Value: managedTLSSecurityDir},
 			corev1.EnvVar{Name: "NIFI_CONFIG_DIR", Value: managedTLSConfigDir},
 			corev1.EnvVar{Name: "NIFI_KEYSTORE_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
@@ -531,7 +572,7 @@ func managedClusterEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTL
 		)
 	} else {
 		environment = append(environment,
-			corev1.EnvVar{Name: "NIFI_WEB_HTTP_HOST", Value: "0.0.0.0"},
+			corev1.EnvVar{Name: "NIFI_WEB_HTTP_HOST", Value: webHTTPHost},
 			corev1.EnvVar{Name: "NIFI_WEB_HTTP_PORT", Value: strconv.Itoa(int(defaultNiFiWebPort))},
 		)
 	}
@@ -540,7 +581,7 @@ func managedClusterEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTL
 		corev1.EnvVar{Name: "NIFI_WEB_PROXY_HOST", Value: managedClusterProxyHost(cluster, tls)},
 		corev1.EnvVar{Name: "NIFI_WEB_PROXY_CONTEXT_PATH", Value: managedClusterProxyContextPath(cluster)},
 	)
-	if managedClusterReplicas(cluster) > 1 {
+	if clustered && cluster.Spec.Coordination != nil {
 		coordination := cluster.Spec.Coordination
 		environment = append(environment,
 			// NiFi 2.x requires a shared, explicit sensitive properties key on every cluster
@@ -562,7 +603,7 @@ func managedClusterEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTL
 	} else {
 		environment = append(environment, corev1.EnvVar{Name: "NIFI_CLUSTER_IS_NODE", Value: "false"})
 	}
-	return mergeEnvironment(environment, cluster.Spec.AdditionalEnv)
+	return mergeEnvironment(environment, additionalEnv)
 }
 
 func mergeEnvironment(base []corev1.EnvVar, overrides []corev1.EnvVar) []corev1.EnvVar {

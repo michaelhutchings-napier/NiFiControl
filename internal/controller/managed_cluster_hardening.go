@@ -18,7 +18,11 @@ import (
 
 // applyManagedClusterScheduling threads pod placement controls onto the managed pod.
 func applyManagedClusterScheduling(podSpec *corev1.PodSpec, cluster *nifiv1alpha1.NiFiCluster) {
-	scheduling := cluster.Spec.Scheduling
+	applyNodeScheduling(podSpec, cluster.Spec.Scheduling)
+}
+
+// applyNodeScheduling threads pod placement controls onto any pool's pod.
+func applyNodeScheduling(podSpec *corev1.PodSpec, scheduling *nifiv1alpha1.NiFiClusterScheduling) {
 	if scheduling == nil {
 		return
 	}
@@ -31,7 +35,11 @@ func applyManagedClusterScheduling(podSpec *corev1.PodSpec, cluster *nifiv1alpha
 
 // managedClusterUpdateStrategy resolves the StatefulSet update strategy from spec.upgrade.
 func managedClusterUpdateStrategy(cluster *nifiv1alpha1.NiFiCluster) appsv1.StatefulSetUpdateStrategy {
-	upgrade := cluster.Spec.Upgrade
+	return nodeUpdateStrategy(cluster.Spec.Upgrade)
+}
+
+// nodeUpdateStrategy resolves the StatefulSet update strategy for any pool.
+func nodeUpdateStrategy(upgrade *nifiv1alpha1.NiFiClusterUpgradeSpec) appsv1.StatefulSetUpdateStrategy {
 	if upgrade != nil && upgrade.Strategy == "OnDelete" {
 		return appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType}
 	}
@@ -43,8 +51,12 @@ func managedClusterUpdateStrategy(cluster *nifiv1alpha1.NiFiCluster) appsv1.Stat
 }
 
 func managedClusterMinReadySeconds(cluster *nifiv1alpha1.NiFiCluster) int32 {
-	if cluster.Spec.Upgrade != nil {
-		return cluster.Spec.Upgrade.MinReadySeconds
+	return nodeMinReadySeconds(cluster.Spec.Upgrade)
+}
+
+func nodeMinReadySeconds(upgrade *nifiv1alpha1.NiFiClusterUpgradeSpec) int32 {
+	if upgrade != nil {
+		return upgrade.MinReadySeconds
 	}
 	return 0
 }

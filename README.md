@@ -18,6 +18,9 @@ services, and high-level flow deployments.
   `kubectl scale`, a HorizontalPodAutoscaler, or KEDA (recommended, driven by queue
   depth). Scale-downs run the graceful offload above. See
   [docs/autoscaling.md](docs/autoscaling.md).
+- `NiFiNodeGroup` adds heterogeneous, independently-scalable node pools to a cluster —
+  differently-sized tiers that join the same NiFi cluster, each with its own scale
+  subresource. See [docs/node-groups.md](docs/node-groups.md).
 - CRDs, RBAC, samples, and a controller-runtime manager are available.
 - Registry clients, parameter contexts, process groups, controller services,
   processors, ports, connections, funnels, and labels reconcile against NiFi.

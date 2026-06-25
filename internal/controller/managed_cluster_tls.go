@@ -647,11 +647,14 @@ func renderTLSReadinessScript() string {
 set -eu
 port="${NIFI_WEB_HTTPS_PORT:-8443}"
 dir="${NIFI_SECURITY_DIR:-/opt/nifi/nificontrol-tls}"
-url="https://localhost:${port}/nifi-api/flow/about"
+# In a cluster NiFi binds its routable headless DNS name (advertised host) rather than all
+# interfaces, so probe that name; it also matches the server certificate's wildcard SAN.
+host="${NIFI_WEB_ADVERTISED_HOST:-localhost}"
+url="https://${host}:${port}/nifi-api/flow/about"
 if command -v curl >/dev/null 2>&1; then
   exec curl -sS -o /dev/null --cert "${dir}/tls.crt" --key "${dir}/tls.key" --cacert "${dir}/ca.crt" "${url}"
 fi
-exec openssl s_client -connect "localhost:${port}" -cert "${dir}/tls.crt" -key "${dir}/tls.key" -CAfile "${dir}/ca.crt" -verify_return_error -quiet </dev/null
+exec openssl s_client -connect "${host}:${port}" -cert "${dir}/tls.crt" -key "${dir}/tls.key" -CAfile "${dir}/ca.crt" -verify_return_error -quiet </dev/null
 `
 }
 

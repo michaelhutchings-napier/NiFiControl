@@ -63,3 +63,7 @@ integration-bluegreen-kind:
 .PHONY: integration-offload-kind
 integration-offload-kind:
 	./hack/test-offload-kind.sh
+
+.PHONY: integration-nodegroups-kind
+integration-nodegroups-kind:
+	./hack/test-nodegroups-kind.sh

@@ -68,5 +68,13 @@ resources:
   kind: NiFiRestore
   path: github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: controlnifi.io
+  group: nifi
+  kind: NiFiNodeGroup
+  path: github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1
+  version: v1alpha1
 version: "3"
 

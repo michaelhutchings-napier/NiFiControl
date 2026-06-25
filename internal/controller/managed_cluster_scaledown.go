@@ -58,7 +58,13 @@ func managedClusterScaleDownTimeoutPolicy(cluster *nifiv1alpha1.NiFiCluster) nif
 // matching NIFI_CLUSTER_ADDRESS in managedClusterEnvironment
 // (<statefulset>-<ordinal>.<headless>.<namespace>.svc).
 func managedClusterNodeAddress(cluster *nifiv1alpha1.NiFiCluster, ordinal int32) string {
-	return fmt.Sprintf("%s-%d.%s.%s.svc", managedClusterResourceName(cluster), ordinal, managedClusterHeadlessServiceName(cluster), cluster.Namespace)
+	return poolNodeAddress(managedClusterResourceName(cluster), managedClusterHeadlessServiceName(cluster), cluster.Namespace, ordinal)
+}
+
+// poolNodeAddress returns the NiFi cluster node address for a pod ordinal of any pool's
+// StatefulSet, matching NIFI_CLUSTER_ADDRESS.
+func poolNodeAddress(statefulSetName, headlessService, namespace string, ordinal int32) string {
+	return fmt.Sprintf("%s-%d.%s.%s.svc", statefulSetName, ordinal, headlessService, namespace)
 }
 
 func (r *NiFiClusterReconciler) clusterNodeClient() nifi.ClusterNodeClient {
@@ -68,83 +74,128 @@ func (r *NiFiClusterReconciler) clusterNodeClient() nifi.ClusterNodeClient {
 	return nifi.HTTPClusterNodeClient{}
 }
 
-// reconcileManagedClusterScaleDown gracefully offloads NiFi nodes before the StatefulSet
-// removes their pods. It returns the replica count the StatefulSet should currently have
-// and whether a scale-down is still in progress. Each call advances the highest-ordinal
-// node one step through disconnect -> offload -> delete, decrementing the desired replica
-// count by one only after that node has left the NiFi cluster.
+// offloadParams describes a single pool's graceful scale-down: its StatefulSet name and the
+// shared cluster context needed to drain and remove its highest-ordinal node.
+type offloadParams struct {
+	endpoint        string
+	statefulSetName string
+	headlessService string
+	namespace       string
+	desired         int32
+	currentReplicas int32
+	offloadEnabled  bool
+	timeout         time.Duration
+	force           bool
+}
+
+// scaleDownStep is the outcome of one graceful offload step for a pool.
+type scaleDownStep struct {
+	replicas int32                                    // replica count the StatefulSet should have now
+	active   bool                                     // true while a scale-down is in progress
+	status   *nifiv1alpha1.NiFiClusterScaleDownStatus // desired ScaleDown status (nil clears it)
+}
+
+// computeOffloadStep advances graceful node offload for one pool by a single step. It is
+// shared by the cluster's primary pool and NiFiNodeGroup pools; callers persist the returned
+// status on their own object. Each call drives the highest-ordinal node one step through
+// disconnect -> offload -> delete, decrementing the replica count by one only once the node
+// has left the NiFi cluster.
+func computeOffloadStep(ctx context.Context, nodeClient nifi.ClusterNodeClient, p offloadParams, current *nifiv1alpha1.NiFiClusterScaleDownStatus) (scaleDownStep, error) {
+	// Scale-up, steady state, or offload disabled. Callers are responsible for not enabling
+	// offload when there is no cluster left to receive the data (the primary pool guards
+	// currentReplicas <= 1; a node group always has the primary pool to offload to).
+	if p.currentReplicas <= p.desired || !p.offloadEnabled {
+		return scaleDownStep{replicas: p.desired}, nil
+	}
+	address := poolNodeAddress(p.statefulSetName, p.headlessService, p.namespace, p.currentReplicas-1)
+	nodes, err := nodeClient.ListClusterNodes(ctx, p.endpoint)
+	if err != nil {
+		return scaleDownStep{replicas: p.currentReplicas, active: true, status: current}, fmt.Errorf("list NiFi cluster nodes for scale-down: %w", err)
+	}
+	node := findClusterNodeByAddress(nodes, address)
+	if node == nil {
+		// Already gone from the NiFi cluster; allow the StatefulSet to drop its pod.
+		return scaleDownStep{replicas: p.currentReplicas - 1, active: true}, nil
+	}
+	startedAt := offloadStartedAt(current, address)
+	statusFor := func(phase string) *nifiv1alpha1.NiFiClusterScaleDownStatus {
+		started := startedAt
+		return &nifiv1alpha1.NiFiClusterScaleDownStatus{NodeAddress: address, Phase: phase, StartedAt: &started}
+	}
+	if time.Since(startedAt.Time) > p.timeout {
+		if p.force {
+			if err := nodeClient.DeleteClusterNode(ctx, p.endpoint, node.NodeID); err != nil && !nifi.IsNotFound(err) {
+				return scaleDownStep{replicas: p.currentReplicas, active: true, status: statusFor(scaleDownPhaseRemoving)}, fmt.Errorf("force-remove NiFi node %s after offload timeout: %w", address, err)
+			}
+			return scaleDownStep{replicas: p.currentReplicas - 1, active: true}, nil
+		}
+		return scaleDownStep{replicas: p.currentReplicas, active: true, status: statusFor(node.Status)}, fmt.Errorf("NiFi node %s did not finish offloading within %s", address, p.timeout)
+	}
+
+	switch node.Status {
+	case nifi.NodeStatusConnected, nifi.NodeStatusConnecting:
+		if err := nodeClient.SetClusterNodeState(ctx, p.endpoint, node.NodeID, nifi.NodeStatusDisconnecting); err != nil {
+			return scaleDownStep{replicas: p.currentReplicas, active: true, status: current}, fmt.Errorf("disconnect NiFi node %s: %w", address, err)
+		}
+		return scaleDownStep{replicas: p.currentReplicas, active: true, status: statusFor(scaleDownPhaseDisconnecting)}, nil
+	case nifi.NodeStatusDisconnected:
+		if err := nodeClient.SetClusterNodeState(ctx, p.endpoint, node.NodeID, nifi.NodeStatusOffloading); err != nil {
+			return scaleDownStep{replicas: p.currentReplicas, active: true, status: current}, fmt.Errorf("offload NiFi node %s: %w", address, err)
+		}
+		return scaleDownStep{replicas: p.currentReplicas, active: true, status: statusFor(scaleDownPhaseOffloading)}, nil
+	case nifi.NodeStatusOffloaded:
+		if err := nodeClient.DeleteClusterNode(ctx, p.endpoint, node.NodeID); err != nil && !nifi.IsNotFound(err) {
+			return scaleDownStep{replicas: p.currentReplicas, active: true, status: current}, fmt.Errorf("remove offloaded NiFi node %s: %w", address, err)
+		}
+		return scaleDownStep{replicas: p.currentReplicas - 1, active: true, status: statusFor(scaleDownPhaseRemoving)}, nil
+	default:
+		phase := scaleDownPhaseOffloading
+		if node.Status == nifi.NodeStatusDisconnecting {
+			phase = scaleDownPhaseDisconnecting
+		}
+		return scaleDownStep{replicas: p.currentReplicas, active: true, status: statusFor(phase)}, nil
+	}
+}
+
+// reconcileManagedClusterScaleDown gracefully offloads the cluster's primary-pool nodes
+// before the StatefulSet removes their pods, persisting progress on the cluster status.
 func (r *NiFiClusterReconciler) reconcileManagedClusterScaleDown(ctx context.Context, cluster *nifiv1alpha1.NiFiCluster, current *appsv1.StatefulSet) (scaleDownDecision, error) {
 	desired := managedClusterReplicas(cluster)
 	if current == nil || current.Spec.Replicas == nil {
 		return scaleDownDecision{replicas: desired}, r.clearScaleDownStatus(ctx, cluster)
 	}
 	currentReplicas := *current.Spec.Replicas
-	// Scale-up or steady state: nothing to offload.
-	if currentReplicas <= desired {
+	if currentReplicas <= desired || !managedClusterOffloadEnabled(cluster) || currentReplicas <= 1 {
 		return scaleDownDecision{replicas: desired}, r.clearScaleDownStatus(ctx, cluster)
 	}
-	// Immediate shrink when offload is disabled, or there is no NiFi cluster to receive the
-	// offloaded data (a single node, or a teardown to zero).
-	if !managedClusterOffloadEnabled(cluster) || currentReplicas <= 1 {
-		return scaleDownDecision{replicas: desired}, r.clearScaleDownStatus(ctx, cluster)
-	}
-
-	endpoint := managedClusterEndpoint(cluster)
-	ordinal := currentReplicas - 1
-	address := managedClusterNodeAddress(cluster, ordinal)
 
 	// Offload requires an authenticated client for the running cluster's REST API. Configure
 	// it just-in-time so a client-config error never blocks the normal create/update path.
 	if err := configureClusterHTTPClient(ctx, r.Client, cluster); err != nil {
 		return scaleDownDecision{replicas: currentReplicas, active: true}, fmt.Errorf("configure NiFi API client for scale-down: %w", err)
 	}
+	step, stepErr := computeOffloadStep(ctx, r.clusterNodeClient(), offloadParams{
+		endpoint:        managedClusterEndpoint(cluster),
+		statefulSetName: managedClusterResourceName(cluster),
+		headlessService: managedClusterHeadlessServiceName(cluster),
+		namespace:       cluster.Namespace,
+		desired:         desired,
+		currentReplicas: currentReplicas,
+		offloadEnabled:  true,
+		timeout:         managedClusterScaleDownTimeout(cluster),
+		force:           managedClusterScaleDownTimeoutPolicy(cluster) == nifiv1alpha1.ScaleDownTimeoutForce,
+	}, cluster.Status.ScaleDown)
 
-	nodes, err := r.clusterNodeClient().ListClusterNodes(ctx, endpoint)
-	if err != nil {
-		return scaleDownDecision{replicas: currentReplicas, active: true}, fmt.Errorf("list NiFi cluster nodes for scale-down: %w", err)
+	var statusErr error
+	if step.status == nil {
+		statusErr = r.clearScaleDownStatus(ctx, cluster)
+	} else {
+		statusErr = r.setScaleDownStatus(ctx, cluster, step.status)
 	}
-	node := findClusterNodeByAddress(nodes, address)
-	if node == nil {
-		// The node has already left the NiFi cluster; allow the StatefulSet to drop its pod.
-		return scaleDownDecision{replicas: currentReplicas - 1, active: true}, r.clearScaleDownStatus(ctx, cluster)
+	if stepErr != nil {
+		return scaleDownDecision{replicas: step.replicas, active: step.active}, stepErr
 	}
-
-	startedAt := r.scaleDownStartedAt(cluster, address)
-	if time.Since(startedAt.Time) > managedClusterScaleDownTimeout(cluster) {
-		if managedClusterScaleDownTimeoutPolicy(cluster) == nifiv1alpha1.ScaleDownTimeoutForce {
-			if err := r.clusterNodeClient().DeleteClusterNode(ctx, endpoint, node.NodeID); err != nil && !nifi.IsNotFound(err) {
-				return scaleDownDecision{replicas: currentReplicas, active: true}, fmt.Errorf("force-remove NiFi node %s after offload timeout: %w", address, err)
-			}
-			return scaleDownDecision{replicas: currentReplicas - 1, active: true}, r.clearScaleDownStatus(ctx, cluster)
-		}
-		return scaleDownDecision{replicas: currentReplicas, active: true}, fmt.Errorf("NiFi node %s did not finish offloading within %s", address, managedClusterScaleDownTimeout(cluster))
-	}
-
-	switch node.Status {
-	case nifi.NodeStatusConnected, nifi.NodeStatusConnecting:
-		if err := r.clusterNodeClient().SetClusterNodeState(ctx, endpoint, node.NodeID, nifi.NodeStatusDisconnecting); err != nil {
-			return scaleDownDecision{replicas: currentReplicas, active: true}, fmt.Errorf("disconnect NiFi node %s: %w", address, err)
-		}
-		return scaleDownDecision{replicas: currentReplicas, active: true}, r.setScaleDownStatus(ctx, cluster, address, scaleDownPhaseDisconnecting, startedAt)
-	case nifi.NodeStatusDisconnected:
-		if err := r.clusterNodeClient().SetClusterNodeState(ctx, endpoint, node.NodeID, nifi.NodeStatusOffloading); err != nil {
-			return scaleDownDecision{replicas: currentReplicas, active: true}, fmt.Errorf("offload NiFi node %s: %w", address, err)
-		}
-		return scaleDownDecision{replicas: currentReplicas, active: true}, r.setScaleDownStatus(ctx, cluster, address, scaleDownPhaseOffloading, startedAt)
-	case nifi.NodeStatusOffloaded:
-		if err := r.clusterNodeClient().DeleteClusterNode(ctx, endpoint, node.NodeID); err != nil && !nifi.IsNotFound(err) {
-			return scaleDownDecision{replicas: currentReplicas, active: true}, fmt.Errorf("remove offloaded NiFi node %s: %w", address, err)
-		}
-		// The node is gone from the cluster; let the StatefulSet drop its pod.
-		return scaleDownDecision{replicas: currentReplicas - 1, active: true}, r.setScaleDownStatus(ctx, cluster, address, scaleDownPhaseRemoving, startedAt)
-	default:
-		// DISCONNECTING / OFFLOADING and any transient state: keep waiting.
-		phase := scaleDownPhaseOffloading
-		if node.Status == nifi.NodeStatusDisconnecting {
-			phase = scaleDownPhaseDisconnecting
-		}
-		return scaleDownDecision{replicas: currentReplicas, active: true}, r.setScaleDownStatus(ctx, cluster, address, phase, startedAt)
-	}
+	return scaleDownDecision{replicas: step.replicas, active: step.active}, statusErr
 }
 
 func findClusterNodeByAddress(nodes []nifi.ClusterNode, address string) *nifi.ClusterNode {
@@ -156,17 +207,16 @@ func findClusterNodeByAddress(nodes []nifi.ClusterNode, address string) *nifi.Cl
 	return nil
 }
 
-// scaleDownStartedAt returns the offload start time for the given node address, beginning a
-// fresh timer when the address changes.
-func (r *NiFiClusterReconciler) scaleDownStartedAt(cluster *nifiv1alpha1.NiFiCluster, address string) metav1.Time {
-	if cluster.Status.ScaleDown != nil && cluster.Status.ScaleDown.NodeAddress == address && cluster.Status.ScaleDown.StartedAt != nil {
-		return *cluster.Status.ScaleDown.StartedAt
+// offloadStartedAt returns the offload start time for the given node address, beginning a
+// fresh timer when the address changes (or there is no prior status).
+func offloadStartedAt(current *nifiv1alpha1.NiFiClusterScaleDownStatus, address string) metav1.Time {
+	if current != nil && current.NodeAddress == address && current.StartedAt != nil {
+		return *current.StartedAt
 	}
 	return metav1.Now()
 }
 
-func (r *NiFiClusterReconciler) setScaleDownStatus(ctx context.Context, cluster *nifiv1alpha1.NiFiCluster, address, phase string, startedAt metav1.Time) error {
-	desired := &nifiv1alpha1.NiFiClusterScaleDownStatus{NodeAddress: address, Phase: phase, StartedAt: &startedAt}
+func (r *NiFiClusterReconciler) setScaleDownStatus(ctx context.Context, cluster *nifiv1alpha1.NiFiCluster, desired *nifiv1alpha1.NiFiClusterScaleDownStatus) error {
 	if scaleDownStatusEqual(cluster.Status.ScaleDown, desired) {
 		return nil
 	}

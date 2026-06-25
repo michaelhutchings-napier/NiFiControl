@@ -1,0 +1,35 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiNodeGroup
+metadata:
+  name: workers
+spec:
+  clusterRef:
+    name: production-hardened
+  replicas: 2
+  # Per-tier overrides; anything omitted is inherited from the cluster. These nodes join the
+  # same NiFi cluster as the primary pool but run with their own resources and placement, and
+  # can be autoscaled independently via this resource's scale subresource (kubectl scale /
+  # HPA / KEDA).
+  jvm:
+    heapInitial: 4g
+    heapMax: 6g
+  resources:
+    requests:
+      cpu: "2"
+      memory: 8Gi
+  storage:
+    enabled: true
+    size: 100Gi
+  scheduling:
+    nodeSelector:
+      workload: nifi-workers
+    tolerations:
+      - key: dedicated
+        operator: Equal
+        value: nifi-workers
+        effect: NoSchedule
+  scaleDown:
+    offloadData: true
+    timeoutSeconds: 600
+    onTimeout: Fail
+  deletionPolicy: Orphan
