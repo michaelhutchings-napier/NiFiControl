@@ -4,6 +4,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 type ClusterMode string
@@ -27,15 +28,24 @@ type NiFiClusterSpec struct {
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=1
-	Replicas      int32                        `json:"replicas,omitempty"`
-	API           *NiFiClusterAPISpec          `json:"api,omitempty"`
-	Service       NiFiClusterServiceSpec       `json:"service,omitempty"`
-	Storage       NiFiClusterStorageSpec       `json:"storage,omitempty"`
-	Resources     corev1.ResourceRequirements  `json:"resources,omitempty"`
-	JVM           NiFiClusterJVMSpec           `json:"jvm,omitempty"`
-	Coordination  *NiFiClusterCoordinationSpec `json:"coordination,omitempty"`
-	InternalTLS   *NiFiClusterInternalTLSSpec  `json:"internalTLS,omitempty"`
-	AdditionalEnv []corev1.EnvVar              `json:"additionalEnv,omitempty"`
+	Replicas     int32                        `json:"replicas,omitempty"`
+	API          *NiFiClusterAPISpec          `json:"api,omitempty"`
+	Service      NiFiClusterServiceSpec       `json:"service,omitempty"`
+	Storage      NiFiClusterStorageSpec       `json:"storage,omitempty"`
+	Resources    corev1.ResourceRequirements  `json:"resources,omitempty"`
+	JVM          NiFiClusterJVMSpec           `json:"jvm,omitempty"`
+	Coordination *NiFiClusterCoordinationSpec `json:"coordination,omitempty"`
+	InternalTLS  *NiFiClusterInternalTLSSpec  `json:"internalTLS,omitempty"`
+	Scheduling   *NiFiClusterScheduling       `json:"scheduling,omitempty"`
+	// PodDisruptionBudget keeps a minimum number of NiFi nodes available during voluntary
+	// disruptions such as node drains and certificate-rotation rolls.
+	PodDisruptionBudget *NiFiClusterPDBSpec `json:"podDisruptionBudget,omitempty"`
+	// Ingress exposes the managed NiFi cluster through a Kubernetes Ingress and configures
+	// NiFi's allowed proxy host and context path accordingly.
+	Ingress *NiFiClusterIngressSpec `json:"ingress,omitempty"`
+	// Upgrade controls how managed NiFi version changes roll out across the StatefulSet.
+	Upgrade       *NiFiClusterUpgradeSpec `json:"upgrade,omitempty"`
+	AdditionalEnv []corev1.EnvVar         `json:"additionalEnv,omitempty"`
 	// +kubebuilder:validation:Enum=Delete;Orphan
 	// +kubebuilder:default=Orphan
 	DeletionPolicy DeletionPolicy       `json:"deletionPolicy,omitempty"`
@@ -125,6 +135,72 @@ type NiFiClusterCoordinationSpec struct {
 	ZooKeeperRootNode string `json:"zookeeperRootNode,omitempty"`
 	// +kubebuilder:default="2 mins"
 	ElectionMaxWait string `json:"electionMaxWait,omitempty"`
+}
+
+// NiFiClusterScheduling configures pod placement for the managed NiFi StatefulSet.
+type NiFiClusterScheduling struct {
+	NodeSelector              map[string]string                 `json:"nodeSelector,omitempty"`
+	Tolerations               []corev1.Toleration               `json:"tolerations,omitempty"`
+	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`
+	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+	PriorityClassName         string                            `json:"priorityClassName,omitempty"`
+}
+
+// NiFiClusterPDBSpec configures a PodDisruptionBudget for the managed NiFi nodes. Exactly
+// one of minAvailable or maxUnavailable may be set.
+//
+// +kubebuilder:validation:XValidation:rule="!self.enabled || !(has(self.minAvailable) && has(self.maxUnavailable))",message="set only one of minAvailable or maxUnavailable"
+type NiFiClusterPDBSpec struct {
+	// +kubebuilder:default=true
+	Enabled        bool                `json:"enabled,omitempty"`
+	MinAvailable   *intstr.IntOrString `json:"minAvailable,omitempty"`
+	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
+}
+
+// NiFiClusterIngressSpec exposes the managed NiFi cluster through an Ingress.
+type NiFiClusterIngressSpec struct {
+	// +kubebuilder:default=true
+	Enabled bool `json:"enabled,omitempty"`
+	// IngressClassName selects the ingress controller.
+	IngressClassName string `json:"ingressClassName,omitempty"`
+	// Host is the external host name routed to NiFi. It is added to NiFi's allowed proxy
+	// hosts so proxied requests are accepted.
+	// +kubebuilder:validation:MinLength=1
+	Host string `json:"host"`
+	// Path is the HTTP path routed to NiFi.
+	// +kubebuilder:default="/"
+	Path string `json:"path,omitempty"`
+	// +kubebuilder:validation:Enum=Exact;Prefix;ImplementationSpecific
+	// +kubebuilder:default=Prefix
+	PathType string `json:"pathType,omitempty"`
+	// ContextPath sets nifi.web.proxy.context.path when NiFi is served under a sub-path.
+	ContextPath string            `json:"contextPath,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
+	// TLS configures Ingress TLS termination (the Secret is supplied by the user).
+	TLS *NiFiClusterIngressTLS `json:"tls,omitempty"`
+}
+
+// NiFiClusterIngressTLS configures Ingress-level TLS termination.
+type NiFiClusterIngressTLS struct {
+	// +kubebuilder:validation:MinLength=1
+	SecretName string   `json:"secretName"`
+	Hosts      []string `json:"hosts,omitempty"`
+}
+
+// NiFiClusterUpgradeSpec controls how managed NiFi version changes roll out.
+type NiFiClusterUpgradeSpec struct {
+	// Strategy is the StatefulSet update strategy. RollingUpdate replaces nodes one at a
+	// time; OnDelete waits for manual pod deletion, for fully controlled upgrades.
+	// +kubebuilder:validation:Enum=RollingUpdate;OnDelete
+	// +kubebuilder:default=RollingUpdate
+	Strategy string `json:"strategy,omitempty"`
+	// Partition holds back nodes with an ordinal below the partition during a rolling
+	// upgrade, enabling staged/canary upgrades.
+	// +kubebuilder:validation:Minimum=0
+	Partition *int32 `json:"partition,omitempty"`
+	// MinReadySeconds is how long a new node must be ready before the upgrade proceeds.
+	// +kubebuilder:validation:Minimum=0
+	MinReadySeconds int32 `json:"minReadySeconds,omitempty"`
 }
 
 // NiFiClusterInternalTLSSpec configures operator-managed HTTPS and mutual TLS for an

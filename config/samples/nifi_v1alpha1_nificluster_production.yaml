@@ -1,0 +1,55 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiCluster
+metadata:
+  name: production-hardened
+spec:
+  mode: Internal
+  image: apache/nifi:2.10.0
+  replicas: 3
+  coordination:
+    zookeeperConnectString: zookeeper.dataflows.svc:2181
+  storage:
+    enabled: true
+    size: 50Gi
+  jvm:
+    heapInitial: 2g
+    heapMax: 4g
+  # Spread nodes across hosts and keep them off shared nodes.
+  scheduling:
+    priorityClassName: high-priority
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: apache-nifi
+    tolerations:
+      - key: dedicated
+        operator: Equal
+        value: nifi
+        effect: NoSchedule
+  # Keep at least two of three nodes available during voluntary disruptions.
+  podDisruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+  # Expose the cluster and set NiFi's allowed proxy host.
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    host: nifi.example.com
+    path: /
+    pathType: Prefix
+    annotations:
+      nginx.ingress.kubernetes.io/backend-protocol: HTTP
+    tls:
+      secretName: nifi-ingress-tls
+      hosts:
+        - nifi.example.com
+  # Roll version upgrades one node at a time, waiting for each to settle.
+  upgrade:
+    strategy: RollingUpdate
+    minReadySeconds: 30
+  deletionPolicy: Orphan
+  driftPolicy:
+    mode: Reconcile

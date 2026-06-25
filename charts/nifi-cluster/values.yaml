@@ -33,6 +33,40 @@ jvm:
   heapInitial: 1g
   heapMax: 2g
 
+# Pod placement controls for the managed NiFi nodes.
+scheduling:
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
+
+# Keep a minimum number of NiFi nodes available during voluntary disruptions.
+podDisruptionBudget:
+  enabled: false
+  # Set only one of maxUnavailable or minAvailable.
+  maxUnavailable: 1
+  minAvailable: null
+
+# Expose the cluster through an Ingress and configure NiFi's allowed proxy host.
+ingress:
+  enabled: false
+  ingressClassName: ""
+  host: ""
+  path: /
+  pathType: Prefix
+  contextPath: ""
+  annotations: {}
+  tls:
+    secretName: ""
+    hosts: []
+
+# Control how NiFi version changes roll out across the StatefulSet.
+upgrade:
+  strategy: RollingUpdate   # RollingUpdate | OnDelete
+  partition: null
+  minReadySeconds: 0
+
 # Required when replicas is greater than one. NiFiControl does not provision
 # ZooKeeper in this first managed-cluster release.
 coordination:

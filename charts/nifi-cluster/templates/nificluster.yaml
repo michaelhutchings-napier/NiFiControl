@@ -33,6 +33,68 @@ spec:
   jvm:
     heapInitial: {{ .Values.jvm.heapInitial | quote }}
     heapMax: {{ .Values.jvm.heapMax | quote }}
+  {{- if or .Values.scheduling.nodeSelector .Values.scheduling.tolerations .Values.scheduling.affinity .Values.scheduling.topologySpreadConstraints .Values.scheduling.priorityClassName }}
+  scheduling:
+    {{- with .Values.scheduling.nodeSelector }}
+    nodeSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.scheduling.tolerations }}
+    tolerations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.scheduling.affinity }}
+    affinity:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.scheduling.topologySpreadConstraints }}
+    topologySpreadConstraints:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.scheduling.priorityClassName }}
+    priorityClassName: {{ . | quote }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.podDisruptionBudget.enabled }}
+  podDisruptionBudget:
+    enabled: true
+    {{- if .Values.podDisruptionBudget.minAvailable }}
+    minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+    {{- else if .Values.podDisruptionBudget.maxUnavailable }}
+    maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.ingress.enabled }}
+  ingress:
+    enabled: true
+    host: {{ .Values.ingress.host | quote }}
+    path: {{ .Values.ingress.path | quote }}
+    pathType: {{ .Values.ingress.pathType }}
+    {{- with .Values.ingress.ingressClassName }}
+    ingressClassName: {{ . | quote }}
+    {{- end }}
+    {{- with .Values.ingress.contextPath }}
+    contextPath: {{ . | quote }}
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    annotations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.ingress.tls.secretName }}
+    tls:
+      secretName: {{ . | quote }}
+      {{- with $.Values.ingress.tls.hosts }}
+      hosts:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  upgrade:
+    strategy: {{ .Values.upgrade.strategy }}
+    minReadySeconds: {{ .Values.upgrade.minReadySeconds }}
+    {{- if ne (toString .Values.upgrade.partition) "<nil>" }}
+    partition: {{ .Values.upgrade.partition }}
+    {{- end }}
   {{- with .Values.coordination.zookeeperConnectString }}
   coordination:
     zookeeperConnectString: {{ . | quote }}

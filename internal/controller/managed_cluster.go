@@ -12,6 +12,8 @@ import (
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/nifi"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,6 +43,8 @@ prop_replace 'nifi.python.extensions.source.directory.default' "${NIFI_HOME}/pyt
 prop_replace 'nifi.nar.library.autoload.directory' "${NIFI_HOME}/nar_extensions"
 prop_replace 'nifi.web.http.host' "${NIFI_WEB_HTTP_HOST:-0.0.0.0}"
 prop_replace 'nifi.web.http.port' "${NIFI_WEB_HTTP_PORT:-8080}"
+prop_replace 'nifi.web.proxy.host' "${NIFI_WEB_PROXY_HOST:-}"
+prop_replace 'nifi.web.proxy.context.path' "${NIFI_WEB_PROXY_CONTEXT_PATH:-}"
 prop_replace 'nifi.web.https.host' ''
 prop_replace 'nifi.web.https.port' ''
 prop_replace 'nifi.security.keystore' ''
@@ -81,6 +85,7 @@ prop_replace 'nifi.web.http.port' ''
 prop_replace 'nifi.web.https.host' '0.0.0.0'
 prop_replace 'nifi.web.https.port' "${NIFI_WEB_HTTPS_PORT}"
 prop_replace 'nifi.web.proxy.host' "${NIFI_WEB_PROXY_HOST}"
+prop_replace 'nifi.web.proxy.context.path' "${NIFI_WEB_PROXY_CONTEXT_PATH:-}"
 prop_replace 'nifi.security.keystore' "${NIFI_SECURITY_DIR}/keystore.p12"
 prop_replace 'nifi.security.keystoreType' 'PKCS12'
 prop_replace 'nifi.security.keystorePasswd' "${NIFI_KEYSTORE_PASSWORD}"
@@ -159,6 +164,12 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 	if err != nil {
 		return r.managedClusterReconcileFailed(ctx, cluster, "StatefulSetReconcileFailed", err)
 	}
+	if err := r.reconcileManagedClusterPDB(ctx, cluster); err != nil {
+		return r.managedClusterReconcileFailed(ctx, cluster, "PodDisruptionBudgetReconcileFailed", err)
+	}
+	if err := r.reconcileManagedClusterIngress(ctx, cluster); err != nil {
+		return r.managedClusterReconcileFailed(ctx, cluster, "IngressReconcileFailed", err)
+	}
 
 	endpoint := managedClusterEndpoint(cluster)
 	if err := configureClusterHTTPClient(ctx, r.Client, cluster); err != nil {
@@ -171,10 +182,18 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 		Replicas:        replicas,
 		ReadyReplicas:   statefulSet.Status.ReadyReplicas,
 	}
-	if statefulSet.Status.ReadyReplicas < replicas {
+	// A version upgrade is in progress when the StatefulSet is rolling a new revision.
+	upgrading := statefulSet.Status.UpdateRevision != "" && statefulSet.Status.CurrentRevision != "" &&
+		statefulSet.Status.UpdateRevision != statefulSet.Status.CurrentRevision
+	if statefulSet.Status.ReadyReplicas < replicas || (upgrading && statefulSet.Status.UpdatedReplicas < replicas) {
+		reason := "Provisioning"
 		message := fmt.Sprintf("Waiting for NiFi StatefulSet replicas: %d/%d ready.", statefulSet.Status.ReadyReplicas, replicas)
-		if managedClusterStatusNeedsUpdate(cluster, false, endpoint, workload, "Provisioning") {
-			if err := markManagedClusterNotReady(ctx, r.Client, cluster, "Provisioning", message, endpoint, workload); err != nil {
+		if upgrading {
+			reason = "Upgrading"
+			message = fmt.Sprintf("Upgrading NiFi nodes: %d/%d updated, %d/%d ready.", statefulSet.Status.UpdatedReplicas, replicas, statefulSet.Status.ReadyReplicas, replicas)
+		}
+		if managedClusterStatusNeedsUpdate(cluster, false, endpoint, workload, reason) {
+			if err := markManagedClusterNotReady(ctx, r.Client, cluster, reason, message, endpoint, workload); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
@@ -308,6 +327,7 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls
 		Containers:     []corev1.Container{container},
 		Volumes:        managedClusterVolumes(cluster, tls),
 	}
+	applyManagedClusterScheduling(&podSpec, cluster)
 	annotations := managedClusterAnnotations(cluster)
 	if tls != nil && tls.checksum != "" {
 		annotations[managedTLSChecksumAnnotation] = tls.checksum
@@ -316,9 +336,10 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls
 		ServiceName:          managedClusterHeadlessServiceName(cluster),
 		Replicas:             ptr.To(managedClusterReplicas(cluster)),
 		RevisionHistoryLimit: ptr.To[int32](10),
+		MinReadySeconds:      managedClusterMinReadySeconds(cluster),
 		PodManagementPolicy:  appsv1.ParallelPodManagement,
 		Selector:             &metav1.LabelSelector{MatchLabels: podLabels},
-		UpdateStrategy:       appsv1.StatefulSetUpdateStrategy{Type: appsv1.RollingUpdateStatefulSetStrategyType},
+		UpdateStrategy:       managedClusterUpdateStrategy(cluster),
 		Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{
 				Labels:      podLabels,
@@ -457,7 +478,6 @@ func managedClusterEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTL
 			corev1.EnvVar{Name: "NIFI_WEB_HTTPS_PORT", Value: strconv.Itoa(int(tls.httpsPort))},
 			corev1.EnvVar{Name: "NIFI_SECURITY_DIR", Value: managedTLSSecurityDir},
 			corev1.EnvVar{Name: "NIFI_CONFIG_DIR", Value: managedTLSConfigDir},
-			corev1.EnvVar{Name: "NIFI_WEB_PROXY_HOST", Value: tls.proxyHosts},
 			corev1.EnvVar{Name: "NIFI_KEYSTORE_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: tls.passwordSecretName},
 				Key:                  tls.passwordSecretKey,
@@ -469,6 +489,11 @@ func managedClusterEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTL
 			corev1.EnvVar{Name: "NIFI_WEB_HTTP_PORT", Value: strconv.Itoa(int(defaultNiFiWebPort))},
 		)
 	}
+	// Allowed proxy host and context path (TLS Service DNS names plus any Ingress host).
+	environment = append(environment,
+		corev1.EnvVar{Name: "NIFI_WEB_PROXY_HOST", Value: managedClusterProxyHost(cluster, tls)},
+		corev1.EnvVar{Name: "NIFI_WEB_PROXY_CONTEXT_PATH", Value: managedClusterProxyContextPath(cluster)},
+	)
 	if managedClusterReplicas(cluster) > 1 {
 		coordination := cluster.Spec.Coordination
 		environment = append(environment,
@@ -512,6 +537,8 @@ func (r *NiFiClusterReconciler) reconcileClusterDelete(ctx context.Context, clus
 		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: managedClusterResourceName(cluster), Namespace: cluster.Namespace}},
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: managedClusterResourceName(cluster), Namespace: cluster.Namespace}},
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: managedClusterHeadlessServiceName(cluster), Namespace: cluster.Namespace}},
+		&policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{Name: managedClusterResourceName(cluster), Namespace: cluster.Namespace}},
+		&networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: managedClusterResourceName(cluster), Namespace: cluster.Namespace}},
 	}
 	for _, object := range resources {
 		if err := r.deleteManagedClusterResource(ctx, cluster, object); err != nil {
