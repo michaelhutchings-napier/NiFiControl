@@ -14,9 +14,9 @@ spec:
     heapMax: 2g
   # Operator-managed HTTPS and mutual TLS using externally supplied PKCS12 materials.
   # The operator does not generate or rotate these Secrets; each referenced Secret must
-  # contain keystore.p12, truststore.p12, and ca.crt (the client Secret must also carry
-  # PEM tls.crt and tls.key for the operator's mTLS REST client). The initial admin and
-  # node identities must match the supplied certificate subject DNs exactly.
+  # contain keystore.p12, truststore.p12, tls.crt, and tls.key. ca.crt is optional and
+  # used for explicit trust when present. The initial admin and node identities must
+  # match the supplied certificate subject DNs exactly.
   internalTLS:
     enabled: true
     httpsPort: 8443

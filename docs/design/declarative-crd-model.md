@@ -33,12 +33,12 @@ The preferred user experience is layered. Most users deploy a versioned
 Advanced users can opt into generic low-level CRDs such as `NiFiProcessor`,
 `NiFiConnection`, and `NiFiControllerService` when they need exact control.
 
-## 2. Current NiFiKop CRD Review
+## 2. NiFiKop CRD Lessons
 
-The current repository defines API types in `api/v1`, `api/v1alpha1`, and
-`api/v2alpha1`, generated CRDs under `config/crd/bases`, Helm CRDs under
-`helm/nifikop/crds`, examples under `config/samples`, and reconcilers under
-`internal/controller`.
+This section records the NiFiKop API patterns that informed NiFiControl's design.
+NiFiControl is a new project with its own API group, charts, examples, and
+reconcilers; these notes are historical design input rather than current source
+layout.
 
 ### `NifiCluster`
 

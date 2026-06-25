@@ -103,7 +103,8 @@ internalTLS:
     name: ""
     kind: Issuer
     group: cert-manager.io
-  # Consume externally supplied PKCS12 Secrets (keystore.p12, truststore.p12, ca.crt).
+  # Consume externally supplied TLS Secrets. Required keys: keystore.p12,
+  # truststore.p12, tls.crt, tls.key. Optional key: ca.crt.
   external:
     serverSecretName: ""
     clientSecretName: ""

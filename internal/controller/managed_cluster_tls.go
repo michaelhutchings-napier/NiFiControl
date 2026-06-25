@@ -40,6 +40,8 @@ const (
 	managedTLSChecksumAnnotation = "nifi.controlnifi.io/tls-checksum"
 )
 
+var requiredManagedTLSSecretKeys = []string{tlsKeystoreKey, tlsTruststoreKey, tlsCertKey, tlsKeyKey}
+
 // clusterTLSMaterials is the resolved internal-TLS state used by the StatefulSet and the
 // operator's mTLS REST client. A nil value means TLS is disabled for the cluster.
 type clusterTLSMaterials struct {
@@ -69,7 +71,7 @@ func managedClusterHTTPSPort(cluster *nifiv1alpha1.NiFiCluster) int32 {
 
 // reconcileManagedClusterTLS provisions cert-manager resources and the operator-rendered
 // config for an Internal cluster with internalTLS enabled. It returns the resolved
-// materials once keystore.p12, truststore.p12, and CA material are available. A nil
+// materials once the PKCS12 and PEM certificate material are available. A nil
 // materials result with a nil error means TLS is not yet ready; the caller has already
 // recorded status and should requeue.
 func (r *NiFiClusterReconciler) reconcileManagedClusterTLS(ctx context.Context, cluster *nifiv1alpha1.NiFiCluster) (*clusterTLSMaterials, bool, error) {
@@ -116,17 +118,25 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterTLS(ctx context.Context, 
 
 	// Require the issued materials before declaring TLS ready. A not-yet-created Secret
 	// means cert-manager has not finished issuing, which is pending rather than an error.
-	serverData, serverReady, err := r.tlsSecretMaterials(ctx, cluster.Namespace, plan.serverSecretName)
-	if err != nil && !apierrors.IsNotFound(err) {
-		return nil, false, err
+	serverData, serverMissing, err := r.tlsSecretMaterials(ctx, cluster.Namespace, plan.serverSecretName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			serverMissing = requiredManagedTLSSecretKeys
+		} else {
+			return nil, false, err
+		}
 	}
-	_, clientReady, err := r.tlsSecretMaterials(ctx, cluster.Namespace, plan.clientSecretName)
-	if err != nil && !apierrors.IsNotFound(err) {
-		return nil, false, err
+	_, clientMissing, err := r.tlsSecretMaterials(ctx, cluster.Namespace, plan.clientSecretName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			clientMissing = requiredManagedTLSSecretKeys
+		} else {
+			return nil, false, err
+		}
 	}
-	if !serverReady || !clientReady {
+	if len(serverMissing) > 0 || len(clientMissing) > 0 {
 		return nil, false, r.markManagedClusterTLSNotReady(ctx, cluster, "TLSPending",
-			"Waiting for cert-manager to issue keystore.p12, truststore.p12, and CA material.")
+			tlsMissingMessage("Waiting for cert-manager to issue TLS materials.", plan, serverMissing, clientMissing))
 	}
 
 	materials := plan.materials()
@@ -142,7 +152,7 @@ func (r *NiFiClusterReconciler) reconcileExternalTLS(ctx context.Context, cluste
 	if err := r.reconcileTLSConfigMap(ctx, cluster, plan); err != nil {
 		return nil, false, err
 	}
-	serverData, serverReady, err := r.tlsSecretMaterials(ctx, cluster.Namespace, plan.serverSecretName)
+	serverData, serverMissing, err := r.tlsSecretMaterials(ctx, cluster.Namespace, plan.serverSecretName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, false, r.markManagedClusterTLSNotReady(ctx, cluster, "TLSSecretMissing",
@@ -150,7 +160,7 @@ func (r *NiFiClusterReconciler) reconcileExternalTLS(ctx context.Context, cluste
 		}
 		return nil, false, err
 	}
-	_, clientReady, err := r.tlsSecretMaterials(ctx, cluster.Namespace, plan.clientSecretName)
+	_, clientMissing, err := r.tlsSecretMaterials(ctx, cluster.Namespace, plan.clientSecretName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, false, r.markManagedClusterTLSNotReady(ctx, cluster, "TLSSecretMissing",
@@ -158,9 +168,9 @@ func (r *NiFiClusterReconciler) reconcileExternalTLS(ctx context.Context, cluste
 		}
 		return nil, false, err
 	}
-	if !serverReady || !clientReady {
+	if len(serverMissing) > 0 || len(clientMissing) > 0 {
 		return nil, false, r.markManagedClusterTLSNotReady(ctx, cluster, "TLSPending",
-			"Externally supplied Secrets must contain keystore.p12, truststore.p12, and ca.crt.")
+			tlsMissingMessage("Externally supplied TLS Secrets are incomplete.", plan, serverMissing, clientMissing))
 	}
 	materials := plan.materials()
 	materials.checksum = tlsChecksum(serverData, r.tlsConfigChecksumInput(plan))
@@ -309,17 +319,37 @@ func (r *NiFiClusterReconciler) reconcileTLSConfigMap(ctx context.Context, clust
 	return err
 }
 
-// tlsSecretMaterials fetches a PKCS12 Secret and reports whether it carries the keystore,
-// truststore, and CA material required before TLS is considered ready.
-func (r *NiFiClusterReconciler) tlsSecretMaterials(ctx context.Context, namespace, name string) (map[string][]byte, bool, error) {
+// tlsSecretMaterials fetches a PKCS12 Secret and reports missing required keys. ca.crt is
+// intentionally optional: when present it is used to pin trust, otherwise the operator and
+// readiness probe fall back to the system trust store.
+func (r *NiFiClusterReconciler) tlsSecretMaterials(ctx context.Context, namespace, name string) (map[string][]byte, []string, error) {
 	secret := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, secret); err != nil {
-		return nil, false, err
+		return nil, nil, err
 	}
-	ready := len(secret.Data[tlsKeystoreKey]) > 0 &&
-		len(secret.Data[tlsTruststoreKey]) > 0 &&
-		len(secret.Data[tlsCAKey]) > 0
-	return secret.Data, ready, nil
+	return secret.Data, missingSecretKeys(secret.Data, requiredManagedTLSSecretKeys), nil
+}
+
+func missingSecretKeys(data map[string][]byte, required []string) []string {
+	missing := []string{}
+	for _, key := range required {
+		if len(data[key]) == 0 {
+			missing = append(missing, key)
+		}
+	}
+	return missing
+}
+
+func tlsMissingMessage(prefix string, plan tlsPlan, serverMissing, clientMissing []string) string {
+	parts := []string{prefix}
+	if len(serverMissing) > 0 {
+		parts = append(parts, fmt.Sprintf("server Secret %q missing %s", plan.serverSecretName, strings.Join(serverMissing, ", ")))
+	}
+	if len(clientMissing) > 0 {
+		parts = append(parts, fmt.Sprintf("client Secret %q missing %s", plan.clientSecretName, strings.Join(clientMissing, ", ")))
+	}
+	parts = append(parts, "ca.crt is optional and is used for explicit trust when present.")
+	return strings.Join(parts, " ")
 }
 
 func (r *NiFiClusterReconciler) tlsConfigChecksumInput(plan tlsPlan) string {
@@ -652,9 +682,17 @@ dir="${NIFI_SECURITY_DIR:-/opt/nifi/nificontrol-tls}"
 host="${NIFI_WEB_ADVERTISED_HOST:-localhost}"
 url="https://${host}:${port}/nifi-api/flow/about"
 if command -v curl >/dev/null 2>&1; then
-  exec curl -sS -o /dev/null --cert "${dir}/tls.crt" --key "${dir}/tls.key" --cacert "${dir}/ca.crt" "${url}"
+  args=(-sS -o /dev/null --cert "${dir}/tls.crt" --key "${dir}/tls.key")
+  if [ -s "${dir}/ca.crt" ]; then
+    args+=(--cacert "${dir}/ca.crt")
+  fi
+  exec curl "${args[@]}" "${url}"
 fi
-exec openssl s_client -connect "${host}:${port}" -cert "${dir}/tls.crt" -key "${dir}/tls.key" -CAfile "${dir}/ca.crt" -verify_return_error -quiet </dev/null
+args=(s_client -connect "${host}:${port}" -cert "${dir}/tls.crt" -key "${dir}/tls.key" -verify_return_error -quiet)
+if [ -s "${dir}/ca.crt" ]; then
+  args+=(-CAfile "${dir}/ca.crt")
+fi
+exec openssl "${args[@]}" </dev/null
 `
 }
 

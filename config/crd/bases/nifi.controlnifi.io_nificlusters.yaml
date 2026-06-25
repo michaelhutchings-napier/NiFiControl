@@ -505,13 +505,13 @@ spec:
                       StatefulSet.
                     type: boolean
                   external:
-                    description: External consumes PKCS12 keystores and CA material
-                      supplied outside the operator.
+                    description: External consumes PKCS12 keystores and PEM certificate
+                      material supplied outside the operator.
                     properties:
                       clientSecretName:
                         description: |-
-                          ClientSecretName is the Secret holding the operator client keystore.p12, ca.crt, plus
-                          PEM tls.crt and tls.key used by the operator's mTLS REST client.
+                          ClientSecretName is the Secret holding the operator client keystore.p12, truststore.p12,
+                          tls.crt, and tls.key used by the operator's mTLS REST client.
                         minLength: 1
                         type: string
                       initialAdminIdentity:
@@ -551,7 +551,7 @@ spec:
                         type: string
                       serverSecretName:
                         description: ServerSecretName is the Secret holding the server/node
-                          keystore.p12, truststore.p12, and ca.crt.
+                          keystore.p12, truststore.p12, tls.crt, and tls.key.
                         minLength: 1
                         type: string
                     required:
@@ -2140,8 +2140,8 @@ spec:
                       node (server certificate DN).
                     type: string
                   ready:
-                    description: Ready is true once keystore.p12, truststore.p12,
-                      and CA material are available.
+                    description: Ready is true once required PKCS12 and PEM certificate
+                      material is available.
                     type: boolean
                   serverSecretName:
                     description: ServerSecretName is the Secret consumed by the NiFi

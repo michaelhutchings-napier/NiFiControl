@@ -572,8 +572,9 @@ type tlsClientMaterials struct {
 	ca   []byte
 }
 
-// tlsClientMaterial loads the PEM client certificate, key, and CA from a cert-manager
-// issued Secret (tls.crt, tls.key, ca.crt) for the operator's mTLS REST client.
+// tlsClientMaterial loads the PEM client certificate and key from a TLS Secret for the
+// operator's mTLS REST client. ca.crt is optional; when present it pins trust, otherwise
+// the client uses the system trust store.
 func tlsClientMaterial(ctx context.Context, c client.Client, namespace, secretName string) (tlsClientMaterials, error) {
 	secret := &corev1.Secret{}
 	if err := c.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, secret); err != nil {

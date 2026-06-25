@@ -262,7 +262,7 @@ type NiFiClusterInternalTLSSpec struct {
 	// (a self-signed Issuer that signs a CA certificate, backing a CA Issuer that signs
 	// the leaf certificates).
 	SelfSigned *NiFiSelfSignedCASpec `json:"selfSigned,omitempty"`
-	// External consumes PKCS12 keystores and CA material supplied outside the operator.
+	// External consumes PKCS12 keystores and PEM certificate material supplied outside the operator.
 	External *NiFiExternalTLSSpec `json:"external,omitempty"`
 	// Certificate tunes the operator-generated leaf certificates. Ignored in external mode.
 	Certificate *NiFiTLSCertificateSpec `json:"certificate,omitempty"`
@@ -288,15 +288,17 @@ type NiFiSelfSignedCASpec struct {
 	CADuration string `json:"caDuration,omitempty"`
 }
 
-// NiFiExternalTLSSpec consumes externally supplied PKCS12 keystores. Each referenced
-// Secret must contain keystore.p12, truststore.p12, and ca.crt. The operator does not
+// NiFiExternalTLSSpec consumes externally supplied PKCS12 keystores and PEM certificate
+// material. Each referenced Secret must contain keystore.p12, truststore.p12, tls.crt,
+// and tls.key. ca.crt is optional; when present NiFiControl uses it to pin trust, otherwise
+// the operator and readiness probe use the system trust store. The operator does not
 // generate or rotate these materials.
 type NiFiExternalTLSSpec struct {
-	// ServerSecretName is the Secret holding the server/node keystore.p12, truststore.p12, and ca.crt.
+	// ServerSecretName is the Secret holding the server/node keystore.p12, truststore.p12, tls.crt, and tls.key.
 	// +kubebuilder:validation:MinLength=1
 	ServerSecretName string `json:"serverSecretName"`
-	// ClientSecretName is the Secret holding the operator client keystore.p12, ca.crt, plus
-	// PEM tls.crt and tls.key used by the operator's mTLS REST client.
+	// ClientSecretName is the Secret holding the operator client keystore.p12, truststore.p12,
+	// tls.crt, and tls.key used by the operator's mTLS REST client.
 	// +kubebuilder:validation:MinLength=1
 	ClientSecretName string `json:"clientSecretName"`
 	// KeystorePasswordSecretRef references the password protecting the supplied PKCS12 stores.
@@ -344,7 +346,7 @@ type NiFiClusterTLSStatus struct {
 	InitialAdminIdentity string `json:"initialAdminIdentity,omitempty"`
 	// NodeIdentity is the NiFi identity trusted as a cluster node (server certificate DN).
 	NodeIdentity string `json:"nodeIdentity,omitempty"`
-	// Ready is true once keystore.p12, truststore.p12, and CA material are available.
+	// Ready is true once required PKCS12 and PEM certificate material is available.
 	Ready bool `json:"ready,omitempty"`
 }
 

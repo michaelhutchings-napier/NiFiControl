@@ -79,9 +79,10 @@ spec:
 ### Externally supplied PKCS12 Secrets
 
 The operator generates no certificates; you supply them. Each referenced Secret must
-contain `keystore.p12`, `truststore.p12`, and `ca.crt`; the client Secret must also carry
-PEM `tls.crt` and `tls.key` for the operator's REST client. The identities must match the
-certificate subject DNs exactly.
+contain `keystore.p12`, `truststore.p12`, PEM `tls.crt`, and PEM `tls.key`. `ca.crt` is
+optional. When present NiFiControl uses it to pin trust; when absent the operator and
+readiness probe use the system trust store. The identities must match the certificate
+subject DNs exactly.
 
 ```yaml
 spec:
@@ -145,9 +146,10 @@ enhancement.
 ## TLS readiness gating
 
 The operator marks the cluster `TLSReady` only once the consumed Secrets actually contain
-`keystore.p12`, `truststore.p12`, and `ca.crt`. While certificates are still being issued
-the condition is `TLSReady=False` reason `TLSPending`, and the StatefulSet is not created.
-This prevents NiFi from starting before its keystore exists.
+`keystore.p12`, `truststore.p12`, `tls.crt`, and `tls.key`. `ca.crt` is optional trust
+material. While certificates are still being issued the condition is `TLSReady=False`
+reason `TLSPending`, and the StatefulSet is not created. This prevents NiFi from starting
+before the material it consumes exists.
 
 ## Services, probes, and endpoint
 

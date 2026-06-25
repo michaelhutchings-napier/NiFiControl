@@ -1,7 +1,25 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
-  "required": ["image", "replicas", "service", "storage", "resources", "jvm", "deletionPolicy"],
+  "required": [
+    "image",
+    "replicas",
+    "service",
+    "storage",
+    "resources",
+    "jvm",
+    "scheduling",
+    "podDisruptionBudget",
+    "ingress",
+    "upgrade",
+    "scaleDown",
+    "coordination",
+    "api",
+    "internalTLS",
+    "additionalEnv",
+    "deletionPolicy",
+    "driftPolicy"
+  ],
   "properties": {
     "nameOverride": { "type": "string" },
     "fullnameOverride": { "type": "string" },
@@ -17,12 +35,12 @@
     "replicas": { "type": "integer", "minimum": 1 },
     "service": {
       "type": "object",
-      "required": ["type", "port"],
+      "required": ["type", "port", "nodePort", "annotations"],
       "properties": {
         "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "nodePort": { "type": "integer", "minimum": 0, "maximum": 65535 },
-        "annotations": { "type": "object" }
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } }
       }
     },
     "storage": {
@@ -32,7 +50,11 @@
         "enabled": { "type": "boolean" },
         "size": { "type": "string", "minLength": 1 },
         "storageClassName": { "type": "string" },
-        "accessModes": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+        "accessModes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
       }
     },
     "resources": { "type": "object" },
@@ -44,8 +66,68 @@
         "heapMax": { "type": "string", "minLength": 1 }
       }
     },
+    "scheduling": {
+      "type": "object",
+      "required": ["nodeSelector", "tolerations", "affinity", "topologySpreadConstraints", "priorityClassName"],
+      "properties": {
+        "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
+        "tolerations": { "type": "array", "items": { "type": "object" } },
+        "affinity": { "type": "object" },
+        "topologySpreadConstraints": { "type": "array", "items": { "type": "object" } },
+        "priorityClassName": { "type": "string" }
+      }
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "maxUnavailable": { "$ref": "#/definitions/intOrStringOrNull" },
+        "minAvailable": { "$ref": "#/definitions/intOrStringOrNull" }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "required": ["enabled", "ingressClassName", "host", "path", "pathType", "contextPath", "annotations", "tls"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "ingressClassName": { "type": "string" },
+        "host": { "type": "string" },
+        "path": { "type": "string", "minLength": 1 },
+        "pathType": { "type": "string", "enum": ["Exact", "Prefix", "ImplementationSpecific"] },
+        "contextPath": { "type": "string" },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "tls": {
+          "type": "object",
+          "required": ["secretName", "hosts"],
+          "properties": {
+            "secretName": { "type": "string" },
+            "hosts": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "upgrade": {
+      "type": "object",
+      "required": ["strategy", "partition", "minReadySeconds"],
+      "properties": {
+        "strategy": { "type": "string", "enum": ["RollingUpdate", "OnDelete"] },
+        "partition": { "type": ["integer", "null"], "minimum": 0 },
+        "minReadySeconds": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "scaleDown": {
+      "type": "object",
+      "required": ["offloadData", "timeoutSeconds", "onTimeout"],
+      "properties": {
+        "offloadData": { "type": "boolean" },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "onTimeout": { "type": "string", "enum": ["Fail", "Force"] }
+      }
+    },
     "coordination": {
       "type": "object",
+      "required": ["zookeeperConnectString", "zookeeperRootNode", "electionMaxWait"],
       "properties": {
         "zookeeperConnectString": { "type": "string" },
         "zookeeperRootNode": { "type": "string" },
@@ -54,18 +136,89 @@
     },
     "api": {
       "type": "object",
+      "required": ["uri", "timeout"],
       "properties": {
         "uri": { "type": "string" },
         "timeout": { "type": "string" }
+      }
+    },
+    "internalTLS": {
+      "type": "object",
+      "required": ["enabled", "httpsPort", "selfSigned", "issuerRef", "external", "certificate"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "httpsPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "selfSigned": {
+          "type": "object",
+          "required": ["caCommonName", "caDuration"],
+          "properties": {
+            "caCommonName": { "type": "string" },
+            "caDuration": { "type": "string" }
+          }
+        },
+        "issuerRef": {
+          "type": "object",
+          "required": ["name", "kind", "group"],
+          "properties": {
+            "name": { "type": "string" },
+            "kind": { "type": "string", "enum": ["Issuer", "ClusterIssuer"] },
+            "group": { "type": "string" }
+          }
+        },
+        "external": {
+          "type": "object",
+          "required": [
+            "serverSecretName",
+            "clientSecretName",
+            "keystorePasswordSecretRef",
+            "initialAdminIdentity",
+            "nodeIdentity"
+          ],
+          "properties": {
+            "serverSecretName": { "type": "string" },
+            "clientSecretName": { "type": "string" },
+            "keystorePasswordSecretRef": {
+              "type": "object",
+              "required": ["name", "key"],
+              "properties": {
+                "name": { "type": "string" },
+                "key": { "type": "string", "minLength": 1 }
+              }
+            },
+            "initialAdminIdentity": { "type": "string" },
+            "nodeIdentity": { "type": "string" }
+          }
+        },
+        "certificate": {
+          "type": "object",
+          "required": ["duration", "renewBefore", "additionalServerSANs", "operatorCommonName", "nodeCommonName"],
+          "properties": {
+            "duration": { "type": "string" },
+            "renewBefore": { "type": "string" },
+            "additionalServerSANs": { "type": "array", "items": { "type": "string" } },
+            "operatorCommonName": { "type": "string" },
+            "nodeCommonName": { "type": "string" }
+          }
+        }
       }
     },
     "additionalEnv": { "type": "array", "items": { "type": "object" } },
     "deletionPolicy": { "type": "string", "enum": ["Delete", "Orphan"] },
     "driftPolicy": {
       "type": "object",
+      "required": ["mode"],
       "properties": {
         "mode": { "type": "string", "enum": ["Ignore", "Warn", "Reconcile", "Fail"] }
       }
+    }
+  },
+  "definitions": {
+    "intOrStringOrNull": {
+      "anyOf": [
+        { "type": "integer", "minimum": 0 },
+        { "type": "string", "minLength": 1 },
+        { "type": "null" }
+      ]
     }
   }
 }

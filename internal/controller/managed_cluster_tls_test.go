@@ -57,15 +57,20 @@ func getUnstructured(t *testing.T, c client.Client, gvk schema.GroupVersionKind,
 
 func issueTLSSecret(t *testing.T, c client.Client, name, namespace string) {
 	t.Helper()
+	issueTLSSecretWithData(t, c, name, namespace, map[string][]byte{
+		tlsKeystoreKey:   []byte("keystore-bytes"),
+		tlsTruststoreKey: []byte("truststore-bytes"),
+		tlsCAKey:         []byte("ca-pem"),
+		tlsCertKey:       []byte("cert-pem"),
+		tlsKeyKey:        []byte("key-pem"),
+	})
+}
+
+func issueTLSSecretWithData(t *testing.T, c client.Client, name, namespace string, data map[string][]byte) {
+	t.Helper()
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}}
 	_, err := ctrl.CreateOrUpdate(context.Background(), c, secret, func() error {
-		secret.Data = map[string][]byte{
-			tlsKeystoreKey:   []byte("keystore-bytes"),
-			tlsTruststoreKey: []byte("truststore-bytes"),
-			tlsCAKey:         []byte("ca-pem"),
-			tlsCertKey:       []byte("cert-pem"),
-			tlsKeyKey:        []byte("key-pem"),
-		}
+		secret.Data = data
 		return nil
 	})
 	if err != nil {
@@ -227,6 +232,110 @@ func TestReconcileManagedClusterTLSExternal(t *testing.T) {
 	}
 	if current.Status.TLS == nil || current.Status.TLS.Mode != "External" || current.Status.TLS.NodeIdentity != "CN=edge-node,O=NiFiControl" {
 		t.Fatalf("external TLS status = %#v", current.Status.TLS)
+	}
+}
+
+func TestReconcileManagedClusterTLSExternalAllowsMissingCA(t *testing.T) {
+	scheme := certManagerTestScheme()
+	storageEnabled := false
+	cluster := &nifiv1alpha1.NiFiCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "edge", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiClusterSpec{
+			Mode:     nifiv1alpha1.ClusterModeInternal,
+			Replicas: 1,
+			Storage:  nifiv1alpha1.NiFiClusterStorageSpec{Enabled: &storageEnabled},
+			InternalTLS: &nifiv1alpha1.NiFiClusterInternalTLSSpec{
+				Enabled: true,
+				External: &nifiv1alpha1.NiFiExternalTLSSpec{
+					ServerSecretName:          "edge-server",
+					ClientSecretName:          "edge-client",
+					KeystorePasswordSecretRef: &nifiv1alpha1.SecretKeyRef{SecretKeySelector: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "edge-pw"}, Key: "password"}},
+					InitialAdminIdentity:      "CN=edge-admin,O=NiFiControl",
+					NodeIdentity:              "CN=edge-node,O=NiFiControl",
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster).
+		WithStatusSubresource(&nifiv1alpha1.NiFiCluster{}, &appsv1.StatefulSet{}).
+		Build()
+	reconciler := &NiFiClusterReconciler{Client: k8sClient, Scheme: scheme, ReachabilityChecker: fakeReachabilityChecker{}}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name, Namespace: cluster.Namespace}}
+	secretData := map[string][]byte{
+		tlsKeystoreKey:   []byte("keystore-bytes"),
+		tlsTruststoreKey: []byte("truststore-bytes"),
+		tlsCertKey:       []byte("cert-pem"),
+		tlsKeyKey:        []byte("key-pem"),
+	}
+	issueTLSSecretWithData(t, k8sClient, "edge-server", cluster.Namespace, secretData)
+	issueTLSSecretWithData(t, k8sClient, "edge-client", cluster.Namespace, secretData)
+
+	for range 2 {
+		if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	current := &nifiv1alpha1.NiFiCluster{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if current.Status.TLS == nil || !current.Status.TLS.Ready {
+		t.Fatalf("TLS status = %#v, want ready without ca.crt", current.Status.TLS)
+	}
+}
+
+func TestReconcileManagedClusterTLSExternalRequiresPEMForRuntime(t *testing.T) {
+	scheme := certManagerTestScheme()
+	storageEnabled := false
+	cluster := &nifiv1alpha1.NiFiCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "edge", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiClusterSpec{
+			Mode:     nifiv1alpha1.ClusterModeInternal,
+			Replicas: 1,
+			Storage:  nifiv1alpha1.NiFiClusterStorageSpec{Enabled: &storageEnabled},
+			InternalTLS: &nifiv1alpha1.NiFiClusterInternalTLSSpec{
+				Enabled: true,
+				External: &nifiv1alpha1.NiFiExternalTLSSpec{
+					ServerSecretName:          "edge-server",
+					ClientSecretName:          "edge-client",
+					KeystorePasswordSecretRef: &nifiv1alpha1.SecretKeyRef{SecretKeySelector: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "edge-pw"}, Key: "password"}},
+					InitialAdminIdentity:      "CN=edge-admin,O=NiFiControl",
+					NodeIdentity:              "CN=edge-node,O=NiFiControl",
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster).
+		WithStatusSubresource(&nifiv1alpha1.NiFiCluster{}, &appsv1.StatefulSet{}).
+		Build()
+	reconciler := &NiFiClusterReconciler{Client: k8sClient, Scheme: scheme, ReachabilityChecker: fakeReachabilityChecker{}}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name, Namespace: cluster.Namespace}}
+	pkcs12Only := map[string][]byte{
+		tlsKeystoreKey:   []byte("keystore-bytes"),
+		tlsTruststoreKey: []byte("truststore-bytes"),
+		tlsCAKey:         []byte("ca-pem"),
+	}
+	issueTLSSecretWithData(t, k8sClient, "edge-server", cluster.Namespace, pkcs12Only)
+	issueTLSSecretWithData(t, k8sClient, "edge-client", cluster.Namespace, pkcs12Only)
+
+	for range 2 {
+		if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	current := &nifiv1alpha1.NiFiCluster{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	assertControllerCondition(t, current.Status.Conditions, nifiv1alpha1.ConditionTLSReady, metav1.ConditionFalse, "TLSPending")
+	if !strings.Contains(current.Status.Sync.LastError, tlsCertKey) || !strings.Contains(current.Status.Sync.LastError, tlsKeyKey) {
+		t.Fatalf("last error = %q, want missing PEM keys", current.Status.Sync.LastError)
 	}
 }
 
