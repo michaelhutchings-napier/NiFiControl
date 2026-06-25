@@ -19,6 +19,9 @@ services, and high-level flow deployments.
   processors, ports, connections, funnels, and labels reconcile against NiFi.
 - Flow deployments import complete embedded NiFi `RegisteredFlowSnapshot`
   contents and use NiFi's asynchronous replace requests for updates.
+- Flow configuration can be backed up to a ConfigMap/Secret and restored
+  (imported or replaced) declaratively. See
+  [docs/backup-restore.md](docs/backup-restore.md).
 - Public Git repositories, OCI images, and NiFi Registry sources fetch and
   materialize full snapshots. Authenticated source credentials remain under
   development.

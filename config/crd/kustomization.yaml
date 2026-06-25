@@ -1,4 +1,5 @@
 resources:
+  - bases/nifi.controlnifi.io_nifibackups.yaml
   - bases/nifi.controlnifi.io_nificlusters.yaml
   - bases/nifi.controlnifi.io_nificonnections.yaml
   - bases/nifi.controlnifi.io_nificontrollerservices.yaml
@@ -13,5 +14,6 @@ resources:
   - bases/nifi.controlnifi.io_nifiprocessors.yaml
   - bases/nifi.controlnifi.io_nifiregistryclients.yaml
   - bases/nifi.controlnifi.io_nifireportingtasks.yaml
+  - bases/nifi.controlnifi.io_nifirestores.yaml
   - bases/nifi.controlnifi.io_nifiusergroups.yaml
   - bases/nifi.controlnifi.io_nifiusers.yaml

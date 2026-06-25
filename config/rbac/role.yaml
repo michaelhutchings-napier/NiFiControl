@@ -79,6 +79,7 @@ rules:
 - apiGroups:
   - nifi.controlnifi.io
   resources:
+  - nifibackups
   - nificlusters
   - nificonnections
   - nificontrollerservices
@@ -93,6 +94,7 @@ rules:
   - nifiprocessors
   - nifiregistryclients
   - nifireportingtasks
+  - nifirestores
   - nifiusergroups
   - nifiusers
   verbs:
@@ -106,6 +108,7 @@ rules:
 - apiGroups:
   - nifi.controlnifi.io
   resources:
+  - nifibackups/finalizers
   - nificlusters/finalizers
   - nificonnections/finalizers
   - nificontrollerservices/finalizers
@@ -120,6 +123,7 @@ rules:
   - nifiprocessors/finalizers
   - nifiregistryclients/finalizers
   - nifireportingtasks/finalizers
+  - nifirestores/finalizers
   - nifiusergroups/finalizers
   - nifiusers/finalizers
   verbs:
@@ -127,6 +131,7 @@ rules:
 - apiGroups:
   - nifi.controlnifi.io
   resources:
+  - nifibackups/status
   - nificlusters/status
   - nificonnections/status
   - nificontrollerservices/status
@@ -141,6 +146,7 @@ rules:
   - nifiprocessors/status
   - nifiregistryclients/status
   - nifireportingtasks/status
+  - nifirestores/status
   - nifiusergroups/status
   - nifiusers/status
   verbs:

@@ -86,6 +86,12 @@ func main() {
 	if err := (&controller.NiFiFunnelReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), FunnelClient: nifi.HTTPFunnelClient{}}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
+	if err := (&controller.NiFiBackupReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), SnapshotReader: nifi.HTTPFlowSnapshotClient{}, ProcessGroups: nifi.HTTPProcessGroupClient{}}).SetupWithManager(mgr); err != nil {
+		os.Exit(1)
+	}
+	if err := (&controller.NiFiRestoreReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Snapshots: nifi.HTTPFlowSnapshotClient{}, ProcessGroups: nifi.HTTPProcessGroupClient{}}).SetupWithManager(mgr); err != nil {
+		os.Exit(1)
+	}
 	if err := (&controller.NiFiLabelReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), LabelClient: nifi.HTTPLabelClient{}}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}

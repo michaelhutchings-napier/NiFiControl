@@ -1,0 +1,16 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiRestore
+metadata:
+  name: restore-from-nightly
+spec:
+  clusterRef:
+    name: production-hardened
+  source:
+    # Restore the snapshot captured by a NiFiBackup. Alternatively set
+    # source.storageRef.{type,name} to read a ConfigMap/Secret directly.
+    backupRef: nightly-root-flow
+  # Import creates the snapshot as a new child group (non-destructive); Replace
+  # swaps the target group's contents using NiFi's asynchronous replace workflow.
+  mode: Import
+  # Empty targetProcessGroupId targets the root process group.
+  targetProcessGroupId: ""

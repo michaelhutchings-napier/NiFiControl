@@ -1,0 +1,12 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiBackup
+metadata:
+  name: nightly-root-flow
+spec:
+  clusterRef:
+    name: production-hardened
+  # Empty processGroupId backs up the whole flow (the root process group).
+  processGroupId: ""
+  storage:
+    type: ConfigMap        # ConfigMap | Secret
+    # name defaults to "<backup-name>-flow" when omitted.
