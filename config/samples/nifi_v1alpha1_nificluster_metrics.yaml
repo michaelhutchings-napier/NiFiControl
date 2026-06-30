@@ -1,0 +1,31 @@
+# A managed cluster with Prometheus metrics enabled. NiFi 2.x always serves metrics at
+# /nifi-api/flow/metrics/prometheus on the web port; enabling metrics renders a Prometheus
+# Operator ServiceMonitor for that endpoint. Requires the Prometheus Operator CRDs
+# (monitoring.coreos.com); without them the cluster reports MetricsReady=False and continues.
+# See docs/observability.md.
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiCluster
+metadata:
+  name: production
+spec:
+  mode: Internal
+  image: apache/nifi:2.10.0
+  replicas: 3
+  coordination:
+    zookeeperConnectString: zookeeper.dataflows.svc:2181
+  storage:
+    enabled: true
+    size: 50Gi
+  metrics:
+    enabled: true
+    # path: /nifi-api/flow/metrics/prometheus   # default
+    serviceMonitor:
+      enabled: true
+      interval: 30s
+      scrapeTimeout: 10s
+      # Labels so a Prometheus instance's serviceMonitorSelector selects this ServiceMonitor.
+      labels:
+        release: kube-prometheus-stack
+  deletionPolicy: Orphan
+  driftPolicy:
+    mode: Reconcile

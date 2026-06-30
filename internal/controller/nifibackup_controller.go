@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -42,6 +43,8 @@ type NiFiBackupReconciler struct {
 	Scheme         *runtime.Scheme
 	SnapshotReader nifi.FlowSnapshotReader
 	ProcessGroups  nifi.ProcessGroupClient
+	// Recorder emits Kubernetes Events for notable lifecycle transitions (optional).
+	Recorder record.EventRecorder
 }
 
 func (r *NiFiBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -148,6 +151,9 @@ func (r *NiFiBackupReconciler) markBackupWaiting(ctx context.Context, instance *
 }
 
 func (r *NiFiBackupReconciler) markBackupFailed(ctx context.Context, instance *nifiv1alpha1.NiFiBackup, reason, message string) error {
+	if instance.Status.Phase != backupPhaseFailed || instance.Status.Sync.LastError != message {
+		recordEvent(r.Recorder, instance, corev1.EventTypeWarning, reason, message)
+	}
 	instance.Status.Phase = backupPhaseFailed
 	instance.Status.CommonStatus.MarkNotReady(instance.Generation, reason, message)
 	instance.Status.Sync.LastError = message
@@ -165,7 +171,9 @@ func (r *NiFiBackupReconciler) markBackupSucceeded(ctx context.Context, instance
 	instance.Status.CompletedTime = &now
 	instance.Status.Sync.LastError = ""
 	instance.Status.Sync.LastSuccessfulTime = &now
-	instance.Status.CommonStatus.MarkReady(instance.Generation, "BackupComplete", fmt.Sprintf("Captured process group %s into %s/%s.", processGroupID, storageType, storageName))
+	message := fmt.Sprintf("Captured process group %s into %s/%s.", processGroupID, storageType, storageName)
+	instance.Status.CommonStatus.MarkReady(instance.Generation, "BackupComplete", message)
+	recordEvent(r.Recorder, instance, corev1.EventTypeNormal, "BackupComplete", message)
 	return r.Status().Update(ctx, instance)
 }
 

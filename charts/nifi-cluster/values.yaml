@@ -121,6 +121,24 @@ internalTLS:
     operatorCommonName: ""
     nodeCommonName: ""
 
+# Prometheus metrics. NiFi 2.x always serves Prometheus-format metrics from its REST API
+# at /nifi-api/flow/metrics/prometheus on the web port, so enabling metrics only controls
+# whether the operator renders a Prometheus Operator ServiceMonitor. The Prometheus
+# Operator CRDs must be installed; otherwise the cluster reports MetricsReady=False
+# (CRDsNotInstalled) and continues. On a TLS cluster the scrape uses the operator-managed
+# client certificate and the scrape identity needs NiFi read authorization.
+metrics:
+  enabled: false
+  path: /nifi-api/flow/metrics/prometheus
+  serviceMonitor:
+    enabled: false
+    interval: ""        # e.g. 30s; empty uses the Prometheus default
+    scrapeTimeout: ""    # e.g. 10s; empty uses the Prometheus default
+    # Extra labels so a Prometheus instance's serviceMonitorSelector can select it.
+    labels: {}
+    # Disable TLS verification when scraping a TLS cluster (development only).
+    insecureSkipVerify: false
+
 additionalEnv: []
 
 deletionPolicy: Delete

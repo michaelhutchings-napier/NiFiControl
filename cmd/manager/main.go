@@ -40,7 +40,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.NiFiClusterReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), ReachabilityChecker: nifi.HTTPReachabilityChecker{}, ClusterNodeClient: nifi.HTTPClusterNodeClient{}}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.NiFiClusterReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), ReachabilityChecker: nifi.HTTPReachabilityChecker{}, ClusterNodeClient: nifi.HTTPClusterNodeClient{}, Recorder: mgr.GetEventRecorderFor("nificluster-controller")}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
 	if err := (&controller.NiFiRegistryClientReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), RegistryClientClient: nifi.HTTPRegistryClientClient{}}).SetupWithManager(mgr); err != nil {
@@ -86,13 +86,13 @@ func main() {
 	if err := (&controller.NiFiFunnelReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), FunnelClient: nifi.HTTPFunnelClient{}}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
-	if err := (&controller.NiFiNodeGroupReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), ClusterNodeClient: nifi.HTTPClusterNodeClient{}}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.NiFiNodeGroupReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), ClusterNodeClient: nifi.HTTPClusterNodeClient{}, Recorder: mgr.GetEventRecorderFor("nifinodegroup-controller")}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
-	if err := (&controller.NiFiBackupReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), SnapshotReader: nifi.HTTPFlowSnapshotClient{}, ProcessGroups: nifi.HTTPProcessGroupClient{}}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.NiFiBackupReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), SnapshotReader: nifi.HTTPFlowSnapshotClient{}, ProcessGroups: nifi.HTTPProcessGroupClient{}, Recorder: mgr.GetEventRecorderFor("nifibackup-controller")}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
-	if err := (&controller.NiFiRestoreReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Snapshots: nifi.HTTPFlowSnapshotClient{}, ProcessGroups: nifi.HTTPProcessGroupClient{}}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.NiFiRestoreReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Snapshots: nifi.HTTPFlowSnapshotClient{}, ProcessGroups: nifi.HTTPProcessGroupClient{}, Recorder: mgr.GetEventRecorderFor("nifirestore-controller")}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
 	if err := (&controller.NiFiLabelReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), LabelClient: nifi.HTTPLabelClient{}}).SetupWithManager(mgr); err != nil {

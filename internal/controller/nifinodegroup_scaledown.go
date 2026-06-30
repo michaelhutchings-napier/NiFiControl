@@ -2,10 +2,12 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -67,8 +69,16 @@ func (r *NiFiNodeGroupReconciler) reconcileNodeGroupScaleDown(ctx context.Contex
 
 	var statusErr error
 	if step.status == nil {
+		if group.Status.ScaleDown != nil {
+			recordEvent(r.Recorder, group, corev1.EventTypeNormal, "NodeOffloaded",
+				fmt.Sprintf("Offloaded and removed node-group node %s; scaling to %d replicas.", group.Status.ScaleDown.NodeAddress, step.replicas))
+		}
 		statusErr = r.clearNodeGroupScaleDown(ctx, group)
 	} else {
+		if group.Status.ScaleDown == nil || group.Status.ScaleDown.NodeAddress != step.status.NodeAddress {
+			recordEvent(r.Recorder, group, corev1.EventTypeNormal, "OffloadingNode",
+				fmt.Sprintf("%s node-group node %s before removal.", step.status.Phase, step.status.NodeAddress))
+		}
 		statusErr = r.setNodeGroupScaleDown(ctx, group, step.status)
 	}
 	if stepErr != nil {

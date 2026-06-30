@@ -115,13 +115,26 @@ See `config/samples/autoscaling/hpa_nificluster.yaml`.
 
 ## Getting the metric signal
 
-KEDA's Prometheus trigger needs NiFi metrics in Prometheus. NiFi 2.x emits Prometheus-format
-metrics; surface them by creating a `PrometheusReportingTask` (via the `NiFiReportingTask`
-CRD) and scraping the cluster, or by scraping NiFi's
-`/nifi-api/flow/metrics/prometheus` endpoint. A `ServiceMonitor` example for the HTTP
-(development) case is in `config/samples/autoscaling/servicemonitor_nificluster.yaml`; secure
-clusters require the scraper to present the operator client certificate. Operator-managed
-metrics export and a ServiceMonitor are tracked as a separate observability milestone.
+KEDA's Prometheus trigger needs NiFi metrics in Prometheus. NiFi 2.x **always** serves
+Prometheus-format metrics from its REST API at `/nifi-api/flow/metrics/prometheus` on the web
+port (the standalone `PrometheusReportingTask` was removed in NiFi 2.0). Turn on
+`spec.metrics` and the operator renders a `ServiceMonitor` for that endpoint:
+
+```yaml
+spec:
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      interval: 30s
+```
+
+This requires the Prometheus Operator CRDs (`monitoring.coreos.com`); if they are absent the
+cluster reports `MetricsReady=False` (`CRDsNotInstalled`) and otherwise reconciles normally.
+On a TLS cluster the scrape uses HTTPS with the operator-managed client certificate, and the
+scrape identity needs NiFi read authorization. See [docs/observability.md](observability.md)
+for the full picture, and `config/samples/autoscaling/servicemonitor_nificluster.yaml` for a
+hand-written ServiceMonitor if you prefer to manage it yourself.
 
 ## Guardrails
 

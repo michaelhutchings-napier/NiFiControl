@@ -50,6 +50,16 @@
             "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
             "annotations": { "type": "object" }
           }
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "path": { "type": "string" },
+            "interval": { "type": "string" },
+            "scrapeTimeout": { "type": "string" },
+            "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
         }
       }
     },

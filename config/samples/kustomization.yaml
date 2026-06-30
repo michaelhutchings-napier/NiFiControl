@@ -4,6 +4,7 @@ resources:
   - nifi_v1alpha1_nificluster_tls_issuer.yaml
   - nifi_v1alpha1_nificluster_tls_external.yaml
   - nifi_v1alpha1_nificluster_production.yaml
+  - nifi_v1alpha1_nificluster_metrics.yaml
   - nifi_v1alpha1_nifiregistryclient.yaml
   - nifi_v1alpha1_nifiparametercontext.yaml
   - nifi_v1alpha1_nifiuser.yaml

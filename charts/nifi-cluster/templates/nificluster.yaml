@@ -153,6 +153,30 @@ spec:
       {{- end }}
     {{- end }}
   {{- end }}
+  {{- if .Values.metrics.enabled }}
+  metrics:
+    enabled: true
+    {{- with .Values.metrics.path }}
+    path: {{ . | quote }}
+    {{- end }}
+    {{- if .Values.metrics.serviceMonitor.enabled }}
+    serviceMonitor:
+      enabled: true
+      {{- with .Values.metrics.serviceMonitor.interval }}
+      interval: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.metrics.serviceMonitor.scrapeTimeout }}
+      scrapeTimeout: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.metrics.serviceMonitor.labels }}
+      labels:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.metrics.serviceMonitor.insecureSkipVerify }}
+      insecureSkipVerify: true
+      {{- end }}
+    {{- end }}
+  {{- end }}
   {{- with .Values.additionalEnv }}
   additionalEnv:
     {{- toYaml . | nindent 4 }}

@@ -36,6 +36,8 @@ helm-template: helm-crds-check
 	$(HELM) template custom $(HELM_CHART) --namespace operators --set rbac.create=false --set serviceAccount.create=false --set serviceAccount.name=existing --set metrics.service.enabled=false --set podDisruptionBudget.enabled=true >/dev/null
 	$(HELM) template production $(HELM_CLUSTER_CHART) --namespace dataflows >/dev/null
 	$(HELM) template clustered $(HELM_CLUSTER_CHART) --namespace dataflows --set replicas=3 --set coordination.zookeeperConnectString=zookeeper.dataflows.svc:2181 >/dev/null
+	$(HELM) template metrics $(HELM_CLUSTER_CHART) --namespace dataflows --set replicas=3 --set coordination.zookeeperConnectString=zookeeper.dataflows.svc:2181 --set metrics.enabled=true --set metrics.serviceMonitor.enabled=true >/dev/null
+	$(HELM) template operator-sm $(HELM_CHART) --namespace nificontrol-system --set metrics.serviceMonitor.enabled=true >/dev/null
 
 .PHONY: helm-verify
 helm-verify: helm-lint helm-template
@@ -71,3 +73,7 @@ integration-nodegroups-kind:
 .PHONY: integration-hpa-kind
 integration-hpa-kind:
 	./hack/test-hpa-kind.sh
+
+.PHONY: integration-observability-kind
+integration-observability-kind:
+	./hack/test-observability-kind.sh

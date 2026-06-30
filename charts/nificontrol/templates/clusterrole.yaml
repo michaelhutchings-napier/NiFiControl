@@ -91,6 +91,27 @@ rules:
       - patch
       - update
       - watch
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+  # Prometheus Operator ServiceMonitor for operator-rendered NiFi metrics scraping. The
+  # Prometheus Operator CRDs must be installed separately; this chart never installs them.
+  - apiGroups:
+      - monitoring.coreos.com
+    resources:
+      - servicemonitors
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
   # cert-manager resources for operator-managed internal TLS (internalTLS). cert-manager
   # itself must be installed separately; this chart never installs it.
   - apiGroups:

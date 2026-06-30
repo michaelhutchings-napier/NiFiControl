@@ -29,6 +29,11 @@ services, and high-level flow deployments.
 - Flow configuration can be backed up to a ConfigMap/Secret and restored
   (imported or replaced) declaratively. See
   [docs/backup-restore.md](docs/backup-restore.md).
+- Prometheus metrics and Kubernetes Events: `spec.metrics` renders a Prometheus Operator
+  ServiceMonitor for NiFi 2.x's built-in `/nifi-api/flow/metrics/prometheus` endpoint (and the
+  operator chart can scrape the operator itself), while controllers emit Events on provision,
+  scale/offload, and backup/restore transitions. See
+  [docs/observability.md](docs/observability.md).
 - Public Git repositories, OCI images, and NiFi Registry sources fetch and
   materialize full snapshots. Authenticated source credentials remain under
   development.

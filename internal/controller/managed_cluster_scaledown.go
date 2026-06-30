@@ -8,6 +8,7 @@ import (
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/nifi"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -188,8 +189,16 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterScaleDown(ctx context.Con
 
 	var statusErr error
 	if step.status == nil {
+		if cluster.Status.ScaleDown != nil {
+			recordEvent(r.Recorder, cluster, corev1.EventTypeNormal, "NodeOffloaded",
+				fmt.Sprintf("Offloaded and removed NiFi node %s; scaling to %d replicas.", cluster.Status.ScaleDown.NodeAddress, step.replicas))
+		}
 		statusErr = r.clearScaleDownStatus(ctx, cluster)
 	} else {
+		if cluster.Status.ScaleDown == nil || cluster.Status.ScaleDown.NodeAddress != step.status.NodeAddress {
+			recordEvent(r.Recorder, cluster, corev1.EventTypeNormal, "OffloadingNode",
+				fmt.Sprintf("%s NiFi node %s before removal.", step.status.Phase, step.status.NodeAddress))
+		}
 		statusErr = r.setScaleDownStatus(ctx, cluster, step.status)
 	}
 	if stepErr != nil {

@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -40,6 +41,8 @@ type NiFiRestoreReconciler struct {
 	Scheme        *runtime.Scheme
 	Snapshots     nifi.FlowSnapshotClient
 	ProcessGroups nifi.ProcessGroupClient
+	// Recorder emits Kubernetes Events for notable lifecycle transitions (optional).
+	Recorder record.EventRecorder
 }
 
 func (r *NiFiRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -222,6 +225,9 @@ func (r *NiFiRestoreReconciler) markRestoreWaiting(ctx context.Context, instance
 }
 
 func (r *NiFiRestoreReconciler) markRestoreFailed(ctx context.Context, instance *nifiv1alpha1.NiFiRestore, reason, message string) error {
+	if instance.Status.Phase != restorePhaseFailed || instance.Status.Sync.LastError != message {
+		recordEvent(r.Recorder, instance, corev1.EventTypeWarning, reason, message)
+	}
 	instance.Status.Phase = restorePhaseFailed
 	instance.Status.CommonStatus.MarkNotReady(instance.Generation, reason, message)
 	instance.Status.Sync.LastError = message
@@ -235,7 +241,9 @@ func (r *NiFiRestoreReconciler) markRestoreSucceeded(ctx context.Context, instan
 	instance.Status.CompletedTime = &now
 	instance.Status.Sync.LastError = ""
 	instance.Status.Sync.LastSuccessfulTime = &now
-	instance.Status.CommonStatus.MarkReady(instance.Generation, "RestoreComplete", fmt.Sprintf("Restored flow snapshot into process group %s.", restoredID))
+	message := fmt.Sprintf("Restored flow snapshot into process group %s.", restoredID)
+	instance.Status.CommonStatus.MarkReady(instance.Generation, "RestoreComplete", message)
+	recordEvent(r.Recorder, instance, corev1.EventTypeNormal, "RestoreComplete", message)
 	return r.Status().Update(ctx, instance)
 }
 

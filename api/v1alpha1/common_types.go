@@ -34,6 +34,7 @@ const (
 	ConditionReconciling       ConditionType = "Reconciling"
 	ConditionClusterReachable  ConditionType = "ClusterReachable"
 	ConditionTLSReady          ConditionType = "TLSReady"
+	ConditionMetricsReady      ConditionType = "MetricsReady"
 	ConditionDependenciesReady ConditionType = "DependenciesReady"
 	ConditionInSync            ConditionType = "InSync"
 	ConditionDriftDetected     ConditionType = "DriftDetected"

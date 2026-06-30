@@ -48,8 +48,11 @@ type NiFiClusterSpec struct {
 	// ScaleDown controls how managed NiFi nodes are gracefully removed when replicas is
 	// reduced, offloading each node's data through the NiFi cluster API before its pod is
 	// deleted.
-	ScaleDown     *NiFiClusterScaleDownSpec `json:"scaleDown,omitempty"`
-	AdditionalEnv []corev1.EnvVar           `json:"additionalEnv,omitempty"`
+	ScaleDown *NiFiClusterScaleDownSpec `json:"scaleDown,omitempty"`
+	// Metrics configures Prometheus metrics for the managed cluster, including an optional
+	// Prometheus Operator ServiceMonitor pointing at NiFi's built-in metrics endpoint.
+	Metrics       *NiFiClusterMetricsSpec `json:"metrics,omitempty"`
+	AdditionalEnv []corev1.EnvVar         `json:"additionalEnv,omitempty"`
 	// +kubebuilder:validation:Enum=Delete;Orphan
 	// +kubebuilder:default=Orphan
 	DeletionPolicy DeletionPolicy       `json:"deletionPolicy,omitempty"`
@@ -240,6 +243,49 @@ const (
 	ScaleDownTimeoutForce ScaleDownTimeoutPolicy = "Force"
 )
 
+// NiFiClusterMetricsSpec configures Prometheus metrics for a managed NiFi cluster. NiFi 2.x
+// always serves metrics in Prometheus text format from its REST API at
+// /nifi-api/flow/metrics/prometheus on the existing web port (the standalone
+// PrometheusReportingTask was removed in NiFi 2.0), so the operator provisions no extra
+// port or NiFi-side component. On a TLS-enabled cluster the endpoint requires
+// client-certificate or bearer-token authentication; see docs/observability.md.
+type NiFiClusterMetricsSpec struct {
+	// Enabled turns on metrics handling for the managed cluster. When true the operator
+	// records the metrics endpoint in status and, if serviceMonitor.enabled is set, renders
+	// a Prometheus Operator ServiceMonitor.
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled,omitempty"`
+	// Path is the HTTP path serving Prometheus-format metrics.
+	// +kubebuilder:default="/nifi-api/flow/metrics/prometheus"
+	Path string `json:"path,omitempty"`
+	// ServiceMonitor controls rendering of a Prometheus Operator ServiceMonitor for the
+	// managed cluster's metrics endpoint.
+	ServiceMonitor *NiFiClusterServiceMonitorSpec `json:"serviceMonitor,omitempty"`
+}
+
+// NiFiClusterServiceMonitorSpec configures the Prometheus Operator ServiceMonitor that the
+// operator renders for the managed cluster. The monitoring.coreos.com CRDs must be
+// installed; if they are absent the cluster reports MetricsReady=False with reason
+// CRDsNotInstalled and otherwise reconciles normally (metrics are best-effort, never fatal).
+type NiFiClusterServiceMonitorSpec struct {
+	// Enabled renders a ServiceMonitor selecting the managed cluster's Service.
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled,omitempty"`
+	// Interval is the Prometheus scrape interval, for example "30s". Empty uses the
+	// Prometheus default.
+	Interval string `json:"interval,omitempty"`
+	// ScrapeTimeout bounds a single scrape, for example "10s". Empty uses the Prometheus
+	// default.
+	ScrapeTimeout string `json:"scrapeTimeout,omitempty"`
+	// Labels are added to the ServiceMonitor metadata so a Prometheus instance's
+	// serviceMonitorSelector can select it.
+	Labels map[string]string `json:"labels,omitempty"`
+	// InsecureSkipVerify disables TLS server-certificate verification when scraping a
+	// TLS-enabled cluster. Intended for development only; by default the scrape trusts the
+	// operator-managed CA.
+	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
+}
+
 // NiFiClusterInternalTLSSpec configures operator-managed HTTPS and mutual TLS for an
 // Internal (operator-managed) NiFi cluster. Exactly one certificate provider must be
 // selected: an existing cert-manager issuerRef, an operator-managed self-signed CA
@@ -369,6 +415,17 @@ type NiFiClusterScaleDownStatus struct {
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
 }
 
+// NiFiClusterMetricsStatus reports the resolved metrics/observability state.
+type NiFiClusterMetricsStatus struct {
+	// Enabled mirrors spec.metrics.enabled.
+	Enabled bool `json:"enabled,omitempty"`
+	// Path is the metrics HTTP path scraped by Prometheus.
+	Path string `json:"path,omitempty"`
+	// ServiceMonitorName is the rendered Prometheus Operator ServiceMonitor, empty when none
+	// is rendered (serviceMonitor disabled or the monitoring.coreos.com CRDs are absent).
+	ServiceMonitorName string `json:"serviceMonitorName,omitempty"`
+}
+
 type NiFiClusterStatus struct {
 	CommonStatus       `json:",inline"`
 	RootProcessGroupID string                      `json:"rootProcessGroupId,omitempty"`
@@ -376,6 +433,7 @@ type NiFiClusterStatus struct {
 	Workload           *NiFiClusterWorkloadStatus  `json:"workload,omitempty"`
 	TLS                *NiFiClusterTLSStatus       `json:"tls,omitempty"`
 	ScaleDown          *NiFiClusterScaleDownStatus `json:"scaleDown,omitempty"`
+	Metrics            *NiFiClusterMetricsStatus   `json:"metrics,omitempty"`
 	// Replicas is the current number of ready NiFi nodes. It backs the scale subresource so
 	// HorizontalPodAutoscaler/KEDA can read the cluster's current size.
 	Replicas int32 `json:"replicas,omitempty"`

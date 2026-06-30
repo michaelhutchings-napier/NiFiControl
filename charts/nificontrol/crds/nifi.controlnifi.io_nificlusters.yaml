@@ -620,6 +620,57 @@ spec:
                     default: 1g
                     type: string
                 type: object
+              metrics:
+                description: |-
+                  Metrics configures Prometheus metrics for the managed cluster, including an optional
+                  Prometheus Operator ServiceMonitor pointing at NiFi's built-in metrics endpoint.
+                properties:
+                  enabled:
+                    default: false
+                    description: |-
+                      Enabled turns on metrics handling for the managed cluster. When true the operator
+                      records the metrics endpoint in status and, if serviceMonitor.enabled is set, renders
+                      a Prometheus Operator ServiceMonitor.
+                    type: boolean
+                  path:
+                    default: /nifi-api/flow/metrics/prometheus
+                    description: Path is the HTTP path serving Prometheus-format metrics.
+                    type: string
+                  serviceMonitor:
+                    description: |-
+                      ServiceMonitor controls rendering of a Prometheus Operator ServiceMonitor for the
+                      managed cluster's metrics endpoint.
+                    properties:
+                      enabled:
+                        default: false
+                        description: Enabled renders a ServiceMonitor selecting the
+                          managed cluster's Service.
+                        type: boolean
+                      insecureSkipVerify:
+                        description: |-
+                          InsecureSkipVerify disables TLS server-certificate verification when scraping a
+                          TLS-enabled cluster. Intended for development only; by default the scrape trusts the
+                          operator-managed CA.
+                        type: boolean
+                      interval:
+                        description: |-
+                          Interval is the Prometheus scrape interval, for example "30s". Empty uses the
+                          Prometheus default.
+                        type: string
+                      labels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          Labels are added to the ServiceMonitor metadata so a Prometheus instance's
+                          serviceMonitorSelector can select it.
+                        type: object
+                      scrapeTimeout:
+                        description: |-
+                          ScrapeTimeout bounds a single scrape, for example "10s". Empty uses the Prometheus
+                          default.
+                        type: string
+                    type: object
+                type: object
               mode:
                 default: Internal
                 enum:
@@ -2055,6 +2106,22 @@ spec:
                 type: object
               endpoint:
                 type: string
+              metrics:
+                description: NiFiClusterMetricsStatus reports the resolved metrics/observability
+                  state.
+                properties:
+                  enabled:
+                    description: Enabled mirrors spec.metrics.enabled.
+                    type: boolean
+                  path:
+                    description: Path is the metrics HTTP path scraped by Prometheus.
+                    type: string
+                  serviceMonitorName:
+                    description: |-
+                      ServiceMonitorName is the rendered Prometheus Operator ServiceMonitor, empty when none
+                      is rendered (serviceMonitor disabled or the monitoring.coreos.com CRDs are absent).
+                    type: string
+                type: object
               nifiId:
                 type: string
               observedGeneration:

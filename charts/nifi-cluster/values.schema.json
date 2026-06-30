@@ -16,6 +16,7 @@
     "coordination",
     "api",
     "internalTLS",
+    "metrics",
     "additionalEnv",
     "deletionPolicy",
     "driftPolicy"
@@ -109,7 +110,7 @@
     },
     "upgrade": {
       "type": "object",
-      "required": ["strategy", "partition", "minReadySeconds"],
+      "required": ["strategy", "minReadySeconds"],
       "properties": {
         "strategy": { "type": "string", "enum": ["RollingUpdate", "OnDelete"] },
         "partition": { "type": ["integer", "null"], "minimum": 0 },
@@ -198,6 +199,25 @@
             "additionalServerSANs": { "type": "array", "items": { "type": "string" } },
             "operatorCommonName": { "type": "string" },
             "nodeCommonName": { "type": "string" }
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "required": ["enabled", "path", "serviceMonitor"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "path": { "type": "string" },
+        "serviceMonitor": {
+          "type": "object",
+          "required": ["enabled", "interval", "scrapeTimeout", "labels", "insecureSkipVerify"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "interval": { "type": "string" },
+            "scrapeTimeout": { "type": "string" },
+            "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+            "insecureSkipVerify": { "type": "boolean" }
           }
         }
       }

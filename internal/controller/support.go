@@ -10,7 +10,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
@@ -18,6 +20,15 @@ import (
 const NiFiControlFinalizer = "nifi.controlnifi.io/finalizer"
 
 const clusterRefIndexField = "spec.clusterRef"
+
+// recordEvent emits a Kubernetes Event when a recorder is configured. It is nil-safe so
+// reconcilers constructed without a recorder (notably in unit tests) are unaffected.
+func recordEvent(recorder record.EventRecorder, obj runtime.Object, eventType, reason, message string) {
+	if recorder == nil || obj == nil {
+		return
+	}
+	recorder.Event(obj, eventType, reason, message)
+}
 
 func ensureFinalizer(ctx context.Context, c client.Client, obj client.Object) (bool, error) {
 	if controllerutil.ContainsFinalizer(obj, NiFiControlFinalizer) {

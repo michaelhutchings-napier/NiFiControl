@@ -29,6 +29,15 @@ metrics:
     type: ClusterIP
     port: 8080
     annotations: {}
+  # Prometheus Operator ServiceMonitor for the operator's own controller-runtime metrics.
+  # Requires the Prometheus Operator CRDs (monitoring.coreos.com) and metrics.service.enabled.
+  serviceMonitor:
+    enabled: false
+    path: /metrics
+    interval: ""        # e.g. 30s; empty uses the Prometheus default
+    scrapeTimeout: ""    # e.g. 10s; empty uses the Prometheus default
+    # Extra labels so a Prometheus instance's serviceMonitorSelector can select it.
+    labels: {}
 
 healthProbe:
   bindAddress: ":8081"

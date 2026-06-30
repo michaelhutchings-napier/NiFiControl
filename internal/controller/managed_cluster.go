@@ -177,6 +177,13 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 		}
 	}
 
+	// Metrics are best-effort and never block cluster readiness; the MetricsReady condition
+	// records a missing Prometheus Operator or ServiceMonitor apply problem.
+	if err := r.reconcileManagedClusterMetrics(ctx, cluster, tlsMaterials); err != nil {
+		recordEvent(r.Recorder, cluster, corev1.EventTypeWarning, "MetricsDegraded",
+			fmt.Sprintf("Failed to reconcile metrics ServiceMonitor: %v", err))
+	}
+
 	endpoint := managedClusterEndpoint(cluster)
 
 	// Determine the replica count the StatefulSet should currently have, gracefully
@@ -203,6 +210,7 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 			message = fmt.Sprintf("Scaling down: %s node %s.", cluster.Status.ScaleDown.Phase, cluster.Status.ScaleDown.NodeAddress)
 		}
 		if managedClusterStatusNeedsUpdate(cluster, false, endpoint, cluster.Status.Workload, "ScalingDown") {
+			recordEvent(r.Recorder, cluster, corev1.EventTypeNormal, "ScalingDown", message)
 			if err := markManagedClusterNotReady(ctx, r.Client, cluster, "ScalingDown", message, endpoint, cluster.Status.Workload); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -263,6 +271,8 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 	}
 
 	if managedClusterStatusNeedsUpdate(cluster, true, endpoint, workload, "ClusterReachable") {
+		recordEvent(r.Recorder, cluster, corev1.EventTypeNormal, "Ready",
+			fmt.Sprintf("NiFi cluster is ready (%d/%d nodes); API reachable at %s.", workload.ReadyReplicas, workload.Replicas, endpoint))
 		return ctrl.Result{}, markManagedClusterReady(ctx, r.Client, cluster, endpoint, workload)
 	}
 	return ctrl.Result{}, nil
@@ -282,6 +292,10 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterService(ctx context.Conte
 		if headless {
 			service.Annotations = managedClusterAnnotations(cluster)
 		} else {
+			// Mark the client-facing (non-headless) Service as the metrics scrape target so a
+			// ServiceMonitor selects exactly one Service (both carry identical cluster labels,
+			// and the headless Service also publishes not-ready pods).
+			service.Labels[managedClusterMetricsServiceLabel] = "true"
 			service.Annotations = managedClusterServiceAnnotations(cluster)
 		}
 		service.Spec.Selector = managedClusterPodLabels(cluster)
@@ -681,6 +695,7 @@ func (r *NiFiClusterReconciler) requestsForManagedClusterResource(_ context.Cont
 func (r *NiFiClusterReconciler) managedClusterReconcileFailed(ctx context.Context, cluster *nifiv1alpha1.NiFiCluster, reason string, reconciliationError error) (ctrl.Result, error) {
 	message := reconciliationError.Error()
 	if managedClusterStatusNeedsUpdate(cluster, false, managedClusterEndpoint(cluster), cluster.Status.Workload, reason) {
+		recordEvent(r.Recorder, cluster, corev1.EventTypeWarning, reason, message)
 		if err := markManagedClusterNotReady(ctx, r.Client, cluster, reason, message, managedClusterEndpoint(cluster), cluster.Status.Workload); err != nil {
 			return ctrl.Result{}, err
 		}
