@@ -15,9 +15,10 @@ services, and high-level flow deployments.
   cluster down gracefully offloads each removed node's data through the NiFi cluster
   API before its pod is deleted; see [docs/node-lifecycle.md](docs/node-lifecycle.md).
 - Managed clusters expose a Kubernetes scale subresource, so they can be resized with
-  `kubectl scale`, a HorizontalPodAutoscaler, or KEDA (recommended, driven by queue
-  depth). Scale-downs run the graceful offload above. See
-  [docs/autoscaling.md](docs/autoscaling.md).
+  `kubectl scale`, a HorizontalPodAutoscaler, or KEDA (driven by queue depth). `NiFiAutoscaler`
+  is the native option: it renders a KEDA `ScaledObject` (Prometheus metrics) or a native HPA
+  (CPU/memory) for a `NiFiCluster` or `NiFiNodeGroup`, with NiFi-safe defaults. Scale-downs run
+  the graceful offload above. See [docs/autoscaling.md](docs/autoscaling.md).
 - `NiFiNodeGroup` adds heterogeneous, independently-scalable node pools to a cluster —
   differently-sized tiers that join the same NiFi cluster, each with its own scale
   subresource. See [docs/node-groups.md](docs/node-groups.md).

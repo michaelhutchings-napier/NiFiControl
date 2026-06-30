@@ -135,9 +135,36 @@ rules:
       - get
       - list
       - watch
+  # HorizontalPodAutoscaler and KEDA ScaledObject the operator renders for NiFiAutoscaler.
+  # KEDA must be installed separately; this chart never installs it.
+  - apiGroups:
+      - autoscaling
+    resources:
+      - horizontalpodautoscalers
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - keda.sh
+    resources:
+      - scaledobjects
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
   - apiGroups:
       - nifi.controlnifi.io
     resources:
+      - nifiautoscalers
       - nifibackups
       - nificlusters
       - nificonnections
@@ -168,6 +195,7 @@ rules:
   - apiGroups:
       - nifi.controlnifi.io
     resources:
+      - nifiautoscalers/finalizers
       - nifibackups/finalizers
       - nificlusters/finalizers
       - nificonnections/finalizers
@@ -192,6 +220,7 @@ rules:
   - apiGroups:
       - nifi.controlnifi.io
     resources:
+      - nifiautoscalers/status
       - nifibackups/status
       - nificlusters/status
       - nificonnections/status

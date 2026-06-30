@@ -1,0 +1,46 @@
+# Autoscale a managed NiFiCluster on queued-FlowFile depth. NiFiControl renders a KEDA
+# ScaledObject (KEDA must be installed) that drives the cluster's scale subresource, so
+# scale-downs run the operator's graceful node offload. The metric requires NiFi metrics in
+# Prometheus (set spec.metrics on the NiFiCluster); see docs/observability.md.
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiAutoscaler
+metadata:
+  name: production
+spec:
+  target:
+    kind: NiFiCluster        # or NiFiNodeGroup, to autoscale a single tier
+    name: production
+  minReplicas: 3
+  maxReplicas: 9
+  metrics:
+    - type: Prometheus
+      prometheus:
+        serverAddress: http://prometheus.monitoring.svc:9090
+        query: sum(nifi_amount_items_queued)   # NiFi 2.x FlowFile queue depth
+        threshold: "10000"                       # target queued FlowFiles per node
+  behavior:
+    # NiFi node offload is expensive, so defaults are conservative: one node at a time,
+    # with a long stabilization window. scaleDownStrategy reserves future per-node selection
+    # (HighestOrdinal is how the operator offloads today; LeastBusy is not yet supported).
+    scaleDownStrategy: HighestOrdinal
+    stabilizationSeconds: 600
+    maxNodesPerStep: 1
+---
+# CPU-based variant: a Resource metric renders a native HorizontalPodAutoscaler instead of
+# KEDA (no KEDA required). Use Prometheus/queue-depth metrics where possible — NiFi load is
+# queue-driven, not CPU-driven.
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiAutoscaler
+metadata:
+  name: workers-cpu
+spec:
+  target:
+    kind: NiFiNodeGroup
+    name: workers
+  minReplicas: 1
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        targetAverageUtilization: 70

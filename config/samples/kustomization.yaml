@@ -24,3 +24,4 @@ resources:
   - nifi_v1alpha1_nifibackup.yaml
   - nifi_v1alpha1_nifirestore.yaml
   - nifi_v1alpha1_nifinodegroup.yaml
+  - nifi_v1alpha1_nifiautoscaler.yaml

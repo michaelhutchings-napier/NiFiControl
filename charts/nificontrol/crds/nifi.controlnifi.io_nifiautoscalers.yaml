@@ -1,0 +1,366 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+  name: nifiautoscalers.nifi.controlnifi.io
+spec:
+  group: nifi.controlnifi.io
+  names:
+    kind: NiFiAutoscaler
+    listKind: NiFiAutoscalerList
+    plural: nifiautoscalers
+    singular: nifiautoscaler
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.target.kind
+      name: Target
+      type: string
+    - jsonPath: .spec.target.name
+      name: Name
+      type: string
+    - jsonPath: .spec.minReplicas
+      name: Min
+      type: integer
+    - jsonPath: .spec.maxReplicas
+      name: Max
+      type: integer
+    - jsonPath: .status.mode
+      name: Mode
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              NiFiAutoscalerSpec configures autoscaling for a scalable NiFi resource (a NiFiCluster or a
+              NiFiNodeGroup). NiFiControl does not implement its own metrics polling loop or scaling
+              algorithm: a NiFiAutoscaler renders a KEDA ScaledObject (for Prometheus/external metrics)
+              or a native HorizontalPodAutoscaler (for CPU/memory) that drives the target's scale
+              subresource. Because scaling targets the scale subresource rather than the StatefulSet,
+              scale-downs run the operator's graceful node offload. The autoscaler adds a NiFi-aware UX:
+              safe defaults, validation, and a single status surface.
+            properties:
+              behavior:
+                description: |-
+                  Behavior tunes NiFi-safe scale-down. NiFi node offload is comparatively expensive, so the
+                  defaults are deliberately conservative (one node at a time, a long stabilization window).
+                properties:
+                  maxNodesPerStep:
+                    default: 1
+                    description: MaxNodesPerStep bounds how many nodes a single scale-down
+                      step removes.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  scaleDownPeriodSeconds:
+                    default: 300
+                    description: ScaleDownPeriodSeconds is the period over which MaxNodesPerStep
+                      is enforced.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  scaleDownStrategy:
+                    default: HighestOrdinal
+                    description: |-
+                      ScaleDownStrategy selects which node a scale-down removes. The operator currently always
+                      offloads from the highest ordinal down, so HighestOrdinal and NonPrimary describe the
+                      existing behavior; LeastBusy is reserved and rejected until pod-level management exists.
+                    enum:
+                    - HighestOrdinal
+                    - NonPrimary
+                    - LeastBusy
+                    type: string
+                  stabilizationSeconds:
+                    default: 300
+                    description: |-
+                      StabilizationSeconds is the scale-down stabilization window. A long window suits NiFi
+                      because each node offload is expensive.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
+              maxReplicas:
+                description: MaxReplicas is the upper bound.
+                format: int32
+                minimum: 1
+                type: integer
+              metrics:
+                description: |-
+                  Metrics are the scaling signals. A Prometheus metric renders a KEDA ScaledObject (KEDA
+                  must be installed); a Resource (cpu/memory) metric renders a native HorizontalPodAutoscaler.
+                  All metrics must be the same family (all Prometheus, or a single Resource metric).
+                items:
+                  description: NiFiAutoscalerMetric is one scaling signal. Exactly
+                    one source matching Type must be set.
+                  properties:
+                    prometheus:
+                      description: |-
+                        Prometheus scales on a PromQL query (rendered as a KEDA prometheus trigger). NiFi 2.x
+                        serves metrics such as nifi_amount_items_queued at /nifi-api/flow/metrics/prometheus; see
+                        docs/observability.md for getting those into Prometheus.
+                      properties:
+                        name:
+                          description: Name optionally names the trigger (defaults
+                            to the metric index).
+                          type: string
+                        query:
+                          description: |-
+                            Query is the PromQL query whose scalar result drives scaling, e.g.
+                            sum(nifi_amount_items_queued).
+                          minLength: 1
+                          type: string
+                        serverAddress:
+                          description: ServerAddress is the Prometheus query endpoint,
+                            e.g. http://prometheus.monitoring.svc:9090.
+                          minLength: 1
+                          type: string
+                        threshold:
+                          description: |-
+                            Threshold is the target value per replica (KEDA scales replicas = ceil(query/threshold),
+                            bounded by min/max). Expressed as a string to allow fractional values.
+                          minLength: 1
+                          type: string
+                      required:
+                      - query
+                      - serverAddress
+                      - threshold
+                      type: object
+                    resource:
+                      description: Resource scales on pod CPU or memory utilization
+                        (rendered as a native HPA resource metric).
+                      properties:
+                        name:
+                          enum:
+                          - cpu
+                          - memory
+                          type: string
+                        targetAverageUtilization:
+                          description: TargetAverageUtilization is the target average
+                            utilization across pods, as a percentage.
+                          format: int32
+                          maximum: 100
+                          minimum: 1
+                          type: integer
+                      required:
+                      - name
+                      - targetAverageUtilization
+                      type: object
+                    type:
+                      enum:
+                      - Prometheus
+                      - Resource
+                      type: string
+                  required:
+                  - type
+                  type: object
+                  x-kubernetes-validations:
+                  - message: prometheus is required when type is Prometheus
+                    rule: self.type != 'Prometheus' || has(self.prometheus)
+                  - message: resource is required when type is Resource
+                    rule: self.type != 'Resource' || has(self.resource)
+                minItems: 1
+                type: array
+              minReplicas:
+                default: 1
+                description: |-
+                  MinReplicas is the lower bound. It must be at least 1: the operator never scales a
+                  clustered NiFi to zero (that would destroy the cluster).
+                format: int32
+                minimum: 1
+                type: integer
+              pollingInterval:
+                description: |-
+                  PollingInterval is how often KEDA evaluates the metrics, in seconds (KEDA-rendered
+                  autoscalers only). Empty uses the KEDA default.
+                format: int32
+                minimum: 1
+                type: integer
+              target:
+                description: Target is the scalable NiFi resource this autoscaler
+                  drives, in the same namespace.
+                properties:
+                  kind:
+                    default: NiFiCluster
+                    enum:
+                    - NiFiCluster
+                    - NiFiNodeGroup
+                    type: string
+                  name:
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - maxReplicas
+            - metrics
+            - target
+            type: object
+            x-kubernetes-validations:
+            - message: maxReplicas must be greater than or equal to minReplicas
+              rule: self.maxReplicas >= self.minReplicas
+          status:
+            description: NiFiAutoscalerStatus reports the rendered backend and observed
+              scaling state.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              currentReplicas:
+                description: CurrentReplicas is the target's current replica count.
+                format: int32
+                type: integer
+              dependencies:
+                properties:
+                  ready:
+                    type: boolean
+                  waitingFor:
+                    items:
+                      type: string
+                    type: array
+                type: object
+              desiredReplicas:
+                description: DesiredReplicas is the target's desired replica count.
+                format: int32
+                type: integer
+              drift:
+                properties:
+                  differences:
+                    items:
+                      type: string
+                    type: array
+                  lastDetectedTime:
+                    format: date-time
+                    type: string
+                  status:
+                    type: string
+                type: object
+              hpaName:
+                description: |-
+                  HPAName is the rendered HorizontalPodAutoscaler (empty in KEDA mode; KEDA manages its own
+                  HPA internally).
+                type: string
+              lastScaleTime:
+                description: LastScaleTime is the last time the autoscaler scaled
+                  the target.
+                format: date-time
+                type: string
+              mode:
+                description: 'Mode is the rendered backend: KEDA or HPA.'
+                type: string
+              nifiId:
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              ready:
+                type: boolean
+              revision:
+                properties:
+                  clientId:
+                    type: string
+                  version:
+                    format: int64
+                    type: integer
+                type: object
+              scaledObjectName:
+                description: ScaledObjectName is the rendered KEDA ScaledObject (empty
+                  in HPA mode).
+                type: string
+              sync:
+                properties:
+                  lastAttemptTime:
+                    format: date-time
+                    type: string
+                  lastError:
+                    type: string
+                  lastSuccessfulTime:
+                    format: date-time
+                    type: string
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

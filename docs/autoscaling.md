@@ -33,12 +33,59 @@ lossless by construction, and the `spec.scaleDown` policy (timeout, `onTimeout`)
 Each offload is comparatively expensive, so autoscaling NiFi should be **deliberate, not
 twitchy**. The guidance below reflects that.
 
-## KEDA (recommended)
+## NiFiAutoscaler (recommended)
+
+`NiFiAutoscaler` is the NiFi-native way to autoscale. It does **not** implement its own metrics
+loop or scaling algorithm — it *renders* the right backend for you and adds NiFi-safe defaults,
+validation, and one status surface:
+
+```yaml
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiAutoscaler
+metadata:
+  name: production
+spec:
+  target:
+    kind: NiFiCluster        # or NiFiNodeGroup, to autoscale a single tier
+    name: production
+  minReplicas: 3
+  maxReplicas: 9
+  metrics:
+    - type: Prometheus
+      prometheus:
+        serverAddress: http://prometheus.monitoring.svc:9090
+        query: sum(nifi_amount_items_queued)   # NiFi 2.x FlowFile queue depth
+        threshold: "10000"
+  behavior:
+    scaleDownStrategy: HighestOrdinal
+    stabilizationSeconds: 600
+    maxNodesPerStep: 1
+```
+
+What it does:
+
+- **Renders a KEDA `ScaledObject`** when a `Prometheus` metric is used (KEDA must be installed;
+  otherwise the autoscaler reports `MetricsReady=False`/`KEDANotInstalled` and waits), or a
+  **native `HorizontalPodAutoscaler`** for a `Resource` (cpu/memory) metric — no KEDA needed.
+- **NiFi-safe defaults**: `minReplicas` floored at 1 (never scale a cluster to zero),
+  one-node-at-a-time scale-down, a long stabilization window — because each node offload is
+  expensive.
+- **Targets `NiFiCluster` or `NiFiNodeGroup`** via their scale subresource, so scale-downs run
+  the operator's [graceful node offload](node-lifecycle.md).
+- **`scaleDownStrategy`** is forward-looking: `HighestOrdinal` (the default) and `NonPrimary`
+  describe the operator's current highest-ordinal-first offload, which keeps the
+  coordinator-eligible ordinal 0 until last. `LeastBusy` is reserved and rejected for now —
+  removing an arbitrary node requires pod-level management rather than a StatefulSet.
+
+It composes with the lower-level objects below; reach for those directly only if you need a
+KEDA/HPA feature the CRD does not yet expose.
+
+## KEDA directly
 
 NiFi load is event/queue-driven, so scale on dataflow signals (queue depth, backpressure,
 connection counts) rather than CPU. KEDA scales on those external metrics and drives the same
-scale subresource (it manages an HPA underneath), so there is no NiFi-specific autoscaler to
-install — only a `ScaledObject` pointing at the cluster:
+scale subresource (it manages an HPA underneath); a `NiFiAutoscaler` renders exactly this, or
+you can write the `ScaledObject` yourself:
 
 ```yaml
 apiVersion: keda.sh/v1alpha1

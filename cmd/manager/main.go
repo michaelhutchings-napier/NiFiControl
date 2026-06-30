@@ -98,6 +98,9 @@ func main() {
 	if err := (&controller.NiFiLabelReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), LabelClient: nifi.HTTPLabelClient{}}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
+	if err := (&controller.NiFiAutoscalerReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("nifiautoscaler-controller")}).SetupWithManager(mgr); err != nil {
+		os.Exit(1)
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		os.Exit(1)

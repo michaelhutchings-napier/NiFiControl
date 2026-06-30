@@ -77,3 +77,7 @@ integration-hpa-kind:
 .PHONY: integration-observability-kind
 integration-observability-kind:
 	./hack/test-observability-kind.sh
+
+.PHONY: integration-autoscaler-kind
+integration-autoscaler-kind:
+	./hack/test-autoscaler-kind.sh
