@@ -27,5 +27,5 @@ spec:
     - type: prometheus
       metadata:
         serverAddress: http://prometheus.monitoring.svc:9090
-        query: sum(nifi_amount_flowfiles_queued)
+        query: sum(nifi_amount_items_queued)
         threshold: "10000"

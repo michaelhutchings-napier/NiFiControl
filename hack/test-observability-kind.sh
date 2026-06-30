@@ -4,7 +4,7 @@
 #   1. install the CRDs and run the operator out-of-cluster against kind,
 #   2. provision a clustered, metrics-enabled NiFiCluster (ZooKeeper + 2 nodes),
 #   3. confirm NiFi 2.x actually serves Prometheus metrics at
-#      /nifi-api/flow/metrics/prometheus (nifi_amount_flowfiles_queued present),
+#      /nifi-api/flow/metrics/prometheus (nifi_amount_items_queued present),
 #   4. with the Prometheus Operator CRDs absent, confirm the operator degrades gracefully
 #      (MetricsReady=False, reason CRDsNotInstalled) without failing the cluster,
 #   5. install the ServiceMonitor CRD and confirm the operator then renders a ServiceMonitor
@@ -127,20 +127,35 @@ done
 kubectl --context "${ctx}" -n "${namespace}" rollout status statefulset/obs-nifi --timeout=900s
 
 fqdn="obs-nifi-0.obs-nifi-headless.${namespace}.svc"
+metrics_url="http://${fqdn}:8080/nifi-api/flow/metrics/prometheus"
 echo "Verifying NiFi 2.x serves Prometheus metrics at /nifi-api/flow/metrics/prometheus..."
 metrics_ok=0
-for _ in $(seq 1 60); do
+for _ in $(seq 1 36); do
   body="$(kubectl --context "${ctx}" -n "${namespace}" exec obs-nifi-0 -c nifi -- \
-    curl -fsS "http://${fqdn}:8080/nifi-api/flow/metrics/prometheus" 2>/dev/null || true)"
-  if printf '%s' "${body}" | grep -q 'nifi_amount_flowfiles_queued'; then
-    echo "  metrics endpoint serves nifi_amount_flowfiles_queued:"
-    printf '%s\n' "${body}" | grep -m3 '^nifi_amount_flowfiles_queued' || true
+    curl -fsS "${metrics_url}" 2>/dev/null || true)"
+  if printf '%s' "${body}" | grep -q 'nifi_amount_items_queued'; then
+    echo "  metrics endpoint serves nifi_amount_items_queued:"
+    printf '%s\n' "${body}" | grep -m3 '^nifi_amount_items_queued' || true
     metrics_ok=1
     break
   fi
   sleep 5
 done
-[ "${metrics_ok}" = "1" ] || { echo "NiFi metrics endpoint did not serve nifi_amount_flowfiles_queued" >&2; exit 1; }
+if [ "${metrics_ok}" != "1" ]; then
+  echo "DIAGNOSTIC: nifi_amount_items_queued not found; inspecting the endpoint..." >&2
+  kubectl --context "${ctx}" -n "${namespace}" exec obs-nifi-0 -c nifi -- sh -ec "
+    echo '--- HTTP status ---'
+    curl -s -o /tmp/m.txt -w 'status=%{http_code} bytes=%{size_download}\n' '${metrics_url}' || true
+    echo '--- first 30 lines of body ---'
+    head -30 /tmp/m.txt || true
+    echo '--- distinct nifi_ metric names present ---'
+    grep -oE '^nifi_[a-zA-Z0-9_]+' /tmp/m.txt | sort -u | head -60 || true
+    echo '--- any *flowfiles*/*queued* lines ---'
+    grep -iE 'flowfile|queued' /tmp/m.txt | head -20 || true
+  " >&2 || true
+  echo "NiFi metrics endpoint did not serve nifi_amount_items_queued" >&2
+  exit 1
+fi
 
 echo "Phase A: Prometheus Operator CRDs absent -> MetricsReady=False (CRDsNotInstalled)..."
 phaseA_ok=0

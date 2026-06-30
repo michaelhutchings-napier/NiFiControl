@@ -67,7 +67,7 @@ spec:
       metadata:
         serverAddress: http://prometheus.monitoring.svc:9090
         # Total FlowFiles queued across the flow, scraped from NiFi's metrics.
-        query: sum(nifi_amount_flowfiles_queued)
+        query: sum(nifi_amount_items_queued)
         threshold: "10000"          # target queued FlowFiles per node
 ```
 

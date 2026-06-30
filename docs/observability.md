@@ -11,8 +11,11 @@ NiFi 2.x **always** serves metrics in Prometheus text format from its REST API a
 `PrometheusReportingTask` from NiFi 1.x was **removed in NiFi 2.0**
 ([NIFI-13507](https://issues.apache.org/jira/browse/NIFI-13507)), so there is no reporting
 task to provision and no extra port to open. The endpoint exposes the root process group
-status recursively (per-connection queue depth and byte counts, processor stats) plus
-connection analytics — e.g. `nifi_amount_flowfiles_queued`, `nifi_amount_bytes_queued`.
+status recursively (queue depth and byte counts, processor stats) plus connection analytics.
+The queue-depth series most useful for autoscaling are `nifi_amount_items_queued` (FlowFiles
+queued), `nifi_size_content_queued_total` (bytes queued), and `nifi_percent_used_count` /
+`nifi_percent_used_bytes` (proximity to backpressure). Note NiFi 2.x uses
+`nifi_amount_items_queued`, not the NiFi 1.x name `nifi_amount_flowfiles_queued`.
 
 Because the endpoint already exists, `spec.metrics` only controls whether the operator renders
 a Prometheus Operator **ServiceMonitor** pointing at it:
@@ -102,6 +105,6 @@ noisy:
 
 With NiFi metrics in Prometheus, a KEDA `ScaledObject` (or any HPA backed by a metrics adapter)
 can scale a `NiFiCluster` or `NiFiNodeGroup` on dataflow signals such as
-`sum(nifi_amount_flowfiles_queued)`. KEDA targets the scale subresource, so scale-downs still
+`sum(nifi_amount_items_queued)`. KEDA targets the scale subresource, so scale-downs still
 run the operator's graceful offload. See [docs/autoscaling.md](autoscaling.md) and the samples
 under `config/samples/autoscaling/`.
