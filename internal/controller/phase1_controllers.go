@@ -812,7 +812,15 @@ func shouldMarkParameterContextNotReady(instance *nifiv1alpha1.NiFiParameterCont
 
 type NiFiUserReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme     *runtime.Scheme
+	UserClient nifi.UserClient
+}
+
+func (r *NiFiUserReconciler) userClient() nifi.UserClient {
+	if r.UserClient != nil {
+		return r.UserClient
+	}
+	return nifi.HTTPUserClient{}
 }
 
 func (r *NiFiUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -824,13 +832,12 @@ func (r *NiFiUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 	if !instance.DeletionTimestamp.IsZero() {
-		_, err := removeFinalizer(ctx, r.Client, instance)
-		return ctrl.Result{}, err
+		return r.reconcileUserDelete(ctx, instance)
 	}
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
 	}
-	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -840,10 +847,106 @@ func (r *NiFiUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		return ctrl.Result{}, nil
 	}
-	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
-		return ctrl.Result{}, markUserAccepted(ctx, r.Client, instance)
+
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		message := "Referenced NiFiCluster is ready but does not expose a NiFi API endpoint."
+		if shouldMarkUserNotReady(instance, "ClusterEndpointMissing", message) {
+			return ctrl.Result{}, markUserNotReady(ctx, r.Client, instance, "ClusterEndpointMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	users := r.userClient()
+
+	// Resolve the existing tenant: by recorded id, then by identity (adoption), else create.
+	if instance.Status.NiFiID != "" {
+		existing, err := users.GetUser(ctx, endpoint, instance.Status.NiFiID)
+		if err != nil && !nifi.IsNotFound(err) {
+			message := fmt.Sprintf("Failed to get NiFi user: %v", err)
+			if shouldMarkUserNotReady(instance, "NiFiGetFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markUserNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if existing != nil {
+			return r.reconcileExistingUser(ctx, instance, endpoint, users, existing)
+		}
+	}
+
+	all, err := users.ListUsers(ctx, endpoint)
+	if err != nil {
+		message := fmt.Sprintf("Failed to list NiFi users: %v", err)
+		if shouldMarkUserNotReady(instance, "NiFiListFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markUserNotReady(ctx, r.Client, instance, "NiFiListFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	if existing := findUserByIdentity(all, instance.Spec.Identity); existing != nil {
+		return r.reconcileExistingUser(ctx, instance, endpoint, users, existing)
+	}
+
+	created, err := users.CreateUser(ctx, endpoint, nifi.UserEntity{
+		Revision:  nifi.Revision{Version: 0},
+		Component: nifi.UserComponent{Identity: instance.Spec.Identity},
+	})
+	if err != nil {
+		message := fmt.Sprintf("Failed to create NiFi user: %v", err)
+		if shouldMarkUserNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markUserNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	return ctrl.Result{}, markUserReady(ctx, r.Client, instance, nifi.UserEntityID(*created), created.Revision.Version)
+}
+
+func (r *NiFiUserReconciler) reconcileExistingUser(ctx context.Context, instance *nifiv1alpha1.NiFiUser, endpoint string, users nifi.UserClient, existing *nifi.UserEntity) (ctrl.Result, error) {
+	nifiID := nifi.UserEntityID(*existing)
+	// Rename the tenant if the desired identity changed.
+	if existing.Component.Identity != instance.Spec.Identity {
+		update := *existing
+		update.ID = nifiID
+		update.Component.ID = nifiID
+		update.Component.Identity = instance.Spec.Identity
+		updated, err := users.UpdateUser(ctx, endpoint, update)
+		if err != nil {
+			message := fmt.Sprintf("Failed to update NiFi user: %v", err)
+			if shouldMarkUserNotReady(instance, "NiFiUpdateFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markUserNotReady(ctx, r.Client, instance, "NiFiUpdateFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if updated != nil {
+			return ctrl.Result{}, markUserReady(ctx, r.Client, instance, nifi.UserEntityID(*updated), updated.Revision.Version)
+		}
+	}
+	if !userStatusMatches(instance, nifiID, existing.Revision.Version) {
+		return ctrl.Result{}, markUserReady(ctx, r.Client, instance, nifiID, existing.Revision.Version)
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *NiFiUserReconciler) reconcileUserDelete(ctx context.Context, instance *nifiv1alpha1.NiFiUser) (ctrl.Result, error) {
+	if instance.Spec.DeletionPolicy != nifiv1alpha1.DeletionPolicyDelete || instance.Status.NiFiID == "" {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	if err := r.userClient().DeleteUser(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil && !nifi.IsNotFound(err) {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	_, err = removeFinalizer(ctx, r.Client, instance)
+	return ctrl.Result{}, err
 }
 
 func (r *NiFiUserReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -858,7 +961,15 @@ func (r *NiFiUserReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 type NiFiUserGroupReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme          *runtime.Scheme
+	UserGroupClient nifi.UserGroupClient
+}
+
+func (r *NiFiUserGroupReconciler) userGroupClient() nifi.UserGroupClient {
+	if r.UserGroupClient != nil {
+		return r.UserGroupClient
+	}
+	return nifi.HTTPUserGroupClient{}
 }
 
 func (r *NiFiUserGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -870,13 +981,12 @@ func (r *NiFiUserGroupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 	if !instance.DeletionTimestamp.IsZero() {
-		_, err := removeFinalizer(ctx, r.Client, instance)
-		return ctrl.Result{}, err
+		return r.reconcileUserGroupDelete(ctx, instance)
 	}
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
 	}
-	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -887,10 +997,126 @@ func (r *NiFiUserGroupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		return ctrl.Result{}, nil
 	}
-	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
-		return ctrl.Result{}, markUserGroupAccepted(ctx, r.Client, instance)
+
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		message := "Referenced NiFiCluster is ready but does not expose a NiFi API endpoint."
+		if shouldMarkUserGroupNotReady(instance, "ClusterEndpointMissing", message) {
+			return ctrl.Result{}, markUserGroupNotReady(ctx, r.Client, instance, "ClusterEndpointMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	memberIDs, err := r.resolveUserGroupMemberIDs(ctx, instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	groups := r.userGroupClient()
+	desired := nifi.UserGroupComponent{Identity: instance.Spec.Identity, Users: tenantRefs(memberIDs)}
+
+	if instance.Status.NiFiID != "" {
+		existing, err := groups.GetUserGroup(ctx, endpoint, instance.Status.NiFiID)
+		if err != nil && !nifi.IsNotFound(err) {
+			message := fmt.Sprintf("Failed to get NiFi user group: %v", err)
+			if shouldMarkUserGroupNotReady(instance, "NiFiGetFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markUserGroupNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if existing != nil {
+			return r.reconcileExistingUserGroup(ctx, instance, endpoint, groups, existing, desired, memberIDs)
+		}
+	}
+
+	all, err := groups.ListUserGroups(ctx, endpoint)
+	if err != nil {
+		message := fmt.Sprintf("Failed to list NiFi user groups: %v", err)
+		if shouldMarkUserGroupNotReady(instance, "NiFiListFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markUserGroupNotReady(ctx, r.Client, instance, "NiFiListFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	if existing := findUserGroupByIdentity(all, instance.Spec.Identity); existing != nil {
+		return r.reconcileExistingUserGroup(ctx, instance, endpoint, groups, existing, desired, memberIDs)
+	}
+
+	created, err := groups.CreateUserGroup(ctx, endpoint, nifi.UserGroupEntity{Revision: nifi.Revision{Version: 0}, Component: desired})
+	if err != nil {
+		message := fmt.Sprintf("Failed to create NiFi user group: %v", err)
+		if shouldMarkUserGroupNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markUserGroupNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	return ctrl.Result{}, markUserGroupReady(ctx, r.Client, instance, nifi.UserGroupEntityID(*created), created.Revision.Version, memberIDs)
+}
+
+func (r *NiFiUserGroupReconciler) reconcileExistingUserGroup(ctx context.Context, instance *nifiv1alpha1.NiFiUserGroup, endpoint string, groups nifi.UserGroupClient, existing *nifi.UserGroupEntity, desired nifi.UserGroupComponent, memberIDs []string) (ctrl.Result, error) {
+	nifiID := nifi.UserGroupEntityID(*existing)
+	if userGroupNeedsUpdate(*existing, desired) {
+		update := nifi.UserGroupEntity{
+			Revision:  existing.Revision,
+			ID:        nifiID,
+			Component: nifi.UserGroupComponent{ID: nifiID, Identity: desired.Identity, Users: desired.Users},
+		}
+		updated, err := groups.UpdateUserGroup(ctx, endpoint, update)
+		if err != nil {
+			message := fmt.Sprintf("Failed to update NiFi user group: %v", err)
+			if shouldMarkUserGroupNotReady(instance, "NiFiUpdateFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markUserGroupNotReady(ctx, r.Client, instance, "NiFiUpdateFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if updated != nil {
+			return ctrl.Result{}, markUserGroupReady(ctx, r.Client, instance, nifi.UserGroupEntityID(*updated), updated.Revision.Version, memberIDs)
+		}
+	}
+	if !userGroupStatusMatches(instance, nifiID, existing.Revision.Version, memberIDs) {
+		return ctrl.Result{}, markUserGroupReady(ctx, r.Client, instance, nifiID, existing.Revision.Version, memberIDs)
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *NiFiUserGroupReconciler) resolveUserGroupMemberIDs(ctx context.Context, instance *nifiv1alpha1.NiFiUserGroup) ([]string, error) {
+	memberIDs := make([]string, 0, len(instance.Spec.Users))
+	for _, member := range instance.Spec.Users {
+		namespace := instance.Namespace
+		if member.UserRef.Namespace != "" {
+			namespace = member.UserRef.Namespace
+		}
+		user := &nifiv1alpha1.NiFiUser{}
+		if err := r.Get(ctx, types.NamespacedName{Name: member.UserRef.Name, Namespace: namespace}, user); err != nil {
+			return nil, err
+		}
+		if user.Status.NiFiID != "" {
+			memberIDs = append(memberIDs, user.Status.NiFiID)
+		}
+	}
+	return memberIDs, nil
+}
+
+func (r *NiFiUserGroupReconciler) reconcileUserGroupDelete(ctx context.Context, instance *nifiv1alpha1.NiFiUserGroup) (ctrl.Result, error) {
+	if instance.Spec.DeletionPolicy != nifiv1alpha1.DeletionPolicyDelete || instance.Status.NiFiID == "" {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	if err := r.userGroupClient().DeleteUserGroup(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil && !nifi.IsNotFound(err) {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	_, err = removeFinalizer(ctx, r.Client, instance)
+	return ctrl.Result{}, err
 }
 
 func (r *NiFiUserGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {

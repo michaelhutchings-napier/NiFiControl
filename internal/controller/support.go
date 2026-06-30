@@ -153,18 +153,8 @@ func markControllerServiceNotReady(ctx context.Context, c client.Client, obj *ni
 	return c.Status().Update(ctx, obj)
 }
 
-func markUserAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiUser) error {
-	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
-	return c.Status().Update(ctx, obj)
-}
-
 func markUserWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiUser, waitingFor []string) error {
 	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
-	return c.Status().Update(ctx, obj)
-}
-
-func markUserGroupAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiUserGroup) error {
-	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
 	return c.Status().Update(ctx, obj)
 }
 
