@@ -1,0 +1,50 @@
+# Authorization: grant a NiFi identity read access to the flow. Access policies (and tenants)
+# exist only on a secured NiFi with a managed authorizer (spec.internalTLS enabled). A common
+# use is authorizing a Prometheus scrape identity to read metrics on a TLS cluster; see
+# docs/authorization.md and docs/observability.md.
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiUser
+metadata:
+  name: metrics-scraper
+spec:
+  clusterRef:
+    name: production
+  # The client-certificate subject (DN) or OIDC identity of the caller.
+  identity: "CN=prometheus, O=monitoring"
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiPolicy
+metadata:
+  name: scraper-read-flow
+spec:
+  clusterRef:
+    name: production
+  resource: /flow          # e.g. /flow, /controller, /proxy, /data/process-groups/{id}
+  action: read             # read | write
+  userRefs:
+    - name: metrics-scraper
+---
+# A group-based example: grant a team write access to a process group.
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiUserGroup
+metadata:
+  name: editors
+spec:
+  clusterRef:
+    name: production
+  identity: editors
+  users:
+    - userRef:
+        name: metrics-scraper
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiPolicy
+metadata:
+  name: editors-write-root
+spec:
+  clusterRef:
+    name: production
+  resource: /process-groups/root
+  action: write
+  userGroupRefs:
+    - name: editors

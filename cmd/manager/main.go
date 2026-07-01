@@ -101,6 +101,9 @@ func main() {
 	if err := (&controller.NiFiAutoscalerReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("nifiautoscaler-controller")}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
+	if err := (&controller.NiFiPolicyReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), AccessPolicyClient: nifi.HTTPAccessPolicyClient{}}).SetupWithManager(mgr); err != nil {
+		os.Exit(1)
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		os.Exit(1)

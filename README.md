@@ -25,6 +25,9 @@ services, and high-level flow deployments.
 - CRDs, RBAC, samples, and a controller-runtime manager are available.
 - Registry clients, parameter contexts, process groups, controller services,
   processors, ports, connections, funnels, and labels reconcile against NiFi.
+- Authorization is declarative on secured clusters: `NiFiUser`/`NiFiUserGroup` manage NiFi
+  tenants and `NiFiPolicy` grants a `(resource, action)` to them — e.g. authorizing a metrics
+  scrape identity. See [docs/authorization.md](docs/authorization.md).
 - Flow deployments import complete embedded NiFi `RegisteredFlowSnapshot`
   contents and use NiFi's asynchronous replace requests for updates.
 - Flow configuration can be backed up to a ConfigMap/Secret and restored

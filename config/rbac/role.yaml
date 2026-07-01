@@ -135,6 +135,7 @@ rules:
   - nifinodegroups
   - nifioutputports
   - nifiparametercontexts
+  - nifipolicies
   - nifiprocessgroups
   - nifiprocessors
   - nifiregistryclients
@@ -166,6 +167,7 @@ rules:
   - nifinodegroups/finalizers
   - nifioutputports/finalizers
   - nifiparametercontexts/finalizers
+  - nifipolicies/finalizers
   - nifiprocessgroups/finalizers
   - nifiprocessors/finalizers
   - nifiregistryclients/finalizers
@@ -191,6 +193,7 @@ rules:
   - nifinodegroups/status
   - nifioutputports/status
   - nifiparametercontexts/status
+  - nifipolicies/status
   - nifiprocessgroups/status
   - nifiprocessors/status
   - nifiregistryclients/status
