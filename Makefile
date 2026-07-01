@@ -81,3 +81,7 @@ integration-observability-kind:
 .PHONY: integration-autoscaler-kind
 integration-autoscaler-kind:
 	./hack/test-autoscaler-kind.sh
+
+.PHONY: integration-authz-kind
+integration-authz-kind:
+	./hack/test-authz-kind.sh
