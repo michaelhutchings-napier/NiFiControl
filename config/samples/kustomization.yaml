@@ -21,6 +21,7 @@ resources:
   - nifi_v1alpha1_nifireportingtask.yaml
   - nifi_v1alpha1_nififunnel.yaml
   - nifi_v1alpha1_nifilabel.yaml
+  - nifi_v1alpha1_nifiremoteprocessgroup.yaml
   - nifi_v1alpha1_nifibackup.yaml
   - nifi_v1alpha1_nifirestore.yaml
   - nifi_v1alpha1_nifinodegroup.yaml

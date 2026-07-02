@@ -181,6 +181,7 @@ rules:
       - nifiprocessgroups
       - nifiprocessors
       - nifiregistryclients
+      - nifiremoteprocessgroups
       - nifireportingtasks
       - nifirestores
       - nifiusergroups
@@ -213,6 +214,7 @@ rules:
       - nifiprocessgroups/finalizers
       - nifiprocessors/finalizers
       - nifiregistryclients/finalizers
+      - nifiremoteprocessgroups/finalizers
       - nifireportingtasks/finalizers
       - nifirestores/finalizers
       - nifiusergroups/finalizers
@@ -239,6 +241,7 @@ rules:
       - nifiprocessgroups/status
       - nifiprocessors/status
       - nifiregistryclients/status
+      - nifiremoteprocessgroups/status
       - nifireportingtasks/status
       - nifirestores/status
       - nifiusergroups/status

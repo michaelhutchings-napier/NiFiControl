@@ -26,9 +26,12 @@ services, and high-level flow deployments.
   subresource. See [docs/node-groups.md](docs/node-groups.md).
 - CRDs, RBAC, samples, and a controller-runtime manager are available.
 - Registry clients, parameter contexts, process groups, controller services,
-  processors, ports, connections, funnels, and labels reconcile against NiFi.
-  `NiFiRegistryClient` supports the NiFi Registry, GitHub, and GitLab flow registry
-  types, with repository settings as typed fields and access tokens sourced from Secrets.
+  processors, ports, connections, funnels, labels, and remote process groups
+  reconcile against NiFi. `NiFiRegistryClient` supports the NiFi Registry, GitHub, and
+  GitLab flow registry types, with repository settings as typed fields and access tokens
+  sourced from Secrets. `NiFiRemoteProcessGroup` manages site-to-site links: it configures
+  the target URIs, transport protocol, timeouts, and optional HTTP proxy, and stops
+  transmission before any configuration change or deletion.
 - `NiFiReportingTask` manages a controller-level reporting task: it reconciles the task's type,
   bundle, properties (including sensitive properties from Secrets), and scheduling, and
   starts/stops it via NiFi's run-status endpoint (`state: Enabled`/`Disabled`).

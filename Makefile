@@ -93,3 +93,7 @@ integration-reportingtask-kind:
 .PHONY: integration-registry-kind
 integration-registry-kind:
 	./hack/test-registry-kind.sh
+
+.PHONY: integration-remoteprocessgroup-kind
+integration-remoteprocessgroup-kind:
+	./hack/test-remoteprocessgroup-kind.sh

@@ -1,0 +1,30 @@
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiRemoteProcessGroup
+metadata:
+  name: central-nifi
+spec:
+  clusterRef:
+    name: edge
+  # Omit parentProcessGroupRef (or set root: true) to attach to the root canvas.
+  parentProcessGroupRef:
+    name: payments
+  # NiFi stores the list as a single comma-separated value and tries the URIs in order.
+  targetUris:
+    - https://central-nifi.example.com:8443/nifi
+  # RAW uses NiFi's site-to-site socket protocol; HTTP tunnels it over the HTTP(S) port.
+  transportProtocol: HTTP
+  communicationsTimeout: 30 sec
+  yieldDuration: 10 sec
+  position:
+    x: 400
+    # "y" must be quoted: YAML 1.1 parses the bare key y as the boolean true.
+    "y": 240
+  # Optional HTTP proxy for site-to-site (HTTP transport). The password is read from a Secret.
+  # proxy:
+  #   host: proxy.example.com
+  #   port: 3128
+  #   user: nifi
+  #   passwordSecretRef:
+  #     name: rpg-proxy
+  #     key: password
+  deletionPolicy: Orphan
