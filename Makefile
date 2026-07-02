@@ -85,3 +85,7 @@ integration-autoscaler-kind:
 .PHONY: integration-authz-kind
 integration-authz-kind:
 	./hack/test-authz-kind.sh
+
+.PHONY: integration-reportingtask-kind
+integration-reportingtask-kind:
+	./hack/test-reportingtask-kind.sh
