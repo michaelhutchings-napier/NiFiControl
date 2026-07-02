@@ -102,18 +102,16 @@ const (
 	// removal this is equivalent to HighestOrdinal until only one node remains; it is offered as
 	// an explicit intent.
 	ScaleDownNonPrimary NiFiAutoscalerScaleDownStrategy = "NonPrimary"
-	// ScaleDownLeastBusy would remove the least-loaded node. It is not yet supported: selecting an
-	// arbitrary (non-highest-ordinal) node requires pod-level management rather than a StatefulSet.
-	ScaleDownLeastBusy NiFiAutoscalerScaleDownStrategy = "LeastBusy"
 )
 
 // NiFiAutoscalerBehavior tunes scale-down. These map to the rendered HPA scaleDown behavior;
 // the operator's graceful offload still applies on every replica decrease.
 type NiFiAutoscalerBehavior struct {
-	// ScaleDownStrategy selects which node a scale-down removes. The operator currently always
-	// offloads from the highest ordinal down, so HighestOrdinal and NonPrimary describe the
-	// existing behavior; LeastBusy is reserved and rejected until pod-level management exists.
-	// +kubebuilder:validation:Enum=HighestOrdinal;NonPrimary;LeastBusy
+	// ScaleDownStrategy selects which node a scale-down removes. The operator always offloads from
+	// the highest ordinal down (StatefulSet semantics), so HighestOrdinal and NonPrimary both
+	// describe that behavior — NonPrimary is an explicit statement of intent that the
+	// coordinator-eligible ordinal 0 is removed last.
+	// +kubebuilder:validation:Enum=HighestOrdinal;NonPrimary
 	// +kubebuilder:default=HighestOrdinal
 	ScaleDownStrategy NiFiAutoscalerScaleDownStrategy `json:"scaleDownStrategy,omitempty"`
 	// StabilizationSeconds is the scale-down stabilization window. A long window suits NiFi

@@ -72,10 +72,10 @@ What it does:
   expensive.
 - **Targets `NiFiCluster` or `NiFiNodeGroup`** via their scale subresource, so scale-downs run
   the operator's [graceful node offload](node-lifecycle.md).
-- **`scaleDownStrategy`** is forward-looking: `HighestOrdinal` (the default) and `NonPrimary`
-  describe the operator's current highest-ordinal-first offload, which keeps the
-  coordinator-eligible ordinal 0 until last. `LeastBusy` is reserved and rejected for now —
-  removing an arbitrary node requires pod-level management rather than a StatefulSet.
+- **`scaleDownStrategy`** describes the operator's highest-ordinal-first offload: `HighestOrdinal`
+  (the default) and `NonPrimary` both keep the coordinator-eligible ordinal 0 until last —
+  `NonPrimary` states that intent explicitly. Removing an arbitrary (least-busy) node is not
+  offered, because it would require pod-level management rather than StatefulSet scale-down.
 
 It composes with the lower-level objects below; reach for those directly only if you need a
 KEDA/HPA feature the CRD does not yet expose.

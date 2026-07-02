@@ -89,13 +89,13 @@ spec:
                   scaleDownStrategy:
                     default: HighestOrdinal
                     description: |-
-                      ScaleDownStrategy selects which node a scale-down removes. The operator currently always
-                      offloads from the highest ordinal down, so HighestOrdinal and NonPrimary describe the
-                      existing behavior; LeastBusy is reserved and rejected until pod-level management exists.
+                      ScaleDownStrategy selects which node a scale-down removes. The operator always offloads from
+                      the highest ordinal down (StatefulSet semantics), so HighestOrdinal and NonPrimary both
+                      describe that behavior — NonPrimary is an explicit statement of intent that the
+                      coordinator-eligible ordinal 0 is removed last.
                     enum:
                     - HighestOrdinal
                     - NonPrimary
-                    - LeastBusy
                     type: string
                   stabilizationSeconds:
                     default: 300

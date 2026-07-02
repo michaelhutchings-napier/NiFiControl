@@ -72,11 +72,6 @@ func (r *NiFiAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			"The target NiFiCluster must be operator-managed (mode Internal) to be autoscaled.")
 	}
 
-	if instance.Spec.Behavior != nil && instance.Spec.Behavior.ScaleDownStrategy == nifiv1alpha1.ScaleDownLeastBusy {
-		return r.notReady(ctx, instance, "ScaleDownStrategyUnsupported",
-			"scaleDownStrategy LeastBusy is not yet supported: selecting an arbitrary node requires pod-level management. Use HighestOrdinal or NonPrimary.")
-	}
-
 	mode, reason, message := autoscalerMode(instance)
 	if mode == "" {
 		return r.notReady(ctx, instance, reason, message)

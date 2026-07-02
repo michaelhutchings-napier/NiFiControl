@@ -185,21 +185,23 @@ func TestNiFiAutoscalerReportsMissingKEDA(t *testing.T) {
 	assertControllerCondition(t, got.Status.Conditions, nifiv1alpha1.ConditionReady, metav1.ConditionFalse, "KEDANotInstalled")
 }
 
-func TestNiFiAutoscalerRejectsLeastBusy(t *testing.T) {
+func TestNiFiAutoscalerAcceptsNonPrimary(t *testing.T) {
 	scheme := kedaTestScheme()
 	cluster := newAutoscalerCluster()
 	as := newAutoscaler([]nifiv1alpha1.NiFiAutoscalerMetric{prometheusMetric()})
-	as.Spec.Behavior = &nifiv1alpha1.NiFiAutoscalerBehavior{ScaleDownStrategy: nifiv1alpha1.ScaleDownLeastBusy}
+	as.Spec.Behavior = &nifiv1alpha1.NiFiAutoscalerBehavior{ScaleDownStrategy: nifiv1alpha1.ScaleDownNonPrimary}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, as).
 		WithStatusSubresource(&nifiv1alpha1.NiFiAutoscaler{}).Build()
 	reconcileAutoscaler(t, c, scheme, as.Name)
 
 	got := getAutoscaler(t, c, as.Name)
-	assertControllerCondition(t, got.Status.Conditions, nifiv1alpha1.ConditionReady, metav1.ConditionFalse, "ScaleDownStrategyUnsupported")
-	// No ScaledObject should have been created.
+	if !got.Status.Ready || got.Status.Mode != "KEDA" {
+		t.Fatalf("NonPrimary strategy should reconcile Ready in KEDA mode: %+v", got.Status)
+	}
+	// The ScaledObject is rendered normally: NonPrimary maps to the same highest-ordinal offload.
 	so := keda.New()
-	if err := c.Get(context.Background(), types.NamespacedName{Name: autoscalerResourceName(as), Namespace: "default"}, so); err == nil {
-		t.Fatal("ScaledObject should not exist for an unsupported strategy")
+	if err := c.Get(context.Background(), types.NamespacedName{Name: autoscalerResourceName(as), Namespace: "default"}, so); err != nil {
+		t.Fatalf("ScaledObject should exist for the NonPrimary strategy: %v", err)
 	}
 }
 

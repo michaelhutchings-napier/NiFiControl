@@ -20,8 +20,9 @@ spec:
         threshold: "10000"                       # target queued FlowFiles per node
   behavior:
     # NiFi node offload is expensive, so defaults are conservative: one node at a time,
-    # with a long stabilization window. scaleDownStrategy reserves future per-node selection
-    # (HighestOrdinal is how the operator offloads today; LeastBusy is not yet supported).
+    # with a long stabilization window. The operator offloads from the highest ordinal down;
+    # HighestOrdinal and NonPrimary both describe that (NonPrimary states the intent that the
+    # coordinator-eligible ordinal 0 is removed last).
     scaleDownStrategy: HighestOrdinal
     stabilizationSeconds: 600
     maxNodesPerStep: 1
