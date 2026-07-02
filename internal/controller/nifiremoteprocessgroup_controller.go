@@ -102,14 +102,31 @@ func (r *NiFiRemoteProcessGroupReconciler) Reconcile(ctx context.Context, req ct
 	rpgs := r.remoteProcessGroupClient()
 	if instance.Status.NiFiID != "" {
 		existing, err := rpgs.GetRemoteProcessGroup(ctx, endpoint, instance.Status.NiFiID)
-		if err != nil {
+		if err != nil && !nifi.IsNotFound(err) {
 			message := fmt.Sprintf("Failed to get NiFi remote process group: %v", err)
 			if shouldMarkRemoteProcessGroupNotReady(instance, "NiFiGetFailed", message) {
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, markRemoteProcessGroupNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
 			}
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
-		return r.reconcileExistingRemoteProcessGroup(ctx, instance, endpoint, rpgs, desired, existing, parentID)
+		if existing != nil {
+			return r.reconcileExistingRemoteProcessGroup(ctx, instance, endpoint, rpgs, desired, existing, parentID)
+		}
+		// The tracked RPG is gone from NiFi (deleted out-of-band); fall through to recreate it.
+	}
+	// Adopt an existing remote process group by NiFi id when asked, instead of creating a new one.
+	if instance.Spec.AdoptionPolicy.Mode == nifiv1alpha1.AdoptionPolicyAdoptByID && instance.Spec.AdoptionPolicy.NiFiID != "" {
+		existing, err := rpgs.GetRemoteProcessGroup(ctx, endpoint, instance.Spec.AdoptionPolicy.NiFiID)
+		if err != nil {
+			message := fmt.Sprintf("Failed to adopt NiFi remote process group: %v", err)
+			if shouldMarkRemoteProcessGroupNotReady(instance, "AdoptionFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markRemoteProcessGroupNotReady(ctx, r.Client, instance, "AdoptionFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if existing != nil {
+			return r.reconcileExistingRemoteProcessGroup(ctx, instance, endpoint, rpgs, desired, existing, parentID)
+		}
 	}
 
 	created, err := rpgs.CreateRemoteProcessGroup(ctx, endpoint, parentID, desired)

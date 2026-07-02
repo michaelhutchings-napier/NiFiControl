@@ -149,4 +149,38 @@ if rpg_json "${id}" >/dev/null 2>&1; then
 fi
 echo "  RPG ${id} removed from NiFi and the resource finalizer cleared."
 
-echo "PASS: NiFi accepts the RemoteProcessGroup field names the operator sends, and the update and stop-before-delete paths work."
+echo "Phase 4: adopt an existing RPG by NiFi id..."
+# Create an RPG directly in NiFi (bypassing the operator), then adopt it by id from a CR. If the
+# operator adopted correctly the CR's status.nifiId is the pre-existing id (a create would yield a
+# new one), proving no duplicate was made.
+aid="$(kubectl --context "${ctx}" -n "${namespace}" exec rt-nifi-0 -c nifi -- \
+  curl -fsS -X POST -H 'Content-Type: application/json' \
+  -d '{"revision":{"version":0},"component":{"targetUris":"https://adopt.example.com:8443/nifi","transportProtocol":"HTTP"}}' \
+  "http://rt-nifi-0.rt-nifi-headless.${namespace}.svc:8080/nifi-api/process-groups/root/remote-process-groups" \
+  2>/dev/null | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"
+[ -n "${aid}" ] || { echo "failed to create an RPG directly in NiFi" >&2; exit 1; }
+echo "  created RPG ${aid} directly in NiFi; adopting it from a CR..."
+kubectl --context "${ctx}" -n "${namespace}" apply -f - >/dev/null <<YAML
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiRemoteProcessGroup
+metadata: {name: adopted}
+spec:
+  clusterRef: {name: rt}
+  parentProcessGroupRef: {root: true}
+  targetUris:
+    - https://adopt.example.com:8443/nifi
+  transportProtocol: HTTP
+  adoptionPolicy: {mode: AdoptById, nifiId: ${aid}}
+  deletionPolicy: Orphan
+YAML
+adopted=""
+for _ in $(seq 1 30); do
+  adopted="$(kubectl --context "${ctx}" -n "${namespace}" get nifiremoteprocessgroup adopted -o jsonpath='{.status.nifiId}' 2>/dev/null || true)"
+  ready="$(kubectl --context "${ctx}" -n "${namespace}" get nifiremoteprocessgroup adopted -o jsonpath='{.status.ready}' 2>/dev/null || true)"
+  [ "${adopted}" = "${aid}" ] && [ "${ready}" = "true" ] && break
+  sleep 5
+done
+[ "${adopted}" = "${aid}" ] && [ "${ready}" = "true" ] || { echo "CR did not adopt RPG ${aid} (got nifiId='${adopted}', ready='${ready}')" >&2; kubectl --context "${ctx}" -n "${namespace}" get nifiremoteprocessgroup adopted -o yaml >&2; exit 1; }
+echo "  CR 'adopted' took over existing RPG ${aid} (no duplicate created)."
+
+echo "PASS: NiFi accepts the RemoteProcessGroup field names the operator sends, and the update, stop-before-delete, and adopt-by-id paths work."

@@ -128,6 +128,35 @@ func TestNiFiRemoteProcessGroupReconcileCreates(t *testing.T) {
 	assertControllerCondition(t, got.Status.Conditions, nifiv1alpha1.ConditionReady, metav1.ConditionTrue, "RemoteProcessGroupReady")
 }
 
+func TestNiFiRemoteProcessGroupAdoptsByID(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	rpg := newRemoteProcessGroup("central")
+	rpg.Spec.AdoptionPolicy = nifiv1alpha1.AdoptionPolicy{Mode: nifiv1alpha1.AdoptionPolicyAdoptByID, NiFiID: "existing-rpg"}
+	k8sClient := remoteProcessGroupTestClient(scheme, cluster, rpg)
+	// An RPG already exists in NiFi with the id the CR asks to adopt, matching the desired config.
+	rpgs := &fakeRemoteProcessGroupClient{store: &nifi.RemoteProcessGroupEntity{
+		ID:       "existing-rpg",
+		Revision: nifi.Revision{Version: 7},
+		Component: nifi.RemoteProcessGroupComponent{
+			ID: "existing-rpg", ParentGroupID: "root", Name: "central",
+			TargetURIs: "https://central-nifi.example.com:8443/nifi", TransportProtocol: "HTTP",
+			CommunicationsTimeout: "30 sec", YieldDuration: "10 sec",
+		},
+	}}
+	r := &NiFiRemoteProcessGroupReconciler{Client: k8sClient, Scheme: scheme, RemoteProcessGroupClient: rpgs}
+	reconcileTwice(t, r, rpg.Name)
+
+	if len(rpgs.created) != 0 {
+		t.Fatalf("adoption must not create a new RPG: %#v", rpgs.created)
+	}
+	got := &nifiv1alpha1.NiFiRemoteProcessGroup{}
+	_ = k8sClient.Get(context.Background(), types.NamespacedName{Name: rpg.Name, Namespace: "default"}, got)
+	if !got.Status.Ready || got.Status.NiFiID != "existing-rpg" {
+		t.Fatalf("expected the CR to adopt existing-rpg, status = %+v", got.Status)
+	}
+}
+
 func TestNiFiRemoteProcessGroupUpdateStopsTransmissionFirst(t *testing.T) {
 	scheme := testScheme()
 	cluster := readyTestCluster()

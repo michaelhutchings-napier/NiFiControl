@@ -27,4 +27,8 @@ spec:
   #   passwordSecretRef:
   #     name: rpg-proxy
   #     key: password
+  # Take over a remote process group that already exists in NiFi instead of creating one:
+  # adoptionPolicy:
+  #   mode: AdoptById
+  #   nifiId: <existing-remote-process-group-id>
   deletionPolicy: Orphan
