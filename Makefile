@@ -89,3 +89,7 @@ integration-authz-kind:
 .PHONY: integration-reportingtask-kind
 integration-reportingtask-kind:
 	./hack/test-reportingtask-kind.sh
+
+.PHONY: integration-registry-kind
+integration-registry-kind:
+	./hack/test-registry-kind.sh

@@ -183,15 +183,6 @@ func (r *NiFiRegistryClientReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, nil
 	}
 
-	entity, resolvedType, supported := desiredRegistryClient(instance)
-	if !supported {
-		message := fmt.Sprintf("Registry client type %q is not implemented yet.", instance.Spec.Type)
-		if shouldMarkRegistryClientNotReady(instance, "RegistryClientTypeUnsupported", message) {
-			return ctrl.Result{}, markRegistryClientNotReady(ctx, r.Client, instance, "RegistryClientTypeUnsupported", message)
-		}
-		return ctrl.Result{}, nil
-	}
-
 	endpoint := cluster.Status.Endpoint
 	if endpoint == "" && cluster.Spec.API != nil {
 		endpoint = cluster.Spec.API.URI
@@ -202,6 +193,17 @@ func (r *NiFiRegistryClientReconciler) Reconcile(ctx context.Context, req ctrl.R
 			return ctrl.Result{}, markRegistryClientNotReady(ctx, r.Client, instance, "ClusterEndpointMissing", message)
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	entity, resolvedType, sensitiveKeys, waitingFor, err := r.desiredRegistryClient(ctx, instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markRegistryClientWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
 	}
 
 	registryClient := r.RegistryClientClient
@@ -218,7 +220,7 @@ func (r *NiFiRegistryClientReconciler) Reconcile(ctx context.Context, req ctrl.R
 			}
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
-		return r.reconcileExistingRegistryClient(ctx, instance, endpoint, registryClient, entity, existing, resolvedType)
+		return r.reconcileExistingRegistryClient(ctx, instance, endpoint, registryClient, entity, existing, resolvedType, sensitiveKeys)
 	}
 
 	if instance.Spec.AdoptionPolicy.Mode == nifiv1alpha1.AdoptionPolicyAdoptByID && instance.Spec.AdoptionPolicy.NiFiID != "" {
@@ -230,7 +232,7 @@ func (r *NiFiRegistryClientReconciler) Reconcile(ctx context.Context, req ctrl.R
 			}
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
-		return r.reconcileExistingRegistryClient(ctx, instance, endpoint, registryClient, entity, existing, resolvedType)
+		return r.reconcileExistingRegistryClient(ctx, instance, endpoint, registryClient, entity, existing, resolvedType, sensitiveKeys)
 	}
 
 	created, err := registryClient.CreateRegistryClient(ctx, endpoint, entity)
@@ -286,7 +288,7 @@ func (r *NiFiRegistryClientReconciler) reconcileRegistryClientDelete(ctx context
 	return ctrl.Result{}, err
 }
 
-func (r *NiFiRegistryClientReconciler) reconcileExistingRegistryClient(ctx context.Context, instance *nifiv1alpha1.NiFiRegistryClient, endpoint string, registryClient nifi.RegistryClientClient, desired nifi.RegistryClientEntity, existing *nifi.RegistryClientEntity, resolvedType string) (ctrl.Result, error) {
+func (r *NiFiRegistryClientReconciler) reconcileExistingRegistryClient(ctx context.Context, instance *nifiv1alpha1.NiFiRegistryClient, endpoint string, registryClient nifi.RegistryClientClient, desired nifi.RegistryClientEntity, existing *nifi.RegistryClientEntity, resolvedType string, sensitiveKeys map[string]bool) (ctrl.Result, error) {
 	if existing == nil {
 		message := "NiFi returned an empty registry client response."
 		if shouldMarkRegistryClientNotReady(instance, "NiFiGetFailed", message) {
@@ -296,7 +298,7 @@ func (r *NiFiRegistryClientReconciler) reconcileExistingRegistryClient(ctx conte
 	}
 
 	nifiID := registryClientEntityID(*existing)
-	if registryClientNeedsUpdate(desired, *existing) {
+	if registryClientNeedsUpdate(desired, *existing, sensitiveKeys) {
 		updateEntity := desired
 		updateEntity.ID = nifiID
 		updateEntity.Component.ID = nifiID
@@ -321,22 +323,139 @@ func (r *NiFiRegistryClientReconciler) reconcileExistingRegistryClient(ctx conte
 	return ctrl.Result{}, nil
 }
 
-func desiredRegistryClient(instance *nifiv1alpha1.NiFiRegistryClient) (nifi.RegistryClientEntity, string, bool) {
+// desiredRegistryClient builds the NiFi registry client entity for the resource's type. It maps
+// the typed GitHub/GitLab fields (and NiFiRegistry's URI) to NiFi's component properties,
+// resolves any token/sensitive Secrets, and returns the set of sensitive property keys (which
+// NiFi masks on read and are therefore excluded from drift detection) plus any unresolved
+// dependencies to wait on.
+func (r *NiFiRegistryClientReconciler) desiredRegistryClient(ctx context.Context, instance *nifiv1alpha1.NiFiRegistryClient) (nifi.RegistryClientEntity, string, map[string]bool, []string, error) {
 	resolvedType := registryClientType(instance.Spec.Type)
-	if instance.Spec.Type != "" && instance.Spec.Type != nifiv1alpha1.RegistryClientTypeNiFiRegistry {
-		return nifi.RegistryClientEntity{}, resolvedType, false
+	properties := map[string]string{}
+	sensitiveKeys := map[string]bool{}
+	waitingFor := make([]string, 0)
+
+	switch instance.Spec.Type {
+	case nifiv1alpha1.RegistryClientTypeGitHub:
+		gh := instance.Spec.GitHub
+		if gh == nil {
+			waitingFor = append(waitingFor, "github")
+			break
+		}
+		properties["Repository Owner"] = gh.RepositoryOwner
+		properties["Repository Name"] = gh.RepositoryName
+		if gh.RepositoryPath != "" {
+			properties["Repository Path"] = gh.RepositoryPath
+		}
+		properties["Default Branch"] = stringOrDefault(gh.DefaultBranch, "main")
+		properties["GitHub API URL"] = stringOrDefault(gh.APIURL, "https://api.github.com/")
+		if gh.PersonalAccessTokenSecretRef != nil {
+			properties["Authentication Type"] = "PERSONAL_ACCESS_TOKEN"
+			sensitiveKeys["Personal Access Token"] = true
+			token, wait, err := r.resolveSecretKey(ctx, instance.Namespace, gh.PersonalAccessTokenSecretRef)
+			if err != nil {
+				return nifi.RegistryClientEntity{}, resolvedType, nil, nil, err
+			}
+			if wait != "" {
+				waitingFor = append(waitingFor, wait)
+			} else {
+				properties["Personal Access Token"] = token
+			}
+		} else {
+			properties["Authentication Type"] = "NONE"
+		}
+	case nifiv1alpha1.RegistryClientTypeGitLab:
+		gl := instance.Spec.GitLab
+		if gl == nil {
+			waitingFor = append(waitingFor, "gitlab")
+			break
+		}
+		properties["Repository Namespace"] = gl.RepositoryNamespace
+		properties["Repository Name"] = gl.RepositoryName
+		if gl.RepositoryPath != "" {
+			properties["Repository Path"] = gl.RepositoryPath
+		}
+		properties["Default Branch"] = stringOrDefault(gl.DefaultBranch, "main")
+		properties["GitLab API URL"] = stringOrDefault(gl.APIURL, "https://gitlab.com/")
+		properties["Authentication Type"] = "ACCESS_TOKEN"
+		if gl.AccessTokenSecretRef != nil {
+			sensitiveKeys["Access Token"] = true
+			token, wait, err := r.resolveSecretKey(ctx, instance.Namespace, gl.AccessTokenSecretRef)
+			if err != nil {
+				return nifi.RegistryClientEntity{}, resolvedType, nil, nil, err
+			}
+			if wait != "" {
+				waitingFor = append(waitingFor, wait)
+			} else {
+				properties["Access Token"] = token
+			}
+		}
+	default: // NiFiRegistry
+		if instance.Spec.URI != "" {
+			properties["url"] = instance.Spec.URI
+		}
 	}
-	return nifi.RegistryClientEntity{
+
+	// Generic passthrough overrides/supplements the typed fields (e.g. GitHub App Installation).
+	for key, value := range instance.Spec.Properties {
+		properties[key] = value
+	}
+	for name, source := range instance.Spec.SensitiveProperties {
+		sensitiveKeys[name] = true
+		if source.SecretKeyRef == nil {
+			waitingFor = append(waitingFor, fmt.Sprintf("sensitiveProperties.%s.secretKeyRef", name))
+			continue
+		}
+		value, wait, err := r.resolveSecretKey(ctx, instance.Namespace, source.SecretKeyRef)
+		if err != nil {
+			return nifi.RegistryClientEntity{}, resolvedType, nil, nil, err
+		}
+		if wait != "" {
+			waitingFor = append(waitingFor, wait)
+			continue
+		}
+		properties[name] = value
+	}
+
+	if len(properties) == 0 {
+		properties = nil
+	}
+	entity := nifi.RegistryClientEntity{
 		Revision: nifi.Revision{Version: 0},
 		Component: nifi.RegistryClientComponent{
 			Name:        instance.Name,
 			Type:        resolvedType,
 			Description: instance.Spec.Description,
-			Properties: map[string]string{
-				"url": instance.Spec.URI,
-			},
+			Properties:  properties,
 		},
-	}, resolvedType, true
+	}
+	return entity, resolvedType, sensitiveKeys, waitingFor, nil
+}
+
+// resolveSecretKey reads a Secret value. It returns a non-empty "waitFor" string (and empty
+// value) when the Secret or key is missing but not optional, so the caller can wait for it.
+func (r *NiFiRegistryClientReconciler) resolveSecretKey(ctx context.Context, namespace string, ref *nifiv1alpha1.SecretKeyRef) (string, string, error) {
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: namespace}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", fmt.Sprintf("Secret/%s/%s", namespace, ref.Name), nil
+		}
+		return "", "", err
+	}
+	data, ok := secret.Data[ref.Key]
+	if !ok {
+		if ref.Optional != nil && *ref.Optional {
+			return "", "", nil
+		}
+		return "", fmt.Sprintf("Secret/%s/%s:%s", namespace, ref.Name, ref.Key), nil
+	}
+	return string(data), "", nil
+}
+
+func stringOrDefault(value, fallback string) string {
+	if value != "" {
+		return value
+	}
+	return fallback
 }
 
 func registryClientType(registryType nifiv1alpha1.RegistryClientType) string {
@@ -357,13 +476,23 @@ func registryClientEntityID(entity nifi.RegistryClientEntity) string {
 	return entity.Component.ID
 }
 
-func registryClientNeedsUpdate(desired nifi.RegistryClientEntity, existing nifi.RegistryClientEntity) bool {
+func registryClientNeedsUpdate(desired nifi.RegistryClientEntity, existing nifi.RegistryClientEntity, sensitiveKeys map[string]bool) bool {
 	if desired.Component.Name != existing.Component.Name ||
 		desired.Component.Type != existing.Component.Type ||
 		desired.Component.Description != existing.Component.Description {
 		return true
 	}
-	return desired.Component.Properties["url"] != existing.Component.Properties["url"]
+	// Compare only the properties we manage, skipping sensitive ones (NiFi masks them on read) and
+	// ignoring any additional default properties NiFi returns that we did not set.
+	for key, value := range desired.Component.Properties {
+		if sensitiveKeys[key] {
+			continue
+		}
+		if existing.Component.Properties[key] != value {
+			return true
+		}
+	}
+	return false
 }
 
 func registryClientStatusMatches(instance *nifiv1alpha1.NiFiRegistryClient, nifiID string, revisionVersion int64, resolvedType string) bool {

@@ -6,6 +6,7 @@ import (
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/nifi"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -238,7 +239,66 @@ func TestNiFiRegistryClientReconcileAdoptsByID(t *testing.T) {
 	}
 }
 
-func TestNiFiRegistryClientReconcileMarksUnsupportedType(t *testing.T) {
+func githubTokenSecretRef(name, key string) *nifiv1alpha1.SecretKeyRef {
+	return &nifiv1alpha1.SecretKeyRef{SecretKeySelector: corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{Name: name},
+		Key:                  key,
+	}}
+}
+
+func TestNiFiRegistryClientReconcileCreatesGitHubClient(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "gh-token", Namespace: "default"},
+		Data:       map[string][]byte{"token": []byte("ghp_secret")},
+	}
+	registry := &nifiv1alpha1.NiFiRegistryClient{
+		ObjectMeta: metav1.ObjectMeta{Name: "github-flows", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiRegistryClientSpec{
+			ClusterRef: nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			Type:       nifiv1alpha1.RegistryClientTypeGitHub,
+			GitHub: &nifiv1alpha1.GitHubFlowRegistrySpec{
+				RepositoryOwner:              "acme",
+				RepositoryName:               "flows",
+				PersonalAccessTokenSecretRef: githubTokenSecretRef("gh-token", "token"),
+			},
+		},
+	}
+	k8sClient := newRegistryClientTestClient(scheme, cluster, secret, registry)
+	nifiClient := &fakeRegistryClientClient{}
+	reconciler := &NiFiRegistryClientReconciler{Client: k8sClient, Scheme: scheme, RegistryClientClient: nifiClient}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: registry.Name, Namespace: registry.Namespace}}
+
+	reconcileRegistryClientTwice(t, reconciler, request)
+
+	if len(nifiClient.created) != 1 {
+		t.Fatalf("created count = %d, want 1", len(nifiClient.created))
+	}
+	props := nifiClient.created[0].Component.Properties
+	if nifiClient.created[0].Component.Type != registryClientType(nifiv1alpha1.RegistryClientTypeGitHub) {
+		t.Fatalf("type = %q", nifiClient.created[0].Component.Type)
+	}
+	if props["Repository Owner"] != "acme" || props["Repository Name"] != "flows" {
+		t.Fatalf("repo props = %#v", props)
+	}
+	if props["Default Branch"] != "main" || props["GitHub API URL"] != "https://api.github.com/" {
+		t.Fatalf("default props = %#v", props)
+	}
+	if props["Authentication Type"] != "PERSONAL_ACCESS_TOKEN" || props["Personal Access Token"] != "ghp_secret" {
+		t.Fatalf("auth props = %#v", props)
+	}
+	current := &nifiv1alpha1.NiFiRegistryClient{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
+		t.Fatal(err)
+	}
+	if !current.Status.Ready {
+		t.Fatalf("status = %+v", current.Status)
+	}
+	assertControllerCondition(t, current.Status.Conditions, nifiv1alpha1.ConditionReady, metav1.ConditionTrue, "RegistryClientReady")
+}
+
+func TestNiFiRegistryClientReconcileWaitsForGitHubTokenSecret(t *testing.T) {
 	scheme := testScheme()
 	cluster := readyTestCluster()
 	registry := &nifiv1alpha1.NiFiRegistryClient{
@@ -246,27 +306,92 @@ func TestNiFiRegistryClientReconcileMarksUnsupportedType(t *testing.T) {
 		Spec: nifiv1alpha1.NiFiRegistryClientSpec{
 			ClusterRef: nifiv1alpha1.ClusterReference{Name: cluster.Name},
 			Type:       nifiv1alpha1.RegistryClientTypeGitHub,
-			URI:        "https://github.com/example/flows",
+			GitHub: &nifiv1alpha1.GitHubFlowRegistrySpec{
+				RepositoryOwner:              "acme",
+				RepositoryName:               "flows",
+				PersonalAccessTokenSecretRef: githubTokenSecretRef("missing", "token"),
+			},
 		},
 	}
 	k8sClient := newRegistryClientTestClient(scheme, cluster, registry)
-	reconciler := &NiFiRegistryClientReconciler{
-		Client:               k8sClient,
-		Scheme:               scheme,
-		RegistryClientClient: &fakeRegistryClientClient{},
-	}
+	nifiClient := &fakeRegistryClientClient{}
+	reconciler := &NiFiRegistryClientReconciler{Client: k8sClient, Scheme: scheme, RegistryClientClient: nifiClient}
 	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: registry.Name, Namespace: registry.Namespace}}
 
 	reconcileRegistryClientTwice(t, reconciler, request)
 
+	if len(nifiClient.created) != 0 {
+		t.Fatalf("should wait for the token Secret, not create: %#v", nifiClient.created)
+	}
 	current := &nifiv1alpha1.NiFiRegistryClient{}
 	if err := k8sClient.Get(context.Background(), request.NamespacedName, current); err != nil {
 		t.Fatal(err)
 	}
-	if current.Status.Ready {
-		t.Fatal("registry client ready = true, want false")
+	if current.Status.Dependencies.Ready {
+		t.Fatal("dependencies should not be ready while the token Secret is missing")
 	}
-	assertControllerCondition(t, current.Status.Conditions, nifiv1alpha1.ConditionReady, metav1.ConditionFalse, "RegistryClientTypeUnsupported")
+}
+
+func TestNiFiRegistryClientReconcileCreatesGitLabClient(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "gl-token", Namespace: "default"},
+		Data:       map[string][]byte{"token": []byte("glpat_secret")},
+	}
+	registry := &nifiv1alpha1.NiFiRegistryClient{
+		ObjectMeta: metav1.ObjectMeta{Name: "gitlab-flows", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiRegistryClientSpec{
+			ClusterRef: nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			Type:       nifiv1alpha1.RegistryClientTypeGitLab,
+			GitLab: &nifiv1alpha1.GitLabFlowRegistrySpec{
+				RepositoryNamespace:  "acme-group",
+				RepositoryName:       "flows",
+				DefaultBranch:        "trunk",
+				AccessTokenSecretRef: githubTokenSecretRef("gl-token", "token"),
+			},
+		},
+	}
+	k8sClient := newRegistryClientTestClient(scheme, cluster, secret, registry)
+	nifiClient := &fakeRegistryClientClient{}
+	reconciler := &NiFiRegistryClientReconciler{Client: k8sClient, Scheme: scheme, RegistryClientClient: nifiClient}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: registry.Name, Namespace: registry.Namespace}}
+
+	reconcileRegistryClientTwice(t, reconciler, request)
+
+	if len(nifiClient.created) != 1 {
+		t.Fatalf("created count = %d, want 1", len(nifiClient.created))
+	}
+	props := nifiClient.created[0].Component.Properties
+	if props["Repository Namespace"] != "acme-group" || props["Repository Name"] != "flows" {
+		t.Fatalf("repo props = %#v", props)
+	}
+	if props["Default Branch"] != "trunk" || props["GitLab API URL"] != "https://gitlab.com/" {
+		t.Fatalf("default props = %#v", props)
+	}
+	if props["Authentication Type"] != "ACCESS_TOKEN" || props["Access Token"] != "glpat_secret" {
+		t.Fatalf("auth props = %#v", props)
+	}
+}
+
+func TestRegistryClientNeedsUpdateIgnoresSensitiveAndDefaults(t *testing.T) {
+	desired := nifi.RegistryClientEntity{Component: nifi.RegistryClientComponent{
+		Name: "github-flows", Type: registryClientType(nifiv1alpha1.RegistryClientTypeGitHub),
+		Properties: map[string]string{"Repository Owner": "acme", "Personal Access Token": "ghp_secret"},
+	}}
+	// NiFi returns the sensitive value masked and adds default properties we did not set.
+	existing := nifi.RegistryClientEntity{Component: nifi.RegistryClientComponent{
+		Name: "github-flows", Type: registryClientType(nifiv1alpha1.RegistryClientTypeGitHub),
+		Properties: map[string]string{"Repository Owner": "acme", "Personal Access Token": "", "Directory Filter Exclusion": "[.].*"},
+	}}
+	sensitive := map[string]bool{"Personal Access Token": true}
+	if registryClientNeedsUpdate(desired, existing, sensitive) {
+		t.Fatal("should not need update: only the masked sensitive value and NiFi defaults differ")
+	}
+	existing.Component.Properties["Repository Owner"] = "changed"
+	if !registryClientNeedsUpdate(desired, existing, sensitive) {
+		t.Fatal("should need update when a managed non-sensitive property differs")
+	}
 }
 
 func TestNiFiRegistryClientReconcileDeletesNiFiClientWhenPolicyDelete(t *testing.T) {

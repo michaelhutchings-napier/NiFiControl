@@ -87,10 +87,138 @@ spec:
                     - Fail
                     type: string
                 type: object
+              github:
+                description: GitHub configures a GitHub flow registry (required when
+                  type is GitHub).
+                properties:
+                  apiUrl:
+                    description: APIURL defaults to "https://api.github.com/" when
+                      empty.
+                    type: string
+                  defaultBranch:
+                    description: DefaultBranch defaults to "main" when empty.
+                    type: string
+                  personalAccessTokenSecretRef:
+                    properties:
+                      key:
+                        description: The key of the secret to select from.  Must be
+                          a valid secret key.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the Secret or its key must be
+                          defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  repositoryName:
+                    minLength: 1
+                    type: string
+                  repositoryOwner:
+                    minLength: 1
+                    type: string
+                  repositoryPath:
+                    type: string
+                required:
+                - repositoryName
+                - repositoryOwner
+                type: object
+              gitlab:
+                description: GitLab configures a GitLab flow registry (required when
+                  type is GitLab).
+                properties:
+                  accessTokenSecretRef:
+                    properties:
+                      key:
+                        description: The key of the secret to select from.  Must be
+                          a valid secret key.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the Secret or its key must be
+                          defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  apiUrl:
+                    description: APIURL defaults to "https://gitlab.com/" when empty.
+                    type: string
+                  defaultBranch:
+                    description: DefaultBranch defaults to "main" when empty.
+                    type: string
+                  repositoryName:
+                    minLength: 1
+                    type: string
+                  repositoryNamespace:
+                    minLength: 1
+                    type: string
+                  repositoryPath:
+                    type: string
+                required:
+                - repositoryName
+                - repositoryNamespace
+                type: object
+              properties:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Properties sets additional NiFi component properties verbatim, overriding any derived from
+                  the typed fields above (an escape hatch for advanced settings, e.g. GitHub App Installation).
+                type: object
               reconciliation:
                 properties:
                   paused:
                     type: boolean
+                type: object
+              sensitiveProperties:
+                additionalProperties:
+                  properties:
+                    secretKeyRef:
+                      properties:
+                        key:
+                          description: The key of the secret to select from.  Must
+                            be a valid secret key.
+                          type: string
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                        optional:
+                          description: Specify whether the Secret or its key must
+                            be defined
+                          type: boolean
+                      required:
+                      - key
+                      type: object
+                      x-kubernetes-map-type: atomic
+                  type: object
+                description: SensitiveProperties sets additional sensitive NiFi component
+                  properties from Secret values.
                 type: object
               type:
                 default: NiFiRegistry
@@ -100,10 +228,17 @@ spec:
                 - GitLab
                 type: string
               uri:
+                description: URI is the registry URL for the NiFiRegistry type (mapped
+                  to the "url" property).
                 type: string
             required:
             - clusterRef
             type: object
+            x-kubernetes-validations:
+            - message: github is required when type is GitHub
+              rule: self.type != 'GitHub' || has(self.github)
+            - message: gitlab is required when type is GitLab
+              rule: self.type != 'GitLab' || has(self.gitlab)
           status:
             properties:
               conditions:

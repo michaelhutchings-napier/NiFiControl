@@ -1,3 +1,4 @@
+# A NiFi Registry flow registry client.
 apiVersion: nifi.controlnifi.io/v1alpha1
 kind: NiFiRegistryClient
 metadata:
@@ -8,4 +9,38 @@ spec:
   type: NiFiRegistry
   uri: https://registry.example.com/nifi-registry
   description: Shared flow registry
-
+---
+# A GitHub flow registry client. Omit personalAccessTokenSecretRef for anonymous access to a
+# public repository. For GitHub App Installation auth, set Authentication Type via
+# spec.properties and the App ID / App Private Key via spec.sensitiveProperties.
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiRegistryClient
+metadata:
+  name: github-flows
+spec:
+  clusterRef:
+    name: production
+  type: GitHub
+  github:
+    repositoryOwner: acme
+    repositoryName: dataflows
+    defaultBranch: main
+    personalAccessTokenSecretRef:
+      name: github-registry-token
+      key: token
+---
+# A GitLab flow registry client (Access Token authentication).
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiRegistryClient
+metadata:
+  name: gitlab-flows
+spec:
+  clusterRef:
+    name: production
+  type: GitLab
+  gitlab:
+    repositoryNamespace: acme-group
+    repositoryName: dataflows
+    accessTokenSecretRef:
+      name: gitlab-registry-token
+      key: token

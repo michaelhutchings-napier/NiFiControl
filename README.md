@@ -25,6 +25,8 @@ services, and high-level flow deployments.
 - CRDs, RBAC, samples, and a controller-runtime manager are available.
 - Registry clients, parameter contexts, process groups, controller services,
   processors, ports, connections, funnels, and labels reconcile against NiFi.
+  `NiFiRegistryClient` supports the NiFi Registry, GitHub, and GitLab flow registry
+  types, with repository settings as typed fields and access tokens sourced from Secrets.
 - `NiFiReportingTask` manages a controller-level reporting task: it reconciles the task's type,
   bundle, properties (including sensitive properties from Secrets), and scheduling, and
   starts/stops it via NiFi's run-status endpoint (`state: Enabled`/`Disabled`).
@@ -207,7 +209,15 @@ helm upgrade --install nificontrol ./charts/nificontrol \
   --create-namespace
 ```
 
-The Helm chart installs the operator and its CRDs. It does not install an
+The Helm chart installs the operator and its CRDs. Note that Helm installs CRDs only on the
+first install and never upgrades them, so after upgrading to a chart with new CRD fields, apply
+the current CRDs explicitly:
+
+```bash
+kubectl apply --server-side --force-conflicts -f charts/nificontrol/crds/
+```
+
+It does not install an
 Apache NiFi cluster by itself. Install a managed NiFi cluster as a separate
 Helm release so the operator remains available for upgrades and finalization:
 
