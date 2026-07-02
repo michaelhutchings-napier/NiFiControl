@@ -103,8 +103,88 @@ spec:
                     - Fail
                     type: string
                 type: object
+              inputPorts:
+                description: |-
+                  InputPorts configures the RPG's remote input ports by name. Ports are discovered from the
+                  target NiFi; only the ports listed here are managed. A configured port name that has not
+                  been discovered yet is reported in status and the resource waits.
+                items:
+                  description: |-
+                    RemoteProcessGroupPortConfig is the desired configuration of a single remote port, matched to a
+                    discovered port by name.
+                  properties:
+                    batchCount:
+                      description: |-
+                        BatchCount, BatchSize, and BatchDuration tune site-to-site batching; a zero/empty value
+                        leaves the NiFi default. BatchSize and BatchDuration are NiFi values such as "5 MB" and
+                        "30 sec".
+                      format: int32
+                      type: integer
+                    batchDuration:
+                      type: string
+                    batchSize:
+                      type: string
+                    concurrentTasks:
+                      format: int32
+                      minimum: 1
+                      type: integer
+                    name:
+                      description: Name matches the remote port's name on the target
+                        NiFi.
+                      minLength: 1
+                      type: string
+                    transmitting:
+                      description: |-
+                        Transmitting enables this port for site-to-site transmission. A port must be connected (have
+                        a flow connection) before NiFi will let it transmit.
+                      type: boolean
+                    useCompression:
+                      type: boolean
+                  required:
+                  - name
+                  type: object
+                type: array
               localNetworkInterface:
                 type: string
+              outputPorts:
+                description: OutputPorts configures the RPG's remote output ports
+                  by name.
+                items:
+                  description: |-
+                    RemoteProcessGroupPortConfig is the desired configuration of a single remote port, matched to a
+                    discovered port by name.
+                  properties:
+                    batchCount:
+                      description: |-
+                        BatchCount, BatchSize, and BatchDuration tune site-to-site batching; a zero/empty value
+                        leaves the NiFi default. BatchSize and BatchDuration are NiFi values such as "5 MB" and
+                        "30 sec".
+                      format: int32
+                      type: integer
+                    batchDuration:
+                      type: string
+                    batchSize:
+                      type: string
+                    concurrentTasks:
+                      format: int32
+                      minimum: 1
+                      type: integer
+                    name:
+                      description: Name matches the remote port's name on the target
+                        NiFi.
+                      minLength: 1
+                      type: string
+                    transmitting:
+                      description: |-
+                        Transmitting enables this port for site-to-site transmission. A port must be connected (have
+                        a flow connection) before NiFi will let it transmit.
+                      type: boolean
+                    useCompression:
+                      type: boolean
+                  required:
+                  - name
+                  type: object
+                type: array
               parentProcessGroupRef:
                 properties:
                   name:
@@ -266,6 +346,55 @@ spec:
                       type: string
                     type: array
                 type: object
+              discoveredInputPorts:
+                description: |-
+                  DiscoveredInputPorts and DiscoveredOutputPorts list the remote ports found on the target NiFi,
+                  so their names can be referenced from spec.inputPorts/outputPorts and NiFiConnection.
+                items:
+                  description: RemoteProcessGroupPortStatus reports a remote port
+                    discovered from the target NiFi.
+                  properties:
+                    connected:
+                      description: Connected is true when the port has a flow connection
+                        and can transmit.
+                      type: boolean
+                    exists:
+                      description: Exists is true when the port still exists on the
+                        target NiFi.
+                      type: boolean
+                    name:
+                      type: string
+                    nifiId:
+                      type: string
+                    transmitting:
+                      description: Transmitting is true when the port is actively
+                        transmitting.
+                      type: boolean
+                  type: object
+                type: array
+              discoveredOutputPorts:
+                items:
+                  description: RemoteProcessGroupPortStatus reports a remote port
+                    discovered from the target NiFi.
+                  properties:
+                    connected:
+                      description: Connected is true when the port has a flow connection
+                        and can transmit.
+                      type: boolean
+                    exists:
+                      description: Exists is true when the port still exists on the
+                        target NiFi.
+                      type: boolean
+                    name:
+                      type: string
+                    nifiId:
+                      type: string
+                    transmitting:
+                      description: Transmitting is true when the port is actively
+                        transmitting.
+                      type: boolean
+                  type: object
+                type: array
               drift:
                 properties:
                   differences:

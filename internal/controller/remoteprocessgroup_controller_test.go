@@ -12,16 +12,19 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 type fakeRemoteProcessGroupClient struct {
-	store     *nifi.RemoteProcessGroupEntity
-	created   []nifi.RemoteProcessGroupEntity
-	updated   []nifi.RemoteProcessGroupEntity
-	runStatus []string
-	deleted   []string
+	store         *nifi.RemoteProcessGroupEntity
+	created       []nifi.RemoteProcessGroupEntity
+	updated       []nifi.RemoteProcessGroupEntity
+	runStatus     []string
+	deleted       []string
+	portUpdates   []nifi.RemoteProcessGroupPortEntity
+	portRunStatus []string
 }
 
 func (f *fakeRemoteProcessGroupClient) GetRemoteProcessGroup(ctx context.Context, baseURI, id string) (*nifi.RemoteProcessGroupEntity, error) {
@@ -75,6 +78,63 @@ func (f *fakeRemoteProcessGroupClient) DeleteRemoteProcessGroup(ctx context.Cont
 	f.deleted = append(f.deleted, id)
 	f.store = nil
 	return nil
+}
+
+func (f *fakeRemoteProcessGroupClient) portByID(id string, output bool) *nifi.RemoteProcessGroupPort {
+	if f.store == nil || f.store.Component.Contents == nil {
+		return nil
+	}
+	ports := f.store.Component.Contents.InputPorts
+	if output {
+		ports = f.store.Component.Contents.OutputPorts
+	}
+	for i := range ports {
+		if ports[i].ID == id {
+			return &ports[i]
+		}
+	}
+	return nil
+}
+
+func (f *fakeRemoteProcessGroupClient) updatePort(entity nifi.RemoteProcessGroupPortEntity, output bool) (*nifi.RemoteProcessGroupPortEntity, error) {
+	f.portUpdates = append(f.portUpdates, entity)
+	if p := f.portByID(entity.RemoteProcessGroupPort.ID, output); p != nil {
+		p.UseCompression = entity.RemoteProcessGroupPort.UseCompression
+		p.ConcurrentlySchedulableTaskCount = entity.RemoteProcessGroupPort.ConcurrentlySchedulableTaskCount
+		p.BatchSettings = entity.RemoteProcessGroupPort.BatchSettings
+	}
+	if f.store != nil {
+		f.store.Revision.Version++
+	}
+	s := entity
+	return &s, nil
+}
+
+func (f *fakeRemoteProcessGroupClient) portRunStatusUpdate(portID, state string, output bool) (*nifi.RemoteProcessGroupPortEntity, error) {
+	f.portRunStatus = append(f.portRunStatus, state)
+	if p := f.portByID(portID, output); p != nil {
+		p.Transmitting = state == "TRANSMITTING"
+	}
+	if f.store != nil {
+		f.store.Revision.Version++
+	}
+	return &nifi.RemoteProcessGroupPortEntity{}, nil
+}
+
+func (f *fakeRemoteProcessGroupClient) UpdateRemoteProcessGroupInputPort(ctx context.Context, baseURI, rpgID string, entity nifi.RemoteProcessGroupPortEntity) (*nifi.RemoteProcessGroupPortEntity, error) {
+	return f.updatePort(entity, false)
+}
+
+func (f *fakeRemoteProcessGroupClient) UpdateRemoteProcessGroupOutputPort(ctx context.Context, baseURI, rpgID string, entity nifi.RemoteProcessGroupPortEntity) (*nifi.RemoteProcessGroupPortEntity, error) {
+	return f.updatePort(entity, true)
+}
+
+func (f *fakeRemoteProcessGroupClient) UpdateRemoteProcessGroupInputPortRunStatus(ctx context.Context, baseURI, rpgID, portID string, revisionVersion int64, state string) (*nifi.RemoteProcessGroupPortEntity, error) {
+	return f.portRunStatusUpdate(portID, state, false)
+}
+
+func (f *fakeRemoteProcessGroupClient) UpdateRemoteProcessGroupOutputPortRunStatus(ctx context.Context, baseURI, rpgID, portID string, revisionVersion int64, state string) (*nifi.RemoteProcessGroupPortEntity, error) {
+	return f.portRunStatusUpdate(portID, state, true)
 }
 
 func remoteProcessGroupTestClient(scheme *runtime.Scheme, objects ...client.Object) client.Client {
@@ -212,6 +272,137 @@ func TestNiFiRemoteProcessGroupWaitsForProxyPasswordSecret(t *testing.T) {
 	_ = k8sClient.Get(context.Background(), types.NamespacedName{Name: rpg.Name, Namespace: "default"}, got)
 	if got.Status.Ready || got.Status.Dependencies.Ready {
 		t.Fatalf("expected waiting-for-dependencies status, got %+v", got.Status)
+	}
+}
+
+func TestNiFiRemoteProcessGroupConfiguresAndTransmitsConnectedPort(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	rpg := newRemoteProcessGroup("central")
+	rpg.Spec.InputPorts = []nifiv1alpha1.RemoteProcessGroupPortConfig{{Name: "ingest", Transmitting: true, ConcurrentTasks: 2, UseCompression: true}}
+	rpg.Status = nifiv1alpha1.NiFiRemoteProcessGroupStatus{
+		CommonStatus:         nifiv1alpha1.CommonStatus{Ready: true, NiFiID: "rpg-1", ObservedGeneration: 1},
+		ParentProcessGroupID: "root",
+	}
+	k8sClient := remoteProcessGroupTestClient(scheme, cluster, rpg)
+	// The RPG has discovered a connected input port "ingest" from the target.
+	rpgs := &fakeRemoteProcessGroupClient{store: &nifi.RemoteProcessGroupEntity{
+		ID:       "rpg-1",
+		Revision: nifi.Revision{Version: 3},
+		Component: nifi.RemoteProcessGroupComponent{
+			ID: "rpg-1", ParentGroupID: "root", Name: "central",
+			TargetURIs: "https://central-nifi.example.com:8443/nifi", TransportProtocol: "HTTP",
+			CommunicationsTimeout: "30 sec", YieldDuration: "10 sec",
+			Contents: &nifi.RemoteProcessGroupContents{
+				InputPorts: []nifi.RemoteProcessGroupPort{{ID: "ingest-id", Name: "ingest", Connected: true, Exists: true}},
+			},
+		},
+	}}
+	r := &NiFiRemoteProcessGroupReconciler{Client: k8sClient, Scheme: scheme, RemoteProcessGroupClient: rpgs}
+	reconcileTwice(t, r, rpg.Name)
+
+	if len(rpgs.portUpdates) == 0 {
+		t.Fatalf("expected the port to be configured, portUpdates empty")
+	}
+	last := rpgs.portUpdates[len(rpgs.portUpdates)-1].RemoteProcessGroupPort
+	if !last.UseCompression || last.ConcurrentlySchedulableTaskCount != 2 {
+		t.Fatalf("port config not applied: %#v", last)
+	}
+	if len(rpgs.portRunStatus) == 0 || rpgs.portRunStatus[len(rpgs.portRunStatus)-1] != "TRANSMITTING" {
+		t.Fatalf("connected port should be started: portRunStatus = %#v", rpgs.portRunStatus)
+	}
+	got := &nifiv1alpha1.NiFiRemoteProcessGroup{}
+	_ = k8sClient.Get(context.Background(), types.NamespacedName{Name: rpg.Name, Namespace: "default"}, got)
+	if !got.Status.Ready {
+		t.Fatalf("status = %+v", got.Status)
+	}
+	if len(got.Status.DiscoveredInputPorts) != 1 || got.Status.DiscoveredInputPorts[0].NiFiID != "ingest-id" {
+		t.Fatalf("discovered ports = %+v", got.Status.DiscoveredInputPorts)
+	}
+}
+
+func TestNiFiRemoteProcessGroupPortPendingUntilConnected(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	rpg := newRemoteProcessGroup("central")
+	rpg.Spec.InputPorts = []nifiv1alpha1.RemoteProcessGroupPortConfig{{Name: "ingest", Transmitting: true}}
+	rpg.Status = nifiv1alpha1.NiFiRemoteProcessGroupStatus{
+		CommonStatus:         nifiv1alpha1.CommonStatus{Ready: true, NiFiID: "rpg-1", ObservedGeneration: 1},
+		ParentProcessGroupID: "root",
+	}
+	k8sClient := remoteProcessGroupTestClient(scheme, cluster, rpg)
+	// The port is discovered but not yet connected (no NiFiConnection to it).
+	rpgs := &fakeRemoteProcessGroupClient{store: &nifi.RemoteProcessGroupEntity{
+		ID:       "rpg-1",
+		Revision: nifi.Revision{Version: 3},
+		Component: nifi.RemoteProcessGroupComponent{
+			ID: "rpg-1", ParentGroupID: "root", Name: "central",
+			TargetURIs: "https://central-nifi.example.com:8443/nifi", TransportProtocol: "HTTP",
+			CommunicationsTimeout: "30 sec", YieldDuration: "10 sec",
+			Contents: &nifi.RemoteProcessGroupContents{
+				InputPorts: []nifi.RemoteProcessGroupPort{{ID: "ingest-id", Name: "ingest", Connected: false, Exists: true}},
+			},
+		},
+	}}
+	r := &NiFiRemoteProcessGroupReconciler{Client: k8sClient, Scheme: scheme, RemoteProcessGroupClient: rpgs}
+	reconcileTwice(t, r, rpg.Name)
+
+	if len(rpgs.portRunStatus) != 0 {
+		t.Fatalf("a not-connected port must not be started: portRunStatus = %#v", rpgs.portRunStatus)
+	}
+	got := &nifiv1alpha1.NiFiRemoteProcessGroup{}
+	_ = k8sClient.Get(context.Background(), types.NamespacedName{Name: rpg.Name, Namespace: "default"}, got)
+	if got.Status.Ready {
+		t.Fatalf("RPG should stay NotReady until the port is connected: %+v", got.Status)
+	}
+	assertControllerCondition(t, got.Status.Conditions, nifiv1alpha1.ConditionReady, metav1.ConditionFalse, "PortsPending")
+	// Discovered ports must still be published so a NiFiConnection can resolve the port id.
+	if len(got.Status.DiscoveredInputPorts) != 1 || got.Status.DiscoveredInputPorts[0].NiFiID != "ingest-id" {
+		t.Fatalf("discovered ports must be published while pending: %+v", got.Status.DiscoveredInputPorts)
+	}
+}
+
+func TestNiFiConnectionResolvesRemoteInputPort(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	parent := readyTestProcessGroup("edge", "pg-edge")
+	processor := readyTestProcessor("generate", "proc-1", "pg-edge")
+	rpg := &nifiv1alpha1.NiFiRemoteProcessGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "central-rpg", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiRemoteProcessGroupSpec{
+			ClusterRef: nifiv1alpha1.ClusterReference{Name: "production"},
+			TargetURIs: []string{"https://central:8443/nifi"},
+		},
+		// The RPG has discovered the remote input port but it is not connected yet (this connection
+		// is what will connect it): resolution must not require the RPG to be Ready.
+		Status: nifiv1alpha1.NiFiRemoteProcessGroupStatus{
+			CommonStatus:         nifiv1alpha1.CommonStatus{NiFiID: "rpg-1", ObservedGeneration: 1},
+			DiscoveredInputPorts: []nifiv1alpha1.RemoteProcessGroupPortStatus{{Name: "ingest", NiFiID: "remote-port-1", Exists: true}},
+		},
+	}
+	connection := &nifiv1alpha1.NiFiConnection{
+		ObjectMeta: metav1.ObjectMeta{Name: "to-central", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiConnectionSpec{
+			ClusterRef:            nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			ParentProcessGroupRef: nifiv1alpha1.ProcessGroupReference{Name: parent.Name},
+			Source:                nifiv1alpha1.ConnectableReference{Type: nifiv1alpha1.ConnectableTypeProcessor, Name: processor.Name},
+			Destination:           nifiv1alpha1.ConnectableReference{Type: nifiv1alpha1.ConnectableTypeRemoteInputPort, Name: rpg.Name, PortName: "ingest"},
+			SelectedRelationships: []string{"success"},
+		},
+	}
+	k8sClient := newCanvasTestClient(scheme, cluster, parent, processor, rpg, connection)
+	nifiClient := &fakeConnectionClient{}
+	reconciler := &NiFiConnectionReconciler{Client: k8sClient, Scheme: scheme, ConnectionClient: nifiClient}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: connection.Name, Namespace: connection.Namespace}}
+
+	reconcileConnectionTwice(t, reconciler, request)
+
+	if len(nifiClient.created) != 1 {
+		t.Fatalf("created count = %d, want 1", len(nifiClient.created))
+	}
+	dest := nifiClient.created[0].Component.Destination
+	if dest.ID != "remote-port-1" || dest.Type != "REMOTE_INPUT_PORT" || dest.GroupID != "rpg-1" {
+		t.Fatalf("destination = %+v, want id=remote-port-1 type=REMOTE_INPUT_PORT groupId=rpg-1", dest)
 	}
 }
 

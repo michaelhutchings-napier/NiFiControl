@@ -2194,11 +2194,9 @@ func (r *NiFiInputPortReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
-	nifiID := portEntityID(*created)
-	if !inputPortStatusMatches(instance, nifiID, created.Revision.Version, parentID) {
-		return ctrl.Result{}, markInputPortReady(ctx, r.Client, instance, nifiID, created.Revision.Version, parentID)
-	}
-	return ctrl.Result{}, nil
+	// Route the freshly created (STOPPED) port through the existing-reconcile path so its run state
+	// is applied through the run-status endpoint.
+	return r.reconcileExistingInputPort(ctx, instance, endpoint, ports, entity, created, parentID)
 }
 
 func (r *NiFiInputPortReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -2248,28 +2246,57 @@ func (r *NiFiInputPortReconciler) reconcileExistingInputPort(ctx context.Context
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	nifiID := portEntityID(*existing)
-	if portNeedsUpdate(desired, *existing) {
+	current := existing
+	if portNeedsUpdate(desired, *current) {
+		// NiFi requires the port stopped to change its config.
+		if current.Component.State == "RUNNING" {
+			stopped, err := ports.UpdateInputPortRunStatus(ctx, endpoint, nifiID, current.Revision.Version, "STOPPED")
+			if err != nil {
+				return r.inputPortWriteFailed(ctx, instance, "NiFiUpdateFailed", "stop", err)
+			}
+			if stopped != nil {
+				current = stopped
+			}
+		}
 		updateEntity := desired
 		updateEntity.ID = nifiID
 		updateEntity.Component.ID = nifiID
-		updateEntity.Revision.Version = existing.Revision.Version
+		updateEntity.Revision.Version = current.Revision.Version
 		updated, err := ports.UpdateInputPort(ctx, endpoint, updateEntity)
 		if err != nil {
-			message := fmt.Sprintf("Failed to update NiFi input port: %v", err)
-			if shouldMarkInputPortNotReady(instance, "NiFiUpdateFailed", message) {
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, markInputPortNotReady(ctx, r.Client, instance, "NiFiUpdateFailed", message)
-			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			return r.inputPortWriteFailed(ctx, instance, "NiFiUpdateFailed", "update", err)
 		}
 		if updated != nil {
-			nifiID = portEntityID(*updated)
-			return ctrl.Result{}, markInputPortReady(ctx, r.Client, instance, nifiID, updated.Revision.Version, parentID)
+			current = updated
 		}
 	}
-	if !inputPortStatusMatches(instance, nifiID, existing.Revision.Version, parentID) {
-		return ctrl.Result{}, markInputPortReady(ctx, r.Client, instance, nifiID, existing.Revision.Version, parentID)
+
+	current, pendingReason, pendingMsg, err := reconcilePortRunState(nifiID, current, nifiScheduledState(instance.Spec.State),
+		func(id string, revisionVersion int64, state string) (*nifi.PortEntity, error) {
+			return ports.UpdateInputPortRunStatus(ctx, endpoint, id, revisionVersion, state)
+		})
+	if err != nil {
+		return r.inputPortWriteFailed(ctx, instance, "NiFiStateFailed", "set run state of", err)
+	}
+	if pendingReason != "" {
+		if shouldMarkInputPortNotReady(instance, pendingReason, pendingMsg) {
+			return ctrl.Result{RequeueAfter: 15 * time.Second}, markInputPortNotReady(ctx, r.Client, instance, pendingReason, pendingMsg)
+		}
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+
+	if !inputPortStatusMatches(instance, nifiID, current.Revision.Version, parentID) {
+		return ctrl.Result{}, markInputPortReady(ctx, r.Client, instance, nifiID, current.Revision.Version, parentID)
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *NiFiInputPortReconciler) inputPortWriteFailed(ctx context.Context, instance *nifiv1alpha1.NiFiInputPort, reason, verb string, err error) (ctrl.Result, error) {
+	message := fmt.Sprintf("Failed to %s NiFi input port: %v", verb, err)
+	if shouldMarkInputPortNotReady(instance, reason, message) {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, markInputPortNotReady(ctx, r.Client, instance, reason, message)
+	}
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
 type NiFiOutputPortReconciler struct {
@@ -2354,11 +2381,7 @@ func (r *NiFiOutputPortReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
-	nifiID := portEntityID(*created)
-	if !outputPortStatusMatches(instance, nifiID, created.Revision.Version, parentID) {
-		return ctrl.Result{}, markOutputPortReady(ctx, r.Client, instance, nifiID, created.Revision.Version, parentID)
-	}
-	return ctrl.Result{}, nil
+	return r.reconcileExistingOutputPort(ctx, instance, endpoint, ports, entity, created, parentID)
 }
 
 func (r *NiFiOutputPortReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -2408,28 +2431,56 @@ func (r *NiFiOutputPortReconciler) reconcileExistingOutputPort(ctx context.Conte
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	nifiID := portEntityID(*existing)
-	if portNeedsUpdate(desired, *existing) {
+	current := existing
+	if portNeedsUpdate(desired, *current) {
+		if current.Component.State == "RUNNING" {
+			stopped, err := ports.UpdateOutputPortRunStatus(ctx, endpoint, nifiID, current.Revision.Version, "STOPPED")
+			if err != nil {
+				return r.outputPortWriteFailed(ctx, instance, "NiFiUpdateFailed", "stop", err)
+			}
+			if stopped != nil {
+				current = stopped
+			}
+		}
 		updateEntity := desired
 		updateEntity.ID = nifiID
 		updateEntity.Component.ID = nifiID
-		updateEntity.Revision.Version = existing.Revision.Version
+		updateEntity.Revision.Version = current.Revision.Version
 		updated, err := ports.UpdateOutputPort(ctx, endpoint, updateEntity)
 		if err != nil {
-			message := fmt.Sprintf("Failed to update NiFi output port: %v", err)
-			if shouldMarkOutputPortNotReady(instance, "NiFiUpdateFailed", message) {
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, markOutputPortNotReady(ctx, r.Client, instance, "NiFiUpdateFailed", message)
-			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			return r.outputPortWriteFailed(ctx, instance, "NiFiUpdateFailed", "update", err)
 		}
 		if updated != nil {
-			nifiID = portEntityID(*updated)
-			return ctrl.Result{}, markOutputPortReady(ctx, r.Client, instance, nifiID, updated.Revision.Version, parentID)
+			current = updated
 		}
 	}
-	if !outputPortStatusMatches(instance, nifiID, existing.Revision.Version, parentID) {
-		return ctrl.Result{}, markOutputPortReady(ctx, r.Client, instance, nifiID, existing.Revision.Version, parentID)
+
+	current, pendingReason, pendingMsg, err := reconcilePortRunState(nifiID, current, nifiScheduledState(instance.Spec.State),
+		func(id string, revisionVersion int64, state string) (*nifi.PortEntity, error) {
+			return ports.UpdateOutputPortRunStatus(ctx, endpoint, id, revisionVersion, state)
+		})
+	if err != nil {
+		return r.outputPortWriteFailed(ctx, instance, "NiFiStateFailed", "set run state of", err)
+	}
+	if pendingReason != "" {
+		if shouldMarkOutputPortNotReady(instance, pendingReason, pendingMsg) {
+			return ctrl.Result{RequeueAfter: 15 * time.Second}, markOutputPortNotReady(ctx, r.Client, instance, pendingReason, pendingMsg)
+		}
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+
+	if !outputPortStatusMatches(instance, nifiID, current.Revision.Version, parentID) {
+		return ctrl.Result{}, markOutputPortReady(ctx, r.Client, instance, nifiID, current.Revision.Version, parentID)
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *NiFiOutputPortReconciler) outputPortWriteFailed(ctx context.Context, instance *nifiv1alpha1.NiFiOutputPort, reason, verb string, err error) (ctrl.Result, error) {
+	message := fmt.Sprintf("Failed to %s NiFi output port: %v", verb, err)
+	if shouldMarkOutputPortNotReady(instance, reason, message) {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, markOutputPortNotReady(ctx, r.Client, instance, reason, message)
+	}
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
 type NiFiConnectionReconciler struct {
@@ -2543,7 +2594,25 @@ func (r *NiFiConnectionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&nifiv1alpha1.NiFiInputPort{}, handler.EnqueueRequestsFromMapFunc(r.requestsForInputPort)).
 		Watches(&nifiv1alpha1.NiFiOutputPort{}, handler.EnqueueRequestsFromMapFunc(r.requestsForOutputPort)).
 		Watches(&nifiv1alpha1.NiFiFunnel{}, handler.EnqueueRequestsFromMapFunc(r.requestsForFunnel)).
+		Watches(&nifiv1alpha1.NiFiRemoteProcessGroup{}, handler.EnqueueRequestsFromMapFunc(r.requestsForRemoteProcessGroup)).
 		Complete(r)
+}
+
+func (r *NiFiConnectionReconciler) requestsForRemoteProcessGroup(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiConnectionList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		if connectableReferenceMatches(item.Namespace, item.Spec.Source, nifiv1alpha1.ConnectableTypeRemoteInputPort, obj) ||
+			connectableReferenceMatches(item.Namespace, item.Spec.Source, nifiv1alpha1.ConnectableTypeRemoteOutputPort, obj) ||
+			connectableReferenceMatches(item.Namespace, item.Spec.Destination, nifiv1alpha1.ConnectableTypeRemoteInputPort, obj) ||
+			connectableReferenceMatches(item.Namespace, item.Spec.Destination, nifiv1alpha1.ConnectableTypeRemoteOutputPort, obj) {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+		}
+	}
+	return requests
 }
 
 func (r *NiFiConnectionReconciler) reconcileConnectionDelete(ctx context.Context, instance *nifiv1alpha1.NiFiConnection) (ctrl.Result, error) {
@@ -4127,7 +4196,7 @@ func (r *NiFiControllerServiceReconciler) desiredControllerService(ctx context.C
 		Name:          controllerService.Name,
 		Type:          controllerService.Spec.Type,
 		Properties:    properties,
-		State:         string(controllerService.Spec.State),
+		State:         nifiScheduledState(controllerService.Spec.State),
 	}
 	if controllerService.Spec.Bundle != nil {
 		component.Bundle = &nifi.Bundle{
@@ -4325,7 +4394,7 @@ func desiredProcessor(processor *nifiv1alpha1.NiFiProcessor, parentID string) ni
 		ParentGroupID: parentID,
 		Name:          processorDisplayName(processor),
 		Type:          processor.Spec.Type,
-		State:         string(processor.Spec.State),
+		State:         nifiScheduledState(processor.Spec.State),
 		Config: nifi.ProcessorConfig{
 			Properties:                       processor.Spec.Properties,
 			SchedulingStrategy:               processor.Spec.Scheduling.Strategy,
@@ -4423,7 +4492,7 @@ func inputPortDependenciesWaitingFor(ctx context.Context, c client.Client, input
 }
 
 func desiredInputPort(inputPort *nifiv1alpha1.NiFiInputPort, parentID string) nifi.PortEntity {
-	return desiredPort(inputPortDisplayName(inputPort), inputPort.Spec.Position, inputPort.Spec.State, inputPort.Spec.ConcurrentlySchedulableTaskCount, parentID)
+	return desiredPort(inputPortDisplayName(inputPort), inputPort.Spec.Position, inputPort.Spec.ConcurrentlySchedulableTaskCount, parentID)
 }
 
 func inputPortDisplayName(inputPort *nifiv1alpha1.NiFiInputPort) string {
@@ -4459,7 +4528,7 @@ func outputPortDependenciesWaitingFor(ctx context.Context, c client.Client, outp
 }
 
 func desiredOutputPort(outputPort *nifiv1alpha1.NiFiOutputPort, parentID string) nifi.PortEntity {
-	return desiredPort(outputPortDisplayName(outputPort), outputPort.Spec.Position, outputPort.Spec.State, outputPort.Spec.ConcurrentlySchedulableTaskCount, parentID)
+	return desiredPort(outputPortDisplayName(outputPort), outputPort.Spec.Position, outputPort.Spec.ConcurrentlySchedulableTaskCount, parentID)
 }
 
 func outputPortDisplayName(outputPort *nifiv1alpha1.NiFiOutputPort) string {
@@ -4490,11 +4559,31 @@ func shouldMarkOutputPortNotReady(instance *nifiv1alpha1.NiFiOutputPort, reason,
 	return true
 }
 
-func desiredPort(name string, position *nifiv1alpha1.Position, state nifiv1alpha1.RuntimeState, concurrentlySchedulableTaskCount int32, parentID string) nifi.PortEntity {
+// nifiScheduledState maps the CRD's RuntimeState to NiFi's ScheduledState enum, which is
+// upper-case (RUNNING/STOPPED/DISABLED, and ENABLED for controller services). Sending the CRD's
+// title-case value verbatim makes NiFi reject the request ("No enum constant ScheduledState.Stopped").
+func nifiScheduledState(state nifiv1alpha1.RuntimeState) string {
+	switch state {
+	case nifiv1alpha1.RuntimeStateRunning:
+		return "RUNNING"
+	case nifiv1alpha1.RuntimeStateStopped:
+		return "STOPPED"
+	case nifiv1alpha1.RuntimeStateEnabled:
+		return "ENABLED"
+	case nifiv1alpha1.RuntimeStateDisabled:
+		return "DISABLED"
+	default:
+		return ""
+	}
+}
+
+// desiredPort builds the component config for a port. It deliberately does NOT set State: a port's
+// run state (RUNNING/STOPPED/DISABLED) is changed through the dedicated run-status endpoint, not a
+// component write (NiFi rejects a run-state change made via a component PUT).
+func desiredPort(name string, position *nifiv1alpha1.Position, concurrentlySchedulableTaskCount int32, parentID string) nifi.PortEntity {
 	component := nifi.PortComponent{
 		ParentGroupID:                    parentID,
 		Name:                             name,
-		State:                            string(state),
 		ConcurrentlySchedulableTaskCount: concurrentlySchedulableTaskCount,
 	}
 	if position != nil {
@@ -4513,14 +4602,41 @@ func portEntityID(entity nifi.PortEntity) string {
 	return entity.Component.ID
 }
 
+// portNeedsUpdate compares only the port's component config (run state is reconciled separately
+// through the run-status endpoint, so it is intentionally excluded here).
 func portNeedsUpdate(desired nifi.PortEntity, existing nifi.PortEntity) bool {
 	if desired.Component.Name != existing.Component.Name ||
 		desired.Component.ParentGroupID != "" && desired.Component.ParentGroupID != existing.Component.ParentGroupID ||
-		desired.Component.State != "" && desired.Component.State != existing.Component.State ||
 		desired.Component.ConcurrentlySchedulableTaskCount != existing.Component.ConcurrentlySchedulableTaskCount {
 		return true
 	}
 	return !nifiPositionsEqual(desired.Component.Position, existing.Component.Position)
+}
+
+// reconcilePortRunState brings a port to desiredState (RUNNING/STOPPED/DISABLED) through the
+// run-status endpoint. It returns the refreshed entity, a non-empty pendingReason/pendingMsg when
+// the port cannot reach the state yet (e.g. INVALID and needing a connection, or still VALIDATING),
+// and an error when the run-status call itself fails. runStatus wraps the input/output client call.
+func reconcilePortRunState(nifiID string, current *nifi.PortEntity, desiredState string, runStatus func(id string, revisionVersion int64, state string) (*nifi.PortEntity, error)) (*nifi.PortEntity, string, string, error) {
+	if desiredState == "" || current.Component.State == desiredState {
+		return current, "", "", nil
+	}
+	if desiredState == "RUNNING" {
+		switch current.Component.ValidationStatus {
+		case "INVALID":
+			return current, "PortInvalid", "The port is INVALID and cannot be started; it needs at least one valid connection.", nil
+		case "VALIDATING":
+			return current, "PortValidating", "The port is still being validated by NiFi.", nil
+		}
+	}
+	changed, err := runStatus(nifiID, current.Revision.Version, desiredState)
+	if err != nil {
+		return current, "", "", err
+	}
+	if changed != nil {
+		current = changed
+	}
+	return current, "", "", nil
 }
 
 func connectionDependenciesWaitingFor(ctx context.Context, c client.Client, connection *nifiv1alpha1.NiFiConnection) []string {
@@ -4602,6 +4718,24 @@ func nifiConnectable(ctx context.Context, c client.Client, namespace string, ref
 		}
 		connectable.ID = funnel.Status.NiFiID
 		connectable.GroupID = funnel.Status.ParentProcessGroupID
+	case nifiv1alpha1.ConnectableTypeRemoteInputPort, nifiv1alpha1.ConnectableTypeRemoteOutputPort:
+		// A remote port belongs to a NiFiRemoteProcessGroup: its groupId is the RPG's NiFi id and
+		// its id comes from the ports the RPG discovered from the target (matched by PortName).
+		rpg := &nifiv1alpha1.NiFiRemoteProcessGroup{}
+		if err := c.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: refNamespace}, rpg); err != nil {
+			return nifi.Connectable{}, err
+		}
+		ports := rpg.Status.DiscoveredInputPorts
+		if ref.Type == nifiv1alpha1.ConnectableTypeRemoteOutputPort {
+			ports = rpg.Status.DiscoveredOutputPorts
+		}
+		for _, p := range ports {
+			if p.Name == ref.PortName {
+				connectable.ID = p.NiFiID
+				break
+			}
+		}
+		connectable.GroupID = rpg.Status.NiFiID
 	}
 	if connectable.GroupID == "" {
 		connectable.GroupID = fallbackGroupID
@@ -4619,6 +4753,10 @@ func nifiConnectableType(connectableType nifiv1alpha1.ConnectableType) string {
 		return "OUTPUT_PORT"
 	case nifiv1alpha1.ConnectableTypeFunnel:
 		return "FUNNEL"
+	case nifiv1alpha1.ConnectableTypeRemoteInputPort:
+		return "REMOTE_INPUT_PORT"
+	case nifiv1alpha1.ConnectableTypeRemoteOutputPort:
+		return "REMOTE_OUTPUT_PORT"
 	default:
 		return ""
 	}
@@ -4949,6 +5087,32 @@ func connectableReferenceDependencyWaitingFor(ctx context.Context, c client.Clie
 		}
 		if !funnel.Status.Ready {
 			return []string{fmt.Sprintf("NiFiFunnel/%s/%s:Ready", refNamespace, ref.Name)}
+		}
+	case nifiv1alpha1.ConnectableTypeRemoteInputPort, nifiv1alpha1.ConnectableTypeRemoteOutputPort:
+		// Wait only until the RPG has discovered the named port (its id is published), NOT until the
+		// RPG is Ready: an RPG stays NotReady until its port is connected, but the port cannot be
+		// connected until this connection is created — requiring Ready would deadlock the two.
+		rpg := &nifiv1alpha1.NiFiRemoteProcessGroup{}
+		key := types.NamespacedName{Name: ref.Name, Namespace: refNamespace}
+		if err := c.Get(ctx, key, rpg); err != nil {
+			if apierrors.IsNotFound(err) {
+				return []string{fmt.Sprintf("NiFiRemoteProcessGroup/%s/%s", refNamespace, ref.Name)}
+			}
+			return []string{fmt.Sprintf("NiFiRemoteProcessGroup/%s/%s:GetError", refNamespace, ref.Name)}
+		}
+		ports := rpg.Status.DiscoveredInputPorts
+		if ref.Type == nifiv1alpha1.ConnectableTypeRemoteOutputPort {
+			ports = rpg.Status.DiscoveredOutputPorts
+		}
+		discovered := false
+		for _, p := range ports {
+			if p.Name == ref.PortName && p.NiFiID != "" {
+				discovered = true
+				break
+			}
+		}
+		if !discovered {
+			return []string{fmt.Sprintf("NiFiRemoteProcessGroup/%s/%s:port/%s", refNamespace, ref.Name, ref.PortName)}
 		}
 	default:
 		return []string{fieldPath + ".type"}

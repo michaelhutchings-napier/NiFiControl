@@ -144,11 +144,9 @@ func (r *NiFiRemoteProcessGroupReconciler) Reconcile(ctx context.Context, req ct
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
-	nifiID := nifi.RemoteProcessGroupEntityID(*created)
-	if !remoteProcessGroupStatusMatches(instance, nifiID, created.Revision.Version, parentID, created.Component) {
-		return ctrl.Result{}, markRemoteProcessGroupReady(ctx, r.Client, instance, nifiID, created.Revision.Version, parentID, created.Component)
-	}
-	return ctrl.Result{}, nil
+	// Route the freshly created RPG through the existing-reconcile path so its ports and
+	// transmission are reconciled and its status is published consistently.
+	return r.reconcileExistingRemoteProcessGroup(ctx, instance, endpoint, rpgs, desired, created, parentID)
 }
 
 func (r *NiFiRemoteProcessGroupReconciler) reconcileExistingRemoteProcessGroup(ctx context.Context, instance *nifiv1alpha1.NiFiRemoteProcessGroup, endpoint string, rpgs nifi.RemoteProcessGroupClient, desired nifi.RemoteProcessGroupEntity, existing *nifi.RemoteProcessGroupEntity, parentID string) (ctrl.Result, error) {
@@ -186,10 +184,148 @@ func (r *NiFiRemoteProcessGroupReconciler) reconcileExistingRemoteProcessGroup(c
 		}
 	}
 
+	// Reconcile the managed remote ports (config + transmission) against the ports NiFi discovered
+	// from the target.
+	current, portWaiting, err := r.reconcileRemoteProcessGroupPorts(ctx, instance, endpoint, rpgs, current)
+	if err != nil {
+		return r.remoteProcessGroupWriteFailed(ctx, instance, "NiFiPortReconcileFailed", "reconcile ports of", err)
+	}
+	if len(portWaiting) > 0 {
+		// Publish the RPG id and discovered ports so a NiFiConnection can resolve them, but stay
+		// NotReady until the declared ports are discovered, connected, and transmitting as configured.
+		message := fmt.Sprintf("Waiting on remote ports: %s", strings.Join(portWaiting, ", "))
+		return r.markRemoteProcessGroupPortsPending(ctx, instance, nifiID, current.Revision.Version, parentID, current.Component, message)
+	}
+
 	if !remoteProcessGroupStatusMatches(instance, nifiID, current.Revision.Version, parentID, current.Component) {
 		return ctrl.Result{}, markRemoteProcessGroupReady(ctx, r.Client, instance, nifiID, current.Revision.Version, parentID, current.Component)
 	}
 	return ctrl.Result{}, nil
+}
+
+// reconcileRemoteProcessGroupPorts applies the desired per-port config and transmission state to the
+// remote ports NiFi discovered from the target. It returns the refreshed RPG entity and a list of
+// ports still being waited on (not discovered, or configured to transmit but not yet connected).
+// Remote port operations use the RPG's revision, so the RPG is re-fetched after each mutation.
+func (r *NiFiRemoteProcessGroupReconciler) reconcileRemoteProcessGroupPorts(ctx context.Context, instance *nifiv1alpha1.NiFiRemoteProcessGroup, endpoint string, rpgs nifi.RemoteProcessGroupClient, current *nifi.RemoteProcessGroupEntity) (*nifi.RemoteProcessGroupEntity, []string, error) {
+	rpgID := nifi.RemoteProcessGroupEntityID(*current)
+	waitingFor := make([]string, 0)
+
+	refresh := func() error {
+		refreshed, err := rpgs.GetRemoteProcessGroup(ctx, endpoint, rpgID)
+		if err != nil {
+			return err
+		}
+		if refreshed != nil {
+			current = refreshed
+		}
+		return nil
+	}
+
+	reconcileOne := func(cfg nifiv1alpha1.RemoteProcessGroupPortConfig, output bool) error {
+		port := findRemotePort(current, cfg.Name, output)
+		if port == nil {
+			waitingFor = append(waitingFor, fmt.Sprintf("%s-port/%s", portKind(output), cfg.Name))
+			return nil
+		}
+		if remotePortConfigDiffers(cfg, *port) {
+			// NiFi refuses to edit a transmitting port; stop it first.
+			if port.Transmitting {
+				if err := r.setRemotePortRunStatus(ctx, rpgs, endpoint, rpgID, port.ID, current.Revision.Version, "STOPPED", output); err != nil {
+					return err
+				}
+				if err := refresh(); err != nil {
+					return err
+				}
+				port = findRemotePort(current, cfg.Name, output)
+				if port == nil {
+					return nil
+				}
+			}
+			entity := nifi.RemoteProcessGroupPortEntity{
+				Revision:               nifi.Revision{Version: current.Revision.Version},
+				RemoteProcessGroupPort: desiredRemotePort(cfg, port.ID, rpgID),
+			}
+			var err error
+			if output {
+				_, err = rpgs.UpdateRemoteProcessGroupOutputPort(ctx, endpoint, rpgID, entity)
+			} else {
+				_, err = rpgs.UpdateRemoteProcessGroupInputPort(ctx, endpoint, rpgID, entity)
+			}
+			if err != nil {
+				return err
+			}
+			if err := refresh(); err != nil {
+				return err
+			}
+			port = findRemotePort(current, cfg.Name, output)
+			if port == nil {
+				return nil
+			}
+		}
+		switch {
+		case cfg.Transmitting && !port.Transmitting:
+			if !port.Connected {
+				// A port can only transmit once a flow connection exists (a NiFiConnection to it).
+				waitingFor = append(waitingFor, fmt.Sprintf("%s-port/%s:connected", portKind(output), cfg.Name))
+				return nil
+			}
+			if err := r.setRemotePortRunStatus(ctx, rpgs, endpoint, rpgID, port.ID, current.Revision.Version, "TRANSMITTING", output); err != nil {
+				return err
+			}
+			return refresh()
+		case !cfg.Transmitting && port.Transmitting:
+			if err := r.setRemotePortRunStatus(ctx, rpgs, endpoint, rpgID, port.ID, current.Revision.Version, "STOPPED", output); err != nil {
+				return err
+			}
+			return refresh()
+		}
+		return nil
+	}
+
+	for _, cfg := range instance.Spec.InputPorts {
+		if err := reconcileOne(cfg, false); err != nil {
+			return current, waitingFor, err
+		}
+	}
+	for _, cfg := range instance.Spec.OutputPorts {
+		if err := reconcileOne(cfg, true); err != nil {
+			return current, waitingFor, err
+		}
+	}
+	return current, waitingFor, nil
+}
+
+func (r *NiFiRemoteProcessGroupReconciler) setRemotePortRunStatus(ctx context.Context, rpgs nifi.RemoteProcessGroupClient, endpoint, rpgID, portID string, revisionVersion int64, state string, output bool) error {
+	var err error
+	if output {
+		_, err = rpgs.UpdateRemoteProcessGroupOutputPortRunStatus(ctx, endpoint, rpgID, portID, revisionVersion, state)
+	} else {
+		_, err = rpgs.UpdateRemoteProcessGroupInputPortRunStatus(ctx, endpoint, rpgID, portID, revisionVersion, state)
+	}
+	return err
+}
+
+func (r *NiFiRemoteProcessGroupReconciler) markRemoteProcessGroupPortsPending(ctx context.Context, instance *nifiv1alpha1.NiFiRemoteProcessGroup, nifiID string, revisionVersion int64, parentProcessGroupID string, component nifi.RemoteProcessGroupComponent, message string) (ctrl.Result, error) {
+	inPorts, outPorts := remoteProcessGroupDiscoveredPortStatuses(component)
+	if !shouldMarkRemoteProcessGroupNotReady(instance, "PortsPending", message) &&
+		instance.Status.NiFiID == nifiID &&
+		portStatusesEqual(instance.Status.DiscoveredInputPorts, inPorts) &&
+		portStatusesEqual(instance.Status.DiscoveredOutputPorts, outPorts) {
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+	// Persist the RPG id/revision/parent even while pending so a NiFiConnection can resolve the
+	// remote port's groupId before the RPG is Ready.
+	instance.Status.NiFiID = nifiID
+	instance.Status.Revision.Version = revisionVersion
+	instance.Status.ParentProcessGroupID = parentProcessGroupID
+	instance.Status.TransmissionStatus = remoteProcessGroupTransmissionStatus(component.Transmitting)
+	instance.Status.TargetSecure = component.TargetSecure
+	instance.Status.InputPortCount = component.InputPortCount
+	instance.Status.OutputPortCount = component.OutputPortCount
+	instance.Status.DiscoveredInputPorts = inPorts
+	instance.Status.DiscoveredOutputPorts = outPorts
+	return ctrl.Result{RequeueAfter: 15 * time.Second}, markRemoteProcessGroupNotReady(ctx, r.Client, instance, "PortsPending", message)
 }
 
 func (r *NiFiRemoteProcessGroupReconciler) remoteProcessGroupWriteFailed(ctx context.Context, instance *nifiv1alpha1.NiFiRemoteProcessGroup, reason, verb string, err error) (ctrl.Result, error) {
@@ -412,7 +548,14 @@ func remoteProcessGroupStatusMatches(instance *nifiv1alpha1.NiFiRemoteProcessGro
 		instance.Status.TransmissionStatus == remoteProcessGroupTransmissionStatus(component.Transmitting) &&
 		instance.Status.TargetSecure == component.TargetSecure &&
 		instance.Status.InputPortCount == component.InputPortCount &&
-		instance.Status.OutputPortCount == component.OutputPortCount
+		instance.Status.OutputPortCount == component.OutputPortCount &&
+		remoteProcessGroupDiscoveredPortsMatch(instance, component)
+}
+
+func remoteProcessGroupDiscoveredPortsMatch(instance *nifiv1alpha1.NiFiRemoteProcessGroup, component nifi.RemoteProcessGroupComponent) bool {
+	inPorts, outPorts := remoteProcessGroupDiscoveredPortStatuses(component)
+	return portStatusesEqual(instance.Status.DiscoveredInputPorts, inPorts) &&
+		portStatusesEqual(instance.Status.DiscoveredOutputPorts, outPorts)
 }
 
 func shouldMarkRemoteProcessGroupNotReady(instance *nifiv1alpha1.NiFiRemoteProcessGroup, reason, message string) bool {
@@ -427,6 +570,106 @@ func shouldMarkRemoteProcessGroupNotReady(instance *nifiv1alpha1.NiFiRemoteProce
 	return true
 }
 
+func portKind(output bool) string {
+	if output {
+		return "output"
+	}
+	return "input"
+}
+
+func findRemotePort(entity *nifi.RemoteProcessGroupEntity, name string, output bool) *nifi.RemoteProcessGroupPort {
+	if entity == nil || entity.Component.Contents == nil {
+		return nil
+	}
+	ports := entity.Component.Contents.InputPorts
+	if output {
+		ports = entity.Component.Contents.OutputPorts
+	}
+	for i := range ports {
+		if ports[i].Name == name {
+			return &ports[i]
+		}
+	}
+	return nil
+}
+
+// remotePortConfigDiffers compares only the config fields the user set (a zero/empty spec value
+// leaves NiFi's default and is not treated as drift).
+func remotePortConfigDiffers(cfg nifiv1alpha1.RemoteProcessGroupPortConfig, port nifi.RemoteProcessGroupPort) bool {
+	if cfg.UseCompression != port.UseCompression {
+		return true
+	}
+	if cfg.ConcurrentTasks != 0 && cfg.ConcurrentTasks != port.ConcurrentlySchedulableTaskCount {
+		return true
+	}
+	var count int32
+	var size, duration string
+	if port.BatchSettings != nil {
+		count, size, duration = port.BatchSettings.Count, port.BatchSettings.Size, port.BatchSettings.Duration
+	}
+	if cfg.BatchCount != 0 && cfg.BatchCount != count {
+		return true
+	}
+	if cfg.BatchSize != "" && cfg.BatchSize != size {
+		return true
+	}
+	if cfg.BatchDuration != "" && cfg.BatchDuration != duration {
+		return true
+	}
+	return false
+}
+
+func desiredRemotePort(cfg nifiv1alpha1.RemoteProcessGroupPortConfig, portID, groupID string) nifi.RemoteProcessGroupPort {
+	port := nifi.RemoteProcessGroupPort{
+		ID:             portID,
+		GroupID:        groupID,
+		UseCompression: cfg.UseCompression,
+	}
+	if cfg.ConcurrentTasks != 0 {
+		port.ConcurrentlySchedulableTaskCount = cfg.ConcurrentTasks
+	}
+	if cfg.BatchCount != 0 || cfg.BatchSize != "" || cfg.BatchDuration != "" {
+		port.BatchSettings = &nifi.BatchSettings{Count: cfg.BatchCount, Size: cfg.BatchSize, Duration: cfg.BatchDuration}
+	}
+	return port
+}
+
+func remoteProcessGroupDiscoveredPortStatuses(component nifi.RemoteProcessGroupComponent) ([]nifiv1alpha1.RemoteProcessGroupPortStatus, []nifiv1alpha1.RemoteProcessGroupPortStatus) {
+	if component.Contents == nil {
+		return nil, nil
+	}
+	convert := func(ports []nifi.RemoteProcessGroupPort) []nifiv1alpha1.RemoteProcessGroupPortStatus {
+		if len(ports) == 0 {
+			return nil
+		}
+		out := make([]nifiv1alpha1.RemoteProcessGroupPortStatus, 0, len(ports))
+		for _, p := range ports {
+			out = append(out, nifiv1alpha1.RemoteProcessGroupPortStatus{
+				Name:         p.Name,
+				NiFiID:       p.ID,
+				Transmitting: p.Transmitting,
+				Connected:    p.Connected,
+				Exists:       p.Exists,
+			})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+		return out
+	}
+	return convert(component.Contents.InputPorts), convert(component.Contents.OutputPorts)
+}
+
+func portStatusesEqual(a, b []nifiv1alpha1.RemoteProcessGroupPortStatus) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func markRemoteProcessGroupReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiRemoteProcessGroup, nifiID string, revisionVersion int64, parentProcessGroupID string, component nifi.RemoteProcessGroupComponent) error {
 	obj.Status.CommonStatus.MarkReady(obj.Generation, "RemoteProcessGroupReady", "The NiFi remote process group is reconciled.")
 	obj.Status.NiFiID = nifiID
@@ -436,6 +679,7 @@ func markRemoteProcessGroupReady(ctx context.Context, c client.Client, obj *nifi
 	obj.Status.TargetSecure = component.TargetSecure
 	obj.Status.InputPortCount = component.InputPortCount
 	obj.Status.OutputPortCount = component.OutputPortCount
+	obj.Status.DiscoveredInputPorts, obj.Status.DiscoveredOutputPorts = remoteProcessGroupDiscoveredPortStatuses(component)
 	obj.Status.Sync.LastError = ""
 	return c.Status().Update(ctx, obj)
 }

@@ -89,6 +89,49 @@ func TestHTTPRemoteProcessGroupClientGetNotFound(t *testing.T) {
 	}
 }
 
+func TestHTTPRemoteProcessGroupClientUpdateInputPort(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/nifi-api/remote-process-groups/rpg1/input-ports/port1" {
+			t.Fatalf("got %s %s", r.Method, r.URL.Path)
+		}
+		var in RemoteProcessGroupPortEntity
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		if !in.RemoteProcessGroupPort.UseCompression || in.RemoteProcessGroupPort.ConcurrentlySchedulableTaskCount != 2 {
+			t.Fatalf("port payload = %#v", in.RemoteProcessGroupPort)
+		}
+		_ = json.NewEncoder(w).Encode(in)
+	}))
+	defer server.Close()
+
+	_, err := (HTTPRemoteProcessGroupClient{}).UpdateRemoteProcessGroupInputPort(t.Context(), server.URL, "rpg1", RemoteProcessGroupPortEntity{
+		Revision:               Revision{Version: 1},
+		RemoteProcessGroupPort: RemoteProcessGroupPort{ID: "port1", UseCompression: true, ConcurrentlySchedulableTaskCount: 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHTTPRemoteProcessGroupClientInputPortRunStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/nifi-api/remote-process-groups/rpg1/input-ports/port1/run-status" {
+			t.Fatalf("got %s %s", r.Method, r.URL.Path)
+		}
+		var in RemoteProcessGroupRunStatusEntity
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		if in.State != "TRANSMITTING" || in.Revision.Version != 3 {
+			t.Fatalf("run-status payload = %#v", in)
+		}
+		_ = json.NewEncoder(w).Encode(RemoteProcessGroupPortEntity{})
+	}))
+	defer server.Close()
+
+	_, err := (HTTPRemoteProcessGroupClient{}).UpdateRemoteProcessGroupInputPortRunStatus(t.Context(), server.URL, "rpg1", "port1", 3, "TRANSMITTING")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRemoteProcessGroupTransmissionState(t *testing.T) {
 	if RemoteProcessGroupTransmissionState(true) != "TRANSMITTING" {
 		t.Fatal("true should map to TRANSMITTING")

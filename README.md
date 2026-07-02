@@ -29,9 +29,12 @@ services, and high-level flow deployments.
   processors, ports, connections, funnels, labels, and remote process groups
   reconcile against NiFi. `NiFiRegistryClient` supports the NiFi Registry, GitHub, and
   GitLab flow registry types, with repository settings as typed fields and access tokens
-  sourced from Secrets. `NiFiRemoteProcessGroup` manages site-to-site links: it configures
-  the target URIs, transport protocol, timeouts, and optional HTTP proxy, and stops
-  transmission before any configuration change or deletion.
+  sourced from Secrets. `NiFiRemoteProcessGroup` manages site-to-site links end to end: it
+  configures the target URIs, transport protocol, timeouts, and optional HTTP proxy; tunes and turns
+  on the remote input/output ports discovered from the target (concurrency, compression, batching);
+  and stops transmission before any configuration change or deletion. `NiFiConnection` can attach a
+  `RemoteInputPort`/`RemoteOutputPort` endpoint, so a complete flow — generate, connect, transmit —
+  is declared without touching the NiFi UI.
 - `NiFiReportingTask` manages a controller-level reporting task: it reconciles the task's type,
   bundle, properties (including sensitive properties from Secrets), and scheduling, and
   starts/stops it via NiFi's run-status endpoint (`state: Enabled`/`Disabled`).

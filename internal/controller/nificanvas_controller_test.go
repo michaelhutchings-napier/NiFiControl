@@ -329,6 +329,14 @@ func (f *fakeInputPortClient) UpdateInputPort(ctx context.Context, baseURI strin
 	return &entity, f.err
 }
 
+func (f *fakeInputPortClient) UpdateInputPortRunStatus(ctx context.Context, baseURI string, id string, revisionVersion int64, state string) (*nifi.PortEntity, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	e := nifi.PortEntity{ID: id, Revision: nifi.Revision{Version: revisionVersion + 1}, Component: nifi.PortComponent{ID: id, State: state, ValidationStatus: "VALID"}}
+	return &e, nil
+}
+
 func (f *fakeInputPortClient) DeleteInputPort(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
 	return f.err
 }
@@ -356,6 +364,14 @@ func (f *fakeOutputPortClient) CreateOutputPort(ctx context.Context, baseURI str
 
 func (f *fakeOutputPortClient) UpdateOutputPort(ctx context.Context, baseURI string, entity nifi.PortEntity) (*nifi.PortEntity, error) {
 	return &entity, f.err
+}
+
+func (f *fakeOutputPortClient) UpdateOutputPortRunStatus(ctx context.Context, baseURI string, id string, revisionVersion int64, state string) (*nifi.PortEntity, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	e := nifi.PortEntity{ID: id, Revision: nifi.Revision{Version: revisionVersion + 1}, Component: nifi.PortComponent{ID: id, State: state, ValidationStatus: "VALID"}}
+	return &e, nil
 }
 
 func (f *fakeOutputPortClient) DeleteOutputPort(ctx context.Context, baseURI string, id string, revisionVersion int64) error {

@@ -19,6 +19,20 @@ spec:
     x: 400
     # "y" must be quoted: YAML 1.1 parses the bare key y as the boolean true.
     "y": 240
+  # Configure and turn on the remote ports discovered from the target, by name. A port only
+  # transmits once it is connected — wire a NiFiConnection to it with a RemoteInputPort or
+  # RemoteOutputPort endpoint (see nifi_v1alpha1_nificonnection.yaml). Discovered ports (and their
+  # ids) are published under status.discoveredInputPorts / status.discoveredOutputPorts.
+  inputPorts:
+    - name: from-edge
+      transmitting: true
+      concurrentTasks: 2
+      useCompression: true
+      # batchCount: 1000
+      # batchSize: 5 MB
+      # batchDuration: 5 sec
+  # outputPorts:
+  #   - {name: to-edge, transmitting: true}
   # Optional HTTP proxy for site-to-site (HTTP transport). The password is read from a Secret.
   # proxy:
   #   host: proxy.example.com

@@ -34,10 +34,48 @@ type RemoteProcessGroupComponent struct {
 	ProxyPassword         string    `json:"proxyPassword,omitempty"`
 	Position              *Position `json:"position,omitempty"`
 	// Observed (read-only) fields returned by NiFi.
-	Transmitting    bool  `json:"transmitting,omitempty"`
-	TargetSecure    bool  `json:"targetSecure,omitempty"`
-	InputPortCount  int32 `json:"inputPortCount,omitempty"`
-	OutputPortCount int32 `json:"outputPortCount,omitempty"`
+	Transmitting    bool                        `json:"transmitting,omitempty"`
+	TargetSecure    bool                        `json:"targetSecure,omitempty"`
+	InputPortCount  int32                       `json:"inputPortCount,omitempty"`
+	OutputPortCount int32                       `json:"outputPortCount,omitempty"`
+	Contents        *RemoteProcessGroupContents `json:"contents,omitempty"`
+}
+
+// RemoteProcessGroupContents holds the remote ports NiFi discovered from the target.
+type RemoteProcessGroupContents struct {
+	InputPorts  []RemoteProcessGroupPort `json:"inputPorts,omitempty"`
+	OutputPorts []RemoteProcessGroupPort `json:"outputPorts,omitempty"`
+}
+
+// RemoteProcessGroupPort is a single remote input/output port of an RPG.
+type RemoteProcessGroupPort struct {
+	ID                               string         `json:"id,omitempty"`
+	GroupID                          string         `json:"groupId,omitempty"`
+	TargetID                         string         `json:"targetId,omitempty"`
+	Name                             string         `json:"name,omitempty"`
+	Comments                         string         `json:"comments,omitempty"`
+	UseCompression                   bool           `json:"useCompression,omitempty"`
+	ConcurrentlySchedulableTaskCount int32          `json:"concurrentlySchedulableTaskCount,omitempty"`
+	BatchSettings                    *BatchSettings `json:"batchSettings,omitempty"`
+	// Observed (read-only) fields returned by NiFi.
+	Transmitting  bool `json:"transmitting,omitempty"`
+	Exists        bool `json:"exists,omitempty"`
+	Connected     bool `json:"connected,omitempty"`
+	TargetRunning bool `json:"targetRunning,omitempty"`
+}
+
+// BatchSettings tunes site-to-site batching for a remote port.
+type BatchSettings struct {
+	Count    int32  `json:"count,omitempty"`
+	Size     string `json:"size,omitempty"`
+	Duration string `json:"duration,omitempty"`
+}
+
+// RemoteProcessGroupPortEntity wraps a remote port for update/run-status calls.
+type RemoteProcessGroupPortEntity struct {
+	Revision                     Revision               `json:"revision"`
+	RemoteProcessGroupPort       RemoteProcessGroupPort `json:"remoteProcessGroupPort"`
+	DisconnectedNodeAcknowledged bool                   `json:"disconnectedNodeAcknowledged,omitempty"`
 }
 
 // RemoteProcessGroupEntity is a NiFi remote process group.
@@ -63,6 +101,14 @@ type RemoteProcessGroupClient interface {
 	// UpdateRemoteProcessGroupRunStatus starts or stops transmission (state TRANSMITTING or STOPPED).
 	UpdateRemoteProcessGroupRunStatus(ctx context.Context, baseURI string, id string, revisionVersion int64, state string) (*RemoteProcessGroupEntity, error)
 	DeleteRemoteProcessGroup(ctx context.Context, baseURI string, id string, revisionVersion int64) error
+	// UpdateRemoteProcessGroupInputPort applies configuration (compression, concurrency, batch) to a
+	// remote input port. The port id is taken from entity.RemoteProcessGroupPort.ID.
+	UpdateRemoteProcessGroupInputPort(ctx context.Context, baseURI string, rpgID string, entity RemoteProcessGroupPortEntity) (*RemoteProcessGroupPortEntity, error)
+	UpdateRemoteProcessGroupOutputPort(ctx context.Context, baseURI string, rpgID string, entity RemoteProcessGroupPortEntity) (*RemoteProcessGroupPortEntity, error)
+	// UpdateRemoteProcessGroupInputPortRunStatus starts or stops a single remote input port
+	// (state TRANSMITTING or STOPPED).
+	UpdateRemoteProcessGroupInputPortRunStatus(ctx context.Context, baseURI string, rpgID string, portID string, revisionVersion int64, state string) (*RemoteProcessGroupPortEntity, error)
+	UpdateRemoteProcessGroupOutputPortRunStatus(ctx context.Context, baseURI string, rpgID string, portID string, revisionVersion int64, state string) (*RemoteProcessGroupPortEntity, error)
 }
 
 // HTTPRemoteProcessGroupClient is the HTTP implementation of RemoteProcessGroupClient.
@@ -134,6 +180,47 @@ func (c HTTPRemoteProcessGroupClient) DeleteRemoteProcessGroup(ctx context.Conte
 	}
 	endpoint += fmt.Sprintf("?version=%d", revisionVersion)
 	return c.doJSON(ctx, http.MethodDelete, endpoint, nil, nil)
+}
+
+func (c HTTPRemoteProcessGroupClient) UpdateRemoteProcessGroupInputPort(ctx context.Context, baseURI string, rpgID string, entity RemoteProcessGroupPortEntity) (*RemoteProcessGroupPortEntity, error) {
+	return c.updateRemotePort(ctx, baseURI, rpgID, "input-ports", entity)
+}
+
+func (c HTTPRemoteProcessGroupClient) UpdateRemoteProcessGroupOutputPort(ctx context.Context, baseURI string, rpgID string, entity RemoteProcessGroupPortEntity) (*RemoteProcessGroupPortEntity, error) {
+	return c.updateRemotePort(ctx, baseURI, rpgID, "output-ports", entity)
+}
+
+func (c HTTPRemoteProcessGroupClient) updateRemotePort(ctx context.Context, baseURI string, rpgID string, portType string, entity RemoteProcessGroupPortEntity) (*RemoteProcessGroupPortEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/remote-process-groups/%s/%s/%s", url.PathEscape(rpgID), portType, url.PathEscape(entity.RemoteProcessGroupPort.ID)))
+	if err != nil {
+		return nil, err
+	}
+	var response RemoteProcessGroupPortEntity
+	if err := c.doJSON(ctx, http.MethodPut, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPRemoteProcessGroupClient) UpdateRemoteProcessGroupInputPortRunStatus(ctx context.Context, baseURI string, rpgID string, portID string, revisionVersion int64, state string) (*RemoteProcessGroupPortEntity, error) {
+	return c.updateRemotePortRunStatus(ctx, baseURI, rpgID, "input-ports", portID, revisionVersion, state)
+}
+
+func (c HTTPRemoteProcessGroupClient) UpdateRemoteProcessGroupOutputPortRunStatus(ctx context.Context, baseURI string, rpgID string, portID string, revisionVersion int64, state string) (*RemoteProcessGroupPortEntity, error) {
+	return c.updateRemotePortRunStatus(ctx, baseURI, rpgID, "output-ports", portID, revisionVersion, state)
+}
+
+func (c HTTPRemoteProcessGroupClient) updateRemotePortRunStatus(ctx context.Context, baseURI string, rpgID string, portType string, portID string, revisionVersion int64, state string) (*RemoteProcessGroupPortEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/remote-process-groups/%s/%s/%s/run-status", url.PathEscape(rpgID), portType, url.PathEscape(portID)))
+	if err != nil {
+		return nil, err
+	}
+	body := RemoteProcessGroupRunStatusEntity{Revision: Revision{Version: revisionVersion}, State: state}
+	var response RemoteProcessGroupPortEntity
+	if err := c.doJSON(ctx, http.MethodPut, endpoint, body, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
 }
 
 // RemoteProcessGroupEntityID returns the stable id of a remote process group entity.

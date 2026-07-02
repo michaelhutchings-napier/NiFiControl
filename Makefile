@@ -97,3 +97,7 @@ integration-registry-kind:
 .PHONY: integration-remoteprocessgroup-kind
 integration-remoteprocessgroup-kind:
 	./hack/test-remoteprocessgroup-kind.sh
+
+.PHONY: integration-remoteprocessgroup-s2s-kind
+integration-remoteprocessgroup-s2s-kind:
+	./hack/test-remoteprocessgroup-sitetosite-kind.sh

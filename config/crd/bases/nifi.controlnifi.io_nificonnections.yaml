@@ -88,10 +88,18 @@ spec:
               destination:
                 properties:
                   name:
+                    description: |-
+                      Name references the NiFiControl resource for this endpoint. For RemoteInputPort and
+                      RemoteOutputPort it is the NiFiRemoteProcessGroup name, and PortName selects the remote port.
                     type: string
                   namespace:
                     type: string
                   nifiId:
+                    type: string
+                  portName:
+                    description: |-
+                      PortName selects a remote port by name within the referenced NiFiRemoteProcessGroup. It is
+                      only used when Type is RemoteInputPort or RemoteOutputPort.
                     type: string
                   type:
                     enum:
@@ -99,6 +107,8 @@ spec:
                     - InputPort
                     - OutputPort
                     - Funnel
+                    - RemoteInputPort
+                    - RemoteOutputPort
                     type: string
                 required:
                 - type
@@ -154,10 +164,18 @@ spec:
               source:
                 properties:
                   name:
+                    description: |-
+                      Name references the NiFiControl resource for this endpoint. For RemoteInputPort and
+                      RemoteOutputPort it is the NiFiRemoteProcessGroup name, and PortName selects the remote port.
                     type: string
                   namespace:
                     type: string
                   nifiId:
+                    type: string
+                  portName:
+                    description: |-
+                      PortName selects a remote port by name within the referenced NiFiRemoteProcessGroup. It is
+                      only used when Type is RemoteInputPort or RemoteOutputPort.
                     type: string
                   type:
                     enum:
@@ -165,6 +183,8 @@ spec:
                     - InputPort
                     - OutputPort
                     - Funnel
+                    - RemoteInputPort
+                    - RemoteOutputPort
                     type: string
                 required:
                 - type

@@ -110,6 +110,7 @@ type InputPortClient interface {
 	GetInputPort(ctx context.Context, baseURI string, id string) (*PortEntity, error)
 	CreateInputPort(ctx context.Context, baseURI string, parentID string, entity PortEntity) (*PortEntity, error)
 	UpdateInputPort(ctx context.Context, baseURI string, entity PortEntity) (*PortEntity, error)
+	UpdateInputPortRunStatus(ctx context.Context, baseURI string, id string, revisionVersion int64, state string) (*PortEntity, error)
 	DeleteInputPort(ctx context.Context, baseURI string, id string, revisionVersion int64) error
 }
 
@@ -117,6 +118,7 @@ type OutputPortClient interface {
 	GetOutputPort(ctx context.Context, baseURI string, id string) (*PortEntity, error)
 	CreateOutputPort(ctx context.Context, baseURI string, parentID string, entity PortEntity) (*PortEntity, error)
 	UpdateOutputPort(ctx context.Context, baseURI string, entity PortEntity) (*PortEntity, error)
+	UpdateOutputPortRunStatus(ctx context.Context, baseURI string, id string, revisionVersion int64, state string) (*PortEntity, error)
 	DeleteOutputPort(ctx context.Context, baseURI string, id string, revisionVersion int64) error
 }
 
@@ -399,6 +401,13 @@ type PortComponent struct {
 	ConcurrentlySchedulableTaskCount int32     `json:"concurrentlySchedulableTaskCount,omitempty"`
 	ValidationStatus                 string    `json:"validationStatus,omitempty"`
 	ValidationErrors                 []string  `json:"validationErrors,omitempty"`
+}
+
+// PortRunStatusEntity changes a port's run state (RUNNING/STOPPED/DISABLED).
+type PortRunStatusEntity struct {
+	Revision                     Revision `json:"revision"`
+	State                        string   `json:"state"`
+	DisconnectedNodeAcknowledged bool     `json:"disconnectedNodeAcknowledged,omitempty"`
 }
 
 type ConnectionEntity struct {
@@ -957,6 +966,25 @@ func (c HTTPInputPortClient) DeleteInputPort(ctx context.Context, baseURI string
 	return c.deletePort(ctx, baseURI, "/input-ports/%s", id, revisionVersion)
 }
 
+func (c HTTPInputPortClient) UpdateInputPortRunStatus(ctx context.Context, baseURI string, id string, revisionVersion int64, state string) (*PortEntity, error) {
+	return c.runStatusPort(ctx, baseURI, "/input-ports/%s/run-status", id, revisionVersion, state)
+}
+
+// runStatusPort changes a port's run state (RUNNING/STOPPED/DISABLED) through the dedicated
+// run-status endpoint. NiFi rejects run-state changes made through a component PUT.
+func (c HTTPInputPortClient) runStatusPort(ctx context.Context, baseURI string, pathFormat string, id string, revisionVersion int64, state string) (*PortEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf(pathFormat, url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+	body := PortRunStatusEntity{Revision: Revision{Version: revisionVersion}, State: state}
+	var response PortEntity
+	if err := c.doJSON(ctx, http.MethodPut, endpoint, body, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
 func (c HTTPOutputPortClient) GetOutputPort(ctx context.Context, baseURI string, id string) (*PortEntity, error) {
 	return c.getPort(ctx, baseURI, "/output-ports/%s", id)
 }
@@ -971,6 +999,10 @@ func (c HTTPOutputPortClient) UpdateOutputPort(ctx context.Context, baseURI stri
 
 func (c HTTPOutputPortClient) DeleteOutputPort(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
 	return c.deletePort(ctx, baseURI, "/output-ports/%s", id, revisionVersion)
+}
+
+func (c HTTPOutputPortClient) UpdateOutputPortRunStatus(ctx context.Context, baseURI string, id string, revisionVersion int64, state string) (*PortEntity, error) {
+	return (HTTPInputPortClient{Client: c.Client}).runStatusPort(ctx, baseURI, "/output-ports/%s/run-status", id, revisionVersion, state)
 }
 
 func (c HTTPConnectionClient) GetConnection(ctx context.Context, baseURI string, id string) (*ConnectionEntity, error) {

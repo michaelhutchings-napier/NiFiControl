@@ -19,3 +19,11 @@ spec:
   backPressureDataSizeThreshold: 1 GB
   flowFileExpiration: 0 sec
   loadBalanceStrategy: DoNotLoadBalance
+# To send flow files over site-to-site, point the destination at a remote port of a
+# NiFiRemoteProcessGroup (or set the source to a RemoteOutputPort to receive). The operator resolves
+# the port id from the RPG's status.discoveredInputPorts/discoveredOutputPorts by name:
+#
+#   destination:
+#     type: RemoteInputPort
+#     name: to-central   # the NiFiRemoteProcessGroup resource name
+#     portName: from-edge
