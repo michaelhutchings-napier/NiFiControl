@@ -10,5 +10,5 @@ spec:
   displayName: Payments Out
   position:
     x: 520
-    y: 200
+    "y": 200
   state: Stopped

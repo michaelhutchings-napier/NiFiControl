@@ -16,7 +16,7 @@ spec:
         comments: Generates and logs a sample payment event.
         position:
           x: 0
-          y: 0
+          "y": 0
         processors:
           - identifier: generate-payment
             name: Generate payment
@@ -85,7 +85,7 @@ spec:
             height: 48
             position:
               x: 0
-              y: -100
+              "y": -100
             style:
               font-size: 20px
         processGroups: []

@@ -9,4 +9,4 @@ spec:
     name: payments
   position:
     x: 360
-    y: 200
+    "y": 200

@@ -11,7 +11,7 @@ spec:
   displayName: Generate Payments
   position:
     x: 200
-    y: 120
+    "y": 120
   properties:
     File Size: 1 KB
     Batch Size: "1"

@@ -10,7 +10,7 @@ spec:
   text: Payments ingress, enrichment, and publishing flow.
   position:
     x: 0
-    y: 0
+    "y": 0
   width: 420
   height: 80
   style:

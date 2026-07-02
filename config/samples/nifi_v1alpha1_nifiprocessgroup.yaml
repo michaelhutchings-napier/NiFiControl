@@ -9,6 +9,6 @@ spec:
   comments: Payments processing flow root
   position:
     x: 0
-    y: 0
+    "y": 0
   parameterContextRef:
     name: payments-prod
