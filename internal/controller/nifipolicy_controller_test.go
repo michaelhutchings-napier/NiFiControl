@@ -190,8 +190,8 @@ func TestNiFiPolicyReconcileRejectsConflictingTuple(t *testing.T) {
 			},
 		}
 	}
-	owner := tuple("aaa-owner", 100)  // older -> owns the tuple
-	loser := tuple("zzz-loser", 200)  // newer -> must yield
+	owner := tuple("aaa-owner", 100) // older -> owns the tuple
+	loser := tuple("zzz-loser", 200) // newer -> must yield
 	k8sClient := policyTestClient(scheme, cluster, user, owner, loser)
 	policies := &fakeAccessPolicyClient{}
 	r := &NiFiPolicyReconciler{Client: k8sClient, Scheme: scheme, AccessPolicyClient: policies}

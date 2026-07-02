@@ -1,5 +1,7 @@
 # NiFiControl
 
+[![CI](https://github.com/michaelhutchings-napier/NiFiControl/actions/workflows/ci.yaml/badge.svg)](https://github.com/michaelhutchings-napier/NiFiControl/actions/workflows/ci.yaml)
+
 NiFiControl is a declarative Kubernetes control plane for Apache NiFi.
 
 The project provides a Kubernetes-native API under `nifi.controlnifi.io` for
@@ -235,3 +237,14 @@ Render the sample resources with:
 ```bash
 kubectl kustomize config/samples
 ```
+
+## Continuous Integration
+
+The [CI workflow](.github/workflows/ci.yaml) runs on every push and pull request: it builds,
+`go vet`s (including the `integration` build tag), and tests the module, regenerates the CRDs,
+RBAC, and deepcopy code to confirm the committed manifests are up to date, and runs
+`make helm-verify`. This is the same gate expected before each change is committed.
+
+## License
+
+NiFiControl is licensed under the [Apache License 2.0](LICENSE).

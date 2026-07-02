@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: Build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "${unformatted}" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "${unformatted}"
+            exit 1
+          fi
+      - name: go build
+        run: go build ./...
+      - name: go vet
+        run: go vet ./...
+      - name: go vet (integration tag)
+        run: go vet -tags=integration ./...
+      - name: go test
+        run: go test ./...
+
+  manifests-helm:
+    name: Manifests & Helm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: azure/setup-helm@v4
+      - name: Regenerate CRDs, RBAC, deepcopy and sync Helm CRDs
+        run: make generate manifests helm-sync-crds
+      - name: Verify generated files are committed
+        run: |
+          if ! git diff --quiet; then
+            echo "Generated files are out of date; run: make generate manifests helm-sync-crds"
+            git diff --stat
+            exit 1
+          fi
+      - name: helm-verify
+        run: make helm-verify
