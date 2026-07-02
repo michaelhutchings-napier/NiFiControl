@@ -1,3 +1,8 @@
+# A NiFiReportingTask manages a NiFi controller-level reporting task: NiFiControl creates it under
+# /controller/reporting-tasks, reconciles its configuration, and starts/stops it via the
+# run-status endpoint. state: Enabled runs the task; Disabled (the default) leaves it stopped.
+# The task must be VALID before it can start; while NiFi reports it INVALID the resource stays
+# not-ready with reason ReportingTaskInvalid.
 apiVersion: nifi.controlnifi.io/v1alpha1
 kind: NiFiReportingTask
 metadata:
@@ -9,4 +14,9 @@ spec:
   scheduling:
     strategy: TIMER_DRIVEN
     period: 1 min
-  state: Disabled
+  properties:
+    Destination URL: https://nifi.example.com:8443
+    Input Port Name: status-in
+    Platform: nifi
+  state: Enabled
+  deletionPolicy: Delete

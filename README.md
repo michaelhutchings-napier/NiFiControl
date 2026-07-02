@@ -25,6 +25,9 @@ services, and high-level flow deployments.
 - CRDs, RBAC, samples, and a controller-runtime manager are available.
 - Registry clients, parameter contexts, process groups, controller services,
   processors, ports, connections, funnels, and labels reconcile against NiFi.
+- `NiFiReportingTask` manages a controller-level reporting task: it reconciles the task's type,
+  bundle, properties (including sensitive properties from Secrets), and scheduling, and
+  starts/stops it via NiFi's run-status endpoint (`state: Enabled`/`Disabled`).
 - Authorization is declarative on secured clusters: `NiFiUser`/`NiFiUserGroup` manage NiFi
   tenants and `NiFiPolicy` grants a `(resource, action)` to them — e.g. authorizing a metrics
   scrape identity. See [docs/authorization.md](docs/authorization.md).

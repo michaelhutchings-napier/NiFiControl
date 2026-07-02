@@ -386,8 +386,20 @@ func markConnectionWaitingForDependencies(ctx context.Context, c client.Client, 
 	return c.Status().Update(ctx, obj)
 }
 
-func markReportingTaskAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiReportingTask) error {
-	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
+func markReportingTaskReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiReportingTask, nifiID string, revisionVersion int64, validationStatus string) error {
+	obj.Status.CommonStatus.MarkReady(obj.Generation, "ReportingTaskReady", "The NiFi reporting task is reconciled.")
+	obj.Status.NiFiID = nifiID
+	obj.Status.Revision.Version = revisionVersion
+	obj.Status.ValidationStatus = validationStatus
+	obj.Status.Sync.LastError = ""
+	return c.Status().Update(ctx, obj)
+}
+
+func markReportingTaskNotReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiReportingTask, reason, message string) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, reason, message)
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.Sync.LastError = message
 	return c.Status().Update(ctx, obj)
 }
 

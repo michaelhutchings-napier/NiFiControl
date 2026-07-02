@@ -2479,7 +2479,15 @@ func (r *NiFiConnectionReconciler) reconcileExistingConnection(ctx context.Conte
 
 type NiFiReportingTaskReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme              *runtime.Scheme
+	ReportingTaskClient nifi.ReportingTaskClient
+}
+
+func (r *NiFiReportingTaskReconciler) reportingTaskClient() nifi.ReportingTaskClient {
+	if r.ReportingTaskClient != nil {
+		return r.ReportingTaskClient
+	}
+	return nifi.HTTPReportingTaskClient{}
 }
 
 func (r *NiFiReportingTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -2491,13 +2499,12 @@ func (r *NiFiReportingTaskReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 	if !instance.DeletionTimestamp.IsZero() {
-		_, err := removeFinalizer(ctx, r.Client, instance)
-		return ctrl.Result{}, err
+		return r.reconcileReportingTaskDelete(ctx, instance)
 	}
 	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
 		return ctrl.Result{}, err
 	}
-	waitingFor, err := clusterDependencyWaitingFor(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -2507,10 +2514,275 @@ func (r *NiFiReportingTaskReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 		return ctrl.Result{}, nil
 	}
-	if instance.Status.ObservedGeneration != instance.Generation || !instance.Status.Dependencies.Ready {
-		return ctrl.Result{}, markReportingTaskAccepted(ctx, r.Client, instance)
+
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		message := "Referenced NiFiCluster is ready but does not expose a NiFi API endpoint."
+		if shouldMarkReportingTaskNotReady(instance, "ClusterEndpointMissing", message) {
+			return ctrl.Result{}, markReportingTaskNotReady(ctx, r.Client, instance, "ClusterEndpointMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	entity, waitingFor, err := r.desiredReportingTask(ctx, instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markReportingTaskWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+
+	reportingTasks := r.reportingTaskClient()
+	if instance.Status.NiFiID != "" {
+		existing, err := reportingTasks.GetReportingTask(ctx, endpoint, instance.Status.NiFiID)
+		if err != nil && !nifi.IsNotFound(err) {
+			message := fmt.Sprintf("Failed to get NiFi reporting task: %v", err)
+			if shouldMarkReportingTaskNotReady(instance, "NiFiGetFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markReportingTaskNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if existing != nil {
+			return r.reconcileExistingReportingTask(ctx, instance, endpoint, reportingTasks, entity, existing)
+		}
+	}
+	if instance.Spec.AdoptionPolicy.Mode == nifiv1alpha1.AdoptionPolicyAdoptByID && instance.Spec.AdoptionPolicy.NiFiID != "" {
+		existing, err := reportingTasks.GetReportingTask(ctx, endpoint, instance.Spec.AdoptionPolicy.NiFiID)
+		if err != nil {
+			message := fmt.Sprintf("Failed to adopt NiFi reporting task: %v", err)
+			if shouldMarkReportingTaskNotReady(instance, "AdoptionFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markReportingTaskNotReady(ctx, r.Client, instance, "AdoptionFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if existing != nil {
+			return r.reconcileExistingReportingTask(ctx, instance, endpoint, reportingTasks, entity, existing)
+		}
+	}
+
+	created, err := reportingTasks.CreateReportingTask(ctx, endpoint, entity)
+	if err != nil {
+		message := fmt.Sprintf("Failed to create NiFi reporting task: %v", err)
+		if shouldMarkReportingTaskNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markReportingTaskNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	if created == nil {
+		message := "NiFi returned an empty reporting task response."
+		if shouldMarkReportingTaskNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markReportingTaskNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	// A freshly created task has no config drift; reconcileExistingReportingTask then applies the
+	// desired run state (a reporting task is created STOPPED).
+	return r.reconcileExistingReportingTask(ctx, instance, endpoint, reportingTasks, entity, created)
+}
+
+// reconcileExistingReportingTask brings an existing NiFi reporting task to the desired config and
+// run state. Config changes require the task to be STOPPED, so it is stopped first if running; the
+// desired run state (RUNNING/STOPPED) is then applied through the run-status endpoint.
+func (r *NiFiReportingTaskReconciler) reconcileExistingReportingTask(ctx context.Context, instance *nifiv1alpha1.NiFiReportingTask, endpoint string, reportingTasks nifi.ReportingTaskClient, desired nifi.ReportingTaskEntity, existing *nifi.ReportingTaskEntity) (ctrl.Result, error) {
+	nifiID := nifi.ReportingTaskEntityID(*existing)
+	current := existing
+
+	if reportingTaskNeedsUpdate(desired, *current) {
+		if current.Component.State == "RUNNING" {
+			stopped, err := reportingTasks.UpdateReportingTaskRunStatus(ctx, endpoint, nifiID, current.Revision.Version, "STOPPED")
+			if err != nil {
+				return r.reportingTaskWriteFailed(ctx, instance, "NiFiUpdateFailed", "stop", err)
+			}
+			if stopped != nil {
+				current = stopped
+			}
+		}
+		update := desired
+		update.ID = nifiID
+		update.Component.ID = nifiID
+		update.Revision.Version = current.Revision.Version
+		updated, err := reportingTasks.UpdateReportingTask(ctx, endpoint, update)
+		if err != nil {
+			return r.reportingTaskWriteFailed(ctx, instance, "NiFiUpdateFailed", "update", err)
+		}
+		if updated != nil {
+			current = updated
+		}
+	}
+
+	desiredState := nifi.ReportingTaskRunState(instance.Spec.State == nifiv1alpha1.RuntimeStateEnabled)
+	if desiredState == "RUNNING" {
+		switch current.Component.ValidationStatus {
+		case "INVALID":
+			message := "The reporting task is INVALID and cannot be started; check its properties and bundle."
+			if shouldMarkReportingTaskNotReady(instance, "ReportingTaskInvalid", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markReportingTaskNotReady(ctx, r.Client, instance, "ReportingTaskInvalid", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		case "VALIDATING":
+			// NiFi is still validating; re-check shortly before attempting to start.
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+	}
+	if current.Component.State != desiredState {
+		changed, err := reportingTasks.UpdateReportingTaskRunStatus(ctx, endpoint, nifiID, current.Revision.Version, desiredState)
+		if err != nil {
+			return r.reportingTaskWriteFailed(ctx, instance, "NiFiStateFailed", "set run state of", err)
+		}
+		if changed != nil {
+			current = changed
+		}
+	}
+
+	if !reportingTaskStatusMatches(instance, nifiID, current.Revision.Version, current.Component.ValidationStatus) {
+		return ctrl.Result{}, markReportingTaskReady(ctx, r.Client, instance, nifiID, current.Revision.Version, current.Component.ValidationStatus)
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *NiFiReportingTaskReconciler) reportingTaskWriteFailed(ctx context.Context, instance *nifiv1alpha1.NiFiReportingTask, reason, verb string, err error) (ctrl.Result, error) {
+	message := fmt.Sprintf("Failed to %s NiFi reporting task: %v", verb, err)
+	if shouldMarkReportingTaskNotReady(instance, reason, message) {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, markReportingTaskNotReady(ctx, r.Client, instance, reason, message)
+	}
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+func (r *NiFiReportingTaskReconciler) reconcileReportingTaskDelete(ctx context.Context, instance *nifiv1alpha1.NiFiReportingTask) (ctrl.Result, error) {
+	if instance.Spec.DeletionPolicy != nifiv1alpha1.DeletionPolicyDelete || instance.Status.NiFiID == "" {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	cluster, gone, err := clusterForDeletion(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if gone {
+		// The cluster (and its reporting task) is gone; nothing to delete remotely.
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	reportingTasks := r.reportingTaskClient()
+	// A running reporting task cannot be deleted; read it for the current revision, stop it if
+	// needed, then delete.
+	current, err := reportingTasks.GetReportingTask(ctx, endpoint, instance.Status.NiFiID)
+	if err != nil && !nifi.IsNotFound(err) {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	if current != nil {
+		revision := current.Revision.Version
+		if current.Component.State == "RUNNING" {
+			stopped, err := reportingTasks.UpdateReportingTaskRunStatus(ctx, endpoint, instance.Status.NiFiID, revision, "STOPPED")
+			if err != nil {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+			if stopped != nil {
+				revision = stopped.Revision.Version
+			}
+		}
+		if err := reportingTasks.DeleteReportingTask(ctx, endpoint, instance.Status.NiFiID, revision); err != nil && !nifi.IsNotFound(err) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		}
+	}
+	_, err = removeFinalizer(ctx, r.Client, instance)
+	return ctrl.Result{}, err
+}
+
+func (r *NiFiReportingTaskReconciler) desiredReportingTask(ctx context.Context, instance *nifiv1alpha1.NiFiReportingTask) (nifi.ReportingTaskEntity, []string, error) {
+	properties := make(map[string]string, len(instance.Spec.Properties)+len(instance.Spec.SensitiveProperties))
+	for key, value := range instance.Spec.Properties {
+		properties[key] = value
+	}
+	waitingFor := make([]string, 0)
+	for propertyName, source := range instance.Spec.SensitiveProperties {
+		if source.SecretKeyRef == nil {
+			waitingFor = append(waitingFor, fmt.Sprintf("sensitiveProperties.%s.secretKeyRef", propertyName))
+			continue
+		}
+		secretRef := source.SecretKeyRef
+		secret := &corev1.Secret{}
+		key := types.NamespacedName{Name: secretRef.Name, Namespace: instance.Namespace}
+		if err := r.Get(ctx, key, secret); err != nil {
+			if apierrors.IsNotFound(err) {
+				waitingFor = append(waitingFor, fmt.Sprintf("Secret/%s/%s", instance.Namespace, secretRef.Name))
+				continue
+			}
+			return nifi.ReportingTaskEntity{}, nil, err
+		}
+		data, ok := secret.Data[secretRef.Key]
+		if !ok {
+			if secretRef.Optional != nil && *secretRef.Optional {
+				properties[propertyName] = ""
+			} else {
+				waitingFor = append(waitingFor, fmt.Sprintf("Secret/%s/%s:%s", instance.Namespace, secretRef.Name, secretRef.Key))
+			}
+			continue
+		}
+		properties[propertyName] = string(data)
+	}
+	if len(properties) == 0 {
+		properties = nil
+	}
+
+	component := nifi.ReportingTaskComponent{
+		Name:               instance.Name,
+		Type:               instance.Spec.Type,
+		Properties:         properties,
+		SchedulingStrategy: instance.Spec.Scheduling.Strategy,
+		SchedulingPeriod:   instance.Spec.Scheduling.Period,
+	}
+	if instance.Spec.Bundle != nil {
+		component.Bundle = &nifi.Bundle{
+			Group:    instance.Spec.Bundle.Group,
+			Artifact: instance.Spec.Bundle.Artifact,
+			Version:  instance.Spec.Bundle.Version,
+		}
+	}
+	return nifi.ReportingTaskEntity{Revision: nifi.Revision{Version: 0}, Component: component}, waitingFor, nil
+}
+
+func reportingTaskNeedsUpdate(desired nifi.ReportingTaskEntity, existing nifi.ReportingTaskEntity) bool {
+	if desired.Component.Name != existing.Component.Name ||
+		desired.Component.Type != existing.Component.Type ||
+		desired.Component.SchedulingStrategy != "" && desired.Component.SchedulingStrategy != existing.Component.SchedulingStrategy ||
+		desired.Component.SchedulingPeriod != "" && desired.Component.SchedulingPeriod != existing.Component.SchedulingPeriod {
+		return true
+	}
+	if !nifiBundlesEqual(desired.Component.Bundle, existing.Component.Bundle) {
+		return true
+	}
+	return !stringMapsEqual(desired.Component.Properties, existing.Component.Properties)
+}
+
+func reportingTaskStatusMatches(instance *nifiv1alpha1.NiFiReportingTask, nifiID string, revisionVersion int64, validationStatus string) bool {
+	return instance.Status.ObservedGeneration == instance.Generation &&
+		instance.Status.Ready &&
+		instance.Status.Dependencies.Ready &&
+		instance.Status.NiFiID == nifiID &&
+		instance.Status.Revision.Version == revisionVersion &&
+		instance.Status.ValidationStatus == validationStatus
+}
+
+func shouldMarkReportingTaskNotReady(instance *nifiv1alpha1.NiFiReportingTask, reason, message string) bool {
+	if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Ready || instance.Status.Sync.LastError != message {
+		return true
+	}
+	for _, condition := range instance.Status.Conditions {
+		if condition.Type == string(nifiv1alpha1.ConditionReady) {
+			return condition.Reason != reason
+		}
+	}
+	return true
 }
 
 func (r *NiFiReportingTaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
