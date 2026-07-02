@@ -487,6 +487,36 @@ func clusterDependency(ctx context.Context, c client.Client, namespace string, r
 	return cluster, nil, nil
 }
 
+// clusterForDeletion resolves the referenced cluster for a finalizer/deletion flow. When the
+// cluster no longer exists — or is itself being deleted — its NiFi-side state is gone with it, so
+// gone=true tells the caller to drop its finalizer immediately rather than requeue forever
+// (which would deadlock namespace deletion when the cluster is deleted first). When the cluster
+// exists and is Ready it returns the cluster with its HTTP client configured; otherwise
+// (cluster==nil, gone==false) the cluster is not ready yet and the caller should retry.
+func clusterForDeletion(ctx context.Context, c client.Client, namespace string, ref nifiv1alpha1.ClusterReference) (*nifiv1alpha1.NiFiCluster, bool, error) {
+	if ref.Name == "" {
+		return nil, true, nil
+	}
+	cluster := &nifiv1alpha1.NiFiCluster{}
+	key := types.NamespacedName{Name: ref.Name, Namespace: clusterRefNamespace(namespace, ref)}
+	if err := c.Get(ctx, key, cluster); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, true, nil
+		}
+		return nil, false, err
+	}
+	if !cluster.DeletionTimestamp.IsZero() {
+		return nil, true, nil
+	}
+	if !cluster.Status.Ready {
+		return nil, false, nil
+	}
+	if err := configureClusterHTTPClient(ctx, c, cluster); err != nil {
+		return nil, false, err
+	}
+	return cluster, false, nil
+}
+
 func configureClusterHTTPClient(ctx context.Context, c client.Client, cluster *nifiv1alpha1.NiFiCluster) error {
 	endpoint := clusterEndpoint(cluster)
 	if endpoint == "" && resolvedClusterMode(cluster) == nifiv1alpha1.ClusterModeInternal {

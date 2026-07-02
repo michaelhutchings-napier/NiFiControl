@@ -6,6 +6,7 @@ import (
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/nifi"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -218,5 +219,81 @@ func TestNiFiUserGroupReconcileWaitsForMembers(t *testing.T) {
 	_ = k8sClient.Get(context.Background(), types.NamespacedName{Name: group.Name, Namespace: "default"}, got)
 	if got.Status.Dependencies.Ready {
 		t.Fatal("dependencies should not be ready while a member is not ready")
+	}
+}
+
+func TestNiFiUserGroupReconcileRejectsCrossClusterMember(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster() // "production"
+	// A Ready member, but bound to a different cluster than the group.
+	alice := &nifiv1alpha1.NiFiUser{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default", Generation: 1},
+		Spec:       nifiv1alpha1.NiFiUserSpec{ClusterRef: nifiv1alpha1.ClusterReference{Name: "other-cluster"}, Identity: "CN=alice"},
+		Status:     nifiv1alpha1.NiFiUserStatus{CommonStatus: nifiv1alpha1.CommonStatus{Ready: true, NiFiID: "u-alice", ObservedGeneration: 1}},
+	}
+	group := &nifiv1alpha1.NiFiUserGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "editors", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiUserGroupSpec{
+			ClusterRef: nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			Identity:   "editors",
+			Users:      []nifiv1alpha1.UserGroupMember{{UserRef: nifiv1alpha1.LocalObjectReference{Name: "alice"}}},
+		},
+	}
+	k8sClient := tenantTestClient(scheme, cluster, alice, group)
+	groups := &fakeUserGroupClient{}
+	r := &NiFiUserGroupReconciler{Client: k8sClient, Scheme: scheme, UserGroupClient: groups}
+	reconcileTwice(t, r, group.Name)
+
+	if len(groups.created) != 0 {
+		t.Fatalf("should not create a group with a cross-cluster member: %#v", groups.created)
+	}
+	got := &nifiv1alpha1.NiFiUserGroup{}
+	_ = k8sClient.Get(context.Background(), types.NamespacedName{Name: group.Name, Namespace: "default"}, got)
+	assertControllerCondition(t, got.Status.Conditions, nifiv1alpha1.ConditionReady, metav1.ConditionFalse, "MemberClusterMismatch")
+}
+
+func TestNiFiUserGroupRequestsForMemberUser(t *testing.T) {
+	scheme := testScheme()
+	editors := &nifiv1alpha1.NiFiUserGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "editors", Namespace: "default"},
+		Spec:       nifiv1alpha1.NiFiUserGroupSpec{Users: []nifiv1alpha1.UserGroupMember{{UserRef: nifiv1alpha1.LocalObjectReference{Name: "alice"}}}},
+	}
+	admins := &nifiv1alpha1.NiFiUserGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "admins", Namespace: "default"},
+		Spec:       nifiv1alpha1.NiFiUserGroupSpec{Users: []nifiv1alpha1.UserGroupMember{{UserRef: nifiv1alpha1.LocalObjectReference{Name: "bob"}}}},
+	}
+	k8sClient := tenantTestClient(scheme, editors, admins)
+	r := &NiFiUserGroupReconciler{Client: k8sClient, Scheme: scheme}
+
+	alice := &nifiv1alpha1.NiFiUser{ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"}}
+	reqs := r.requestsForMemberUser(context.Background(), alice)
+	if len(reqs) != 1 || reqs[0].Name != "editors" {
+		t.Fatalf("a change to user alice should enqueue only the editors group: %#v", reqs)
+	}
+}
+
+func TestNiFiUserDeleteDropsFinalizerWhenClusterGone(t *testing.T) {
+	scheme := testScheme()
+	// The user has been reconciled (has an id + finalizer) but its cluster no longer exists.
+	user := &nifiv1alpha1.NiFiUser{
+		ObjectMeta: metav1.ObjectMeta{Name: "scraper", Namespace: "default", Generation: 1, Finalizers: []string{NiFiControlFinalizer}},
+		Spec:       nifiv1alpha1.NiFiUserSpec{ClusterRef: nifiv1alpha1.ClusterReference{Name: "gone-cluster"}, Identity: "CN=scraper", DeletionPolicy: nifiv1alpha1.DeletionPolicyDelete},
+		Status:     nifiv1alpha1.NiFiUserStatus{CommonStatus: nifiv1alpha1.CommonStatus{Ready: true, NiFiID: "u-scraper", ObservedGeneration: 1}},
+	}
+	k8sClient := tenantTestClient(scheme, user) // no NiFiCluster object
+	users := &fakeUserClient{}
+	r := &NiFiUserReconciler{Client: k8sClient, Scheme: scheme, UserClient: users}
+
+	if err := k8sClient.Delete(context.Background(), user); err != nil {
+		t.Fatal(err)
+	}
+	reconcileTwice(t, r, user.Name)
+
+	got := &nifiv1alpha1.NiFiUser{}
+	if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: user.Name, Namespace: "default"}, got); !apierrors.IsNotFound(err) {
+		t.Fatalf("finalizer should be removed and the user deleted; got err=%v finalizers=%v", err, got.Finalizers)
+	}
+	if len(users.deleted) != 0 {
+		t.Fatalf("must not attempt a remote delete when the cluster is gone: %#v", users.deleted)
 	}
 }

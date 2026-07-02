@@ -71,6 +71,17 @@ func (r *NiFiPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	// NiFi permits exactly one access policy per (resource, action), so two NiFiPolicy CRs
+	// targeting the same tuple would fight over its tenant list. Enforce a single, deterministic
+	// owner; the losers report a conflict instead of overwriting each other's grants.
+	if owner := r.conflictingPolicyOwner(ctx, instance); owner != "" {
+		message := fmt.Sprintf("NiFiPolicy %q already manages the %q policy for %q; NiFi permits one access policy per (resource, action). Consolidate the userRefs/userGroupRefs into a single NiFiPolicy.", owner, instance.Spec.Action, instance.Spec.Resource)
+		if shouldMarkPolicyNotReady(instance, "PolicyConflict", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markPolicyNotReady(ctx, r.Client, instance, "PolicyConflict", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
 	userIDs, groupIDs, err := r.resolvePolicyTenants(ctx, instance)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -154,11 +165,16 @@ func (r *NiFiPolicyReconciler) reconcilePolicyDelete(ctx context.Context, instan
 		_, err := removeFinalizer(ctx, r.Client, instance)
 		return ctrl.Result{}, err
 	}
-	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, gone, err := clusterForDeletion(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(waitingFor) > 0 {
+	if gone {
+		// The cluster (and its NiFi access policy) is gone; nothing to delete remotely.
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	endpoint := clusterEndpoint(cluster)
@@ -232,6 +248,58 @@ func (r *NiFiPolicyReconciler) resolvePolicyTenants(ctx context.Context, instanc
 
 func policyNeedsUpdate(existing nifi.AccessPolicyEntity, desired nifi.AccessPolicyComponent) bool {
 	return !sameTenantSet(existing.Component.Users, desired.Users) || !sameTenantSet(existing.Component.UserGroups, desired.UserGroups)
+}
+
+// policyTupleKey identifies the single NiFi access policy a NiFiPolicy targets: its resolved
+// cluster plus the (action, resource) tuple. Two NiFiPolicy CRs sharing a key contend for the
+// same NiFi policy.
+func policyTupleKey(p *nifiv1alpha1.NiFiPolicy) string {
+	clusterNamespace := clusterRefNamespace(p.Namespace, p.Spec.ClusterRef)
+	return fmt.Sprintf("%s/%s|%s|%s", clusterNamespace, p.Spec.ClusterRef.Name, p.Spec.Action, p.Spec.Resource)
+}
+
+// samePolicy reports whether two NiFiPolicy objects are the same CR (namespaced name is unique).
+func samePolicy(a, b *nifiv1alpha1.NiFiPolicy) bool {
+	return a.Namespace == b.Namespace && a.Name == b.Name
+}
+
+// policyPrecedes gives a total, reconcile-order-independent ordering over policies contending for
+// a tuple: oldest first, then by namespace/name. Every controller instance therefore agrees on
+// the single owner.
+func policyPrecedes(a, b *nifiv1alpha1.NiFiPolicy) bool {
+	if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
+		return a.CreationTimestamp.Before(&b.CreationTimestamp)
+	}
+	if a.Namespace != b.Namespace {
+		return a.Namespace < b.Namespace
+	}
+	return a.Name < b.Name
+}
+
+// conflictingPolicyOwner returns the "namespace/name" of the NiFiPolicy that owns instance's
+// (cluster, resource, action) tuple when instance is not itself that owner, or "" when instance
+// is the sole/owning claimant. A transient list error fails open (returns "") so it never blocks
+// reconciliation on its own.
+func (r *NiFiPolicyReconciler) conflictingPolicyOwner(ctx context.Context, instance *nifiv1alpha1.NiFiPolicy) string {
+	list := &nifiv1alpha1.NiFiPolicyList{}
+	if err := r.List(ctx, list); err != nil {
+		return ""
+	}
+	key := policyTupleKey(instance)
+	owner := instance
+	for i := range list.Items {
+		other := &list.Items[i]
+		if samePolicy(other, instance) || !other.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if policyTupleKey(other) == key && policyPrecedes(other, owner) {
+			owner = other
+		}
+	}
+	if samePolicy(owner, instance) {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s", owner.Namespace, owner.Name)
 }
 
 func (r *NiFiPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {

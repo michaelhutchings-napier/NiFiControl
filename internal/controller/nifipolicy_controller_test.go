@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/nifi"
@@ -171,6 +172,48 @@ func TestNiFiPolicyReconcileCreatesWhenOnlyInheritedPolicyExists(t *testing.T) {
 	}
 	if policies.created[0].Component.Resource != "/process-groups/pg-1" {
 		t.Fatalf("created resource = %q", policies.created[0].Component.Resource)
+	}
+}
+
+func TestNiFiPolicyReconcileRejectsConflictingTuple(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	user := readyUser("scraper", "u-scraper", "CN=scraper")
+	tuple := func(name string, created int64) *nifiv1alpha1.NiFiPolicy {
+		return &nifiv1alpha1.NiFiPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: 1, CreationTimestamp: metav1.NewTime(time.Unix(created, 0))},
+			Spec: nifiv1alpha1.NiFiPolicySpec{
+				ClusterRef: nifiv1alpha1.ClusterReference{Name: cluster.Name},
+				Resource:   "/flow",
+				Action:     "read",
+				UserRefs:   []nifiv1alpha1.LocalObjectReference{{Name: "scraper"}},
+			},
+		}
+	}
+	owner := tuple("aaa-owner", 100)  // older -> owns the tuple
+	loser := tuple("zzz-loser", 200)  // newer -> must yield
+	k8sClient := policyTestClient(scheme, cluster, user, owner, loser)
+	policies := &fakeAccessPolicyClient{}
+	r := &NiFiPolicyReconciler{Client: k8sClient, Scheme: scheme, AccessPolicyClient: policies}
+
+	// The loser must not touch NiFi and must report a conflict.
+	reconcileTwice(t, r, loser.Name)
+	if len(policies.created) != 0 || len(policies.updated) != 0 {
+		t.Fatalf("loser must not write to NiFi: created=%#v updated=%#v", policies.created, policies.updated)
+	}
+	gotLoser := &nifiv1alpha1.NiFiPolicy{}
+	_ = k8sClient.Get(context.Background(), types.NamespacedName{Name: loser.Name, Namespace: "default"}, gotLoser)
+	assertControllerCondition(t, gotLoser.Status.Conditions, nifiv1alpha1.ConditionReady, metav1.ConditionFalse, "PolicyConflict")
+
+	// The owner reconciles normally.
+	reconcileTwice(t, r, owner.Name)
+	if len(policies.created) != 1 {
+		t.Fatalf("owner should create exactly one policy: %#v", policies.created)
+	}
+	gotOwner := &nifiv1alpha1.NiFiPolicy{}
+	_ = k8sClient.Get(context.Background(), types.NamespacedName{Name: owner.Name, Namespace: "default"}, gotOwner)
+	if !gotOwner.Status.Ready {
+		t.Fatalf("owner status = %+v", gotOwner.Status)
 	}
 }
 

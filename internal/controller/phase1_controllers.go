@@ -931,11 +931,16 @@ func (r *NiFiUserReconciler) reconcileUserDelete(ctx context.Context, instance *
 		_, err := removeFinalizer(ctx, r.Client, instance)
 		return ctrl.Result{}, err
 	}
-	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, gone, err := clusterForDeletion(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(waitingFor) > 0 {
+	if gone {
+		// The cluster (and its NiFi tenant) is gone; nothing to delete remotely.
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	endpoint := clusterEndpoint(cluster)
@@ -1003,6 +1008,21 @@ func (r *NiFiUserGroupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		message := "Referenced NiFiCluster is ready but does not expose a NiFi API endpoint."
 		if shouldMarkUserGroupNotReady(instance, "ClusterEndpointMissing", message) {
 			return ctrl.Result{}, markUserGroupNotReady(ctx, r.Client, instance, "ClusterEndpointMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	// A NiFi user group can only contain tenants from its own NiFi; a member NiFiUser bound to a
+	// different cluster has a NiFiID that is meaningless here, so reject it rather than adding a
+	// foreign id to the group.
+	mismatch, err := userGroupMemberClusterMismatch(ctx, r.Client, instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if mismatch != "" {
+		message := fmt.Sprintf("Member %q references a different NiFiCluster than the group; a NiFi user group can only contain users from its own cluster.", mismatch)
+		if shouldMarkUserGroupNotReady(instance, "MemberClusterMismatch", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markUserGroupNotReady(ctx, r.Client, instance, "MemberClusterMismatch", message)
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
@@ -1101,11 +1121,16 @@ func (r *NiFiUserGroupReconciler) reconcileUserGroupDelete(ctx context.Context, 
 		_, err := removeFinalizer(ctx, r.Client, instance)
 		return ctrl.Result{}, err
 	}
-	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, gone, err := clusterForDeletion(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(waitingFor) > 0 {
+	if gone {
+		// The cluster (and its NiFi user group) is gone; nothing to delete remotely.
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	endpoint := clusterEndpoint(cluster)
@@ -1126,7 +1151,33 @@ func (r *NiFiUserGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&nifiv1alpha1.NiFiUserGroup{}).
 		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCluster)).
+		Watches(&nifiv1alpha1.NiFiUser{}, handler.EnqueueRequestsFromMapFunc(r.requestsForMemberUser)).
 		Complete(r)
+}
+
+// requestsForMemberUser enqueues every NiFiUserGroup that lists the changed NiFiUser as a member,
+// so a group waiting on that user reconciles as soon as the user becomes Ready (a member change
+// would otherwise never trigger the group).
+func (r *NiFiUserGroupReconciler) requestsForMemberUser(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiUserGroupList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	var requests []reconcile.Request
+	for i := range list.Items {
+		group := &list.Items[i]
+		for _, member := range group.Spec.Users {
+			namespace := group.Namespace
+			if member.UserRef.Namespace != "" {
+				namespace = member.UserRef.Namespace
+			}
+			if member.UserRef.Name == obj.GetName() && namespace == obj.GetNamespace() {
+				requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: group.Name, Namespace: group.Namespace}})
+				break
+			}
+		}
+	}
+	return requests
 }
 
 type NiFiProcessGroupReconciler struct {
@@ -3434,6 +3485,33 @@ func userGroupMemberDependenciesWaitingFor(ctx context.Context, c client.Client,
 		}
 	}
 	return waitingFor
+}
+
+// userGroupMemberClusterMismatch returns the "namespace/name" of the first member NiFiUser whose
+// resolved ClusterRef differs from the group's, or "" when every member belongs to the group's
+// cluster. It is called only after the members are known to exist and be Ready.
+func userGroupMemberClusterMismatch(ctx context.Context, c client.Client, userGroup *nifiv1alpha1.NiFiUserGroup) (string, error) {
+	groupCluster := clusterRefIndexValue(userGroup.Namespace, userGroup.Spec.ClusterRef)
+	for _, member := range userGroup.Spec.Users {
+		if member.UserRef.Name == "" {
+			continue
+		}
+		namespace := userGroup.Namespace
+		if member.UserRef.Namespace != "" {
+			namespace = member.UserRef.Namespace
+		}
+		user := &nifiv1alpha1.NiFiUser{}
+		if err := c.Get(ctx, types.NamespacedName{Name: member.UserRef.Name, Namespace: namespace}, user); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return "", err
+		}
+		if clusterRefIndexValue(namespace, user.Spec.ClusterRef) != groupCluster {
+			return fmt.Sprintf("%s/%s", namespace, member.UserRef.Name), nil
+		}
+	}
+	return "", nil
 }
 
 func processGroupDependenciesWaitingFor(ctx context.Context, c client.Client, processGroup *nifiv1alpha1.NiFiProcessGroup) []string {
