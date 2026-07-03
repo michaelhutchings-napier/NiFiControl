@@ -262,11 +262,17 @@ func (r *NiFiRegistryClientReconciler) reconcileRegistryClientDelete(ctx context
 		_, err := removeFinalizer(ctx, r.Client, instance)
 		return ctrl.Result{}, err
 	}
-	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, gone, err := clusterForDeletion(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(waitingFor) > 0 {
+	if gone {
+		// The cluster (and this component with it) is gone; drop the finalizer instead of waiting
+		// forever for a cluster that will never return.
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	endpoint := cluster.Status.Endpoint
@@ -657,11 +663,17 @@ func (r *NiFiParameterContextReconciler) reconcileParameterContextDelete(ctx con
 		_, err := removeFinalizer(ctx, r.Client, instance)
 		return ctrl.Result{}, err
 	}
-	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, gone, err := clusterForDeletion(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(waitingFor) > 0 {
+	if gone {
+		// The cluster (and this component with it) is gone; drop the finalizer instead of waiting
+		// forever for a cluster that will never return.
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	endpoint := cluster.Status.Endpoint
@@ -1437,11 +1449,17 @@ func (r *NiFiProcessGroupReconciler) reconcileProcessGroupDelete(ctx context.Con
 		_, err := removeFinalizer(ctx, r.Client, instance)
 		return ctrl.Result{}, err
 	}
-	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, gone, err := clusterForDeletion(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(waitingFor) > 0 {
+	if gone {
+		// The cluster (and this component with it) is gone; drop the finalizer instead of waiting
+		// forever for a cluster that will never return.
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	endpoint := cluster.Status.Endpoint
@@ -1602,11 +1620,9 @@ func (r *NiFiControllerServiceReconciler) Reconcile(ctx context.Context, req ctr
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
-	nifiID := controllerServiceEntityID(*created)
-	if !controllerServiceStatusMatches(instance, nifiID, created.Revision.Version, created.Component.ValidationStatus) {
-		return ctrl.Result{}, markControllerServiceReady(ctx, r.Client, instance, nifiID, created.Revision.Version, created.Component.ValidationStatus)
-	}
-	return ctrl.Result{}, nil
+	// Route the freshly created (DISABLED) service through the existing-reconcile path so its desired
+	// enabled/disabled state is applied through the run-status endpoint.
+	return r.reconcileExistingControllerService(ctx, instance, endpoint, controllerServices, entity, created)
 }
 
 func (r *NiFiControllerServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -1626,11 +1642,17 @@ func (r *NiFiControllerServiceReconciler) reconcileControllerServiceDelete(ctx c
 		_, err := removeFinalizer(ctx, r.Client, instance)
 		return ctrl.Result{}, err
 	}
-	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, gone, err := clusterForDeletion(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(waitingFor) > 0 {
+	if gone {
+		// The cluster (and this component with it) is gone; drop the finalizer instead of waiting
+		// forever for a cluster that will never return.
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	endpoint := clusterEndpoint(cluster)
@@ -1641,8 +1663,26 @@ func (r *NiFiControllerServiceReconciler) reconcileControllerServiceDelete(ctx c
 	if controllerServices == nil {
 		controllerServices = nifi.HTTPControllerServiceClient{}
 	}
-	if err := controllerServices.DeleteControllerService(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil {
+	// An enabled controller service cannot be deleted; read it for the current revision, disable it
+	// if needed, then delete.
+	current, err := controllerServices.GetControllerService(ctx, endpoint, instance.Status.NiFiID)
+	if err != nil && !nifi.IsNotFound(err) {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	if current != nil {
+		revision := current.Revision.Version
+		if current.Component.State == "ENABLED" || current.Component.State == "ENABLING" {
+			disabled, err := controllerServices.UpdateControllerServiceRunStatus(ctx, endpoint, instance.Status.NiFiID, revision, "DISABLED")
+			if err != nil {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+			if disabled != nil {
+				revision = disabled.Revision.Version
+			}
+		}
+		if err := controllerServices.DeleteControllerService(ctx, endpoint, instance.Status.NiFiID, revision); err != nil && !nifi.IsNotFound(err) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		}
 	}
 	_, err = removeFinalizer(ctx, r.Client, instance)
 	return ctrl.Result{}, err
@@ -1657,28 +1697,78 @@ func (r *NiFiControllerServiceReconciler) reconcileExistingControllerService(ctx
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	nifiID := controllerServiceEntityID(*existing)
-	if controllerServiceNeedsUpdate(desired, *existing) {
+	current := existing
+	if controllerServiceNeedsUpdate(desired, *current) {
+		// NiFi requires the service DISABLED to change its config.
+		if current.Component.State == "ENABLED" || current.Component.State == "ENABLING" {
+			disabled, err := controllerServices.UpdateControllerServiceRunStatus(ctx, endpoint, nifiID, current.Revision.Version, "DISABLED")
+			if err != nil {
+				return r.controllerServiceWriteFailed(ctx, instance, "NiFiUpdateFailed", "disable", err)
+			}
+			if disabled != nil {
+				current = disabled
+			}
+		}
 		updateEntity := desired
 		updateEntity.ID = nifiID
 		updateEntity.Component.ID = nifiID
-		updateEntity.Revision.Version = existing.Revision.Version
+		updateEntity.Revision.Version = current.Revision.Version
 		updated, err := controllerServices.UpdateControllerService(ctx, endpoint, updateEntity)
 		if err != nil {
-			message := fmt.Sprintf("Failed to update NiFi controller service: %v", err)
-			if shouldMarkControllerServiceNotReady(instance, "NiFiUpdateFailed", message) {
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, markControllerServiceNotReady(ctx, r.Client, instance, "NiFiUpdateFailed", message)
-			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			return r.controllerServiceWriteFailed(ctx, instance, "NiFiUpdateFailed", "update", err)
 		}
 		if updated != nil {
-			nifiID = controllerServiceEntityID(*updated)
-			return ctrl.Result{}, markControllerServiceReady(ctx, r.Client, instance, nifiID, updated.Revision.Version, updated.Component.ValidationStatus)
+			current = updated
 		}
 	}
-	if !controllerServiceStatusMatches(instance, nifiID, existing.Revision.Version, existing.Component.ValidationStatus) {
-		return ctrl.Result{}, markControllerServiceReady(ctx, r.Client, instance, nifiID, existing.Revision.Version, existing.Component.ValidationStatus)
+
+	desiredState := nifiScheduledState(instance.Spec.State)
+	if desiredState != "" && !controllerServiceStateSatisfied(current.Component.State, desiredState) {
+		if desiredState == "ENABLED" {
+			switch current.Component.ValidationStatus {
+			case "INVALID":
+				message := "The controller service is INVALID and cannot be enabled; check its properties."
+				if shouldMarkControllerServiceNotReady(instance, "ControllerServiceInvalid", message) {
+					return ctrl.Result{RequeueAfter: 15 * time.Second}, markControllerServiceNotReady(ctx, r.Client, instance, "ControllerServiceInvalid", message)
+				}
+				return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+			case "VALIDATING":
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+		}
+		changed, err := controllerServices.UpdateControllerServiceRunStatus(ctx, endpoint, nifiID, current.Revision.Version, desiredState)
+		if err != nil {
+			return r.controllerServiceWriteFailed(ctx, instance, "NiFiStateFailed", "set state of", err)
+		}
+		if changed != nil {
+			current = changed
+		}
+	}
+
+	if !controllerServiceStatusMatches(instance, nifiID, current.Revision.Version, current.Component.ValidationStatus) {
+		return ctrl.Result{}, markControllerServiceReady(ctx, r.Client, instance, nifiID, current.Revision.Version, current.Component.ValidationStatus)
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *NiFiControllerServiceReconciler) controllerServiceWriteFailed(ctx context.Context, instance *nifiv1alpha1.NiFiControllerService, reason, verb string, err error) (ctrl.Result, error) {
+	message := fmt.Sprintf("Failed to %s NiFi controller service: %v", verb, err)
+	if shouldMarkControllerServiceNotReady(instance, reason, message) {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, markControllerServiceNotReady(ctx, r.Client, instance, reason, message)
+	}
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+// controllerServiceStateSatisfied treats the transient ENABLING/DISABLING states as already heading
+// to the desired ENABLED/DISABLED, so the operator does not re-issue run-status while NiFi settles.
+func controllerServiceStateSatisfied(current, desired string) bool {
+	switch desired {
+	case "ENABLED":
+		return current == "ENABLED" || current == "ENABLING"
+	case "DISABLED":
+		return current == "DISABLED" || current == "DISABLING"
+	}
+	return current == desired
 }
 
 type NiFiFlowBundleReconciler struct {
@@ -1878,11 +1968,17 @@ func (r *NiFiFlowDeploymentReconciler) reconcileFlowDeploymentDelete(ctx context
 		_, err := removeFinalizer(ctx, r.Client, instance)
 		return ctrl.Result{}, err
 	}
-	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, gone, err := clusterForDeletion(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(waitingFor) > 0 {
+	if gone {
+		// The cluster (and this component with it) is gone; drop the finalizer instead of waiting
+		// forever for a cluster that will never return.
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	endpoint := clusterEndpoint(cluster)
@@ -2031,11 +2127,9 @@ func (r *NiFiProcessorReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
-	nifiID := processorEntityID(*created)
-	if !processorStatusMatches(instance, nifiID, created.Revision.Version, parentID, created.Component.ValidationStatus) {
-		return ctrl.Result{}, markProcessorReady(ctx, r.Client, instance, nifiID, created.Revision.Version, parentID, created.Component.ValidationStatus)
-	}
-	return ctrl.Result{}, nil
+	// Route the freshly created (STOPPED) processor through the existing-reconcile path so its run
+	// state is applied through the run-status endpoint.
+	return r.reconcileExistingProcessor(ctx, instance, endpoint, processors, entity, created, parentID)
 }
 
 func (r *NiFiProcessorReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -2054,11 +2148,17 @@ func (r *NiFiProcessorReconciler) reconcileProcessorDelete(ctx context.Context, 
 		_, err := removeFinalizer(ctx, r.Client, instance)
 		return ctrl.Result{}, err
 	}
-	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, gone, err := clusterForDeletion(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(waitingFor) > 0 {
+	if gone {
+		// The cluster (and this component with it) is gone; drop the finalizer instead of waiting
+		// forever for a cluster that will never return.
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	endpoint := cluster.Status.Endpoint
@@ -2072,8 +2172,26 @@ func (r *NiFiProcessorReconciler) reconcileProcessorDelete(ctx context.Context, 
 	if processors == nil {
 		processors = nifi.HTTPProcessorClient{}
 	}
-	if err := processors.DeleteProcessor(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil {
+	// A running processor cannot be deleted; read it for the current revision, stop it if needed,
+	// then delete.
+	current, err := processors.GetProcessor(ctx, endpoint, instance.Status.NiFiID)
+	if err != nil && !nifi.IsNotFound(err) {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	if current != nil {
+		revision := current.Revision.Version
+		if current.Component.State == "RUNNING" {
+			stopped, err := processors.UpdateProcessorRunStatus(ctx, endpoint, instance.Status.NiFiID, revision, "STOPPED")
+			if err != nil {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+			if stopped != nil {
+				revision = stopped.Revision.Version
+			}
+		}
+		if err := processors.DeleteProcessor(ctx, endpoint, instance.Status.NiFiID, revision); err != nil && !nifi.IsNotFound(err) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		}
 	}
 	_, err = removeFinalizer(ctx, r.Client, instance)
 	return ctrl.Result{}, err
@@ -2088,28 +2206,66 @@ func (r *NiFiProcessorReconciler) reconcileExistingProcessor(ctx context.Context
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	nifiID := processorEntityID(*existing)
-	if processorNeedsUpdate(desired, *existing) {
+	current := existing
+	if processorNeedsUpdate(desired, *current) {
+		// NiFi requires the processor stopped to change its config.
+		if current.Component.State == "RUNNING" {
+			stopped, err := processors.UpdateProcessorRunStatus(ctx, endpoint, nifiID, current.Revision.Version, "STOPPED")
+			if err != nil {
+				return r.processorWriteFailed(ctx, instance, "NiFiUpdateFailed", "stop", err)
+			}
+			if stopped != nil {
+				current = stopped
+			}
+		}
 		updateEntity := desired
 		updateEntity.ID = nifiID
 		updateEntity.Component.ID = nifiID
-		updateEntity.Revision.Version = existing.Revision.Version
+		updateEntity.Revision.Version = current.Revision.Version
 		updated, err := processors.UpdateProcessor(ctx, endpoint, updateEntity)
 		if err != nil {
-			message := fmt.Sprintf("Failed to update NiFi processor: %v", err)
-			if shouldMarkProcessorNotReady(instance, "NiFiUpdateFailed", message) {
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, markProcessorNotReady(ctx, r.Client, instance, "NiFiUpdateFailed", message)
-			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			return r.processorWriteFailed(ctx, instance, "NiFiUpdateFailed", "update", err)
 		}
 		if updated != nil {
-			nifiID = processorEntityID(*updated)
-			return ctrl.Result{}, markProcessorReady(ctx, r.Client, instance, nifiID, updated.Revision.Version, parentID, updated.Component.ValidationStatus)
+			current = updated
 		}
 	}
-	if !processorStatusMatches(instance, nifiID, existing.Revision.Version, parentID, existing.Component.ValidationStatus) {
-		return ctrl.Result{}, markProcessorReady(ctx, r.Client, instance, nifiID, existing.Revision.Version, parentID, existing.Component.ValidationStatus)
+
+	desiredState := nifiScheduledState(instance.Spec.State)
+	if desiredState != "" && current.Component.State != desiredState {
+		if desiredState == "RUNNING" {
+			switch current.Component.ValidationStatus {
+			case "INVALID":
+				message := "The processor is INVALID and cannot be started; check its properties, relationships, and referenced services."
+				if shouldMarkProcessorNotReady(instance, "ProcessorInvalid", message) {
+					return ctrl.Result{RequeueAfter: 15 * time.Second}, markProcessorNotReady(ctx, r.Client, instance, "ProcessorInvalid", message)
+				}
+				return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+			case "VALIDATING":
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+		}
+		changed, err := processors.UpdateProcessorRunStatus(ctx, endpoint, nifiID, current.Revision.Version, desiredState)
+		if err != nil {
+			return r.processorWriteFailed(ctx, instance, "NiFiStateFailed", "set run state of", err)
+		}
+		if changed != nil {
+			current = changed
+		}
+	}
+
+	if !processorStatusMatches(instance, nifiID, current.Revision.Version, parentID, current.Component.ValidationStatus) {
+		return ctrl.Result{}, markProcessorReady(ctx, r.Client, instance, nifiID, current.Revision.Version, parentID, current.Component.ValidationStatus)
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *NiFiProcessorReconciler) processorWriteFailed(ctx context.Context, instance *nifiv1alpha1.NiFiProcessor, reason, verb string, err error) (ctrl.Result, error) {
+	message := fmt.Sprintf("Failed to %s NiFi processor: %v", verb, err)
+	if shouldMarkProcessorNotReady(instance, reason, message) {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, markProcessorNotReady(ctx, r.Client, instance, reason, message)
+	}
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
 type NiFiInputPortReconciler struct {
@@ -2215,11 +2371,17 @@ func (r *NiFiInputPortReconciler) reconcileInputPortDelete(ctx context.Context, 
 		_, err := removeFinalizer(ctx, r.Client, instance)
 		return ctrl.Result{}, err
 	}
-	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, gone, err := clusterForDeletion(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(waitingFor) > 0 {
+	if gone {
+		// The cluster (and this component with it) is gone; drop the finalizer instead of waiting
+		// forever for a cluster that will never return.
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	endpoint := clusterEndpoint(cluster)
@@ -2400,11 +2562,17 @@ func (r *NiFiOutputPortReconciler) reconcileOutputPortDelete(ctx context.Context
 		_, err := removeFinalizer(ctx, r.Client, instance)
 		return ctrl.Result{}, err
 	}
-	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, gone, err := clusterForDeletion(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(waitingFor) > 0 {
+	if gone {
+		// The cluster (and this component with it) is gone; drop the finalizer instead of waiting
+		// forever for a cluster that will never return.
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	endpoint := clusterEndpoint(cluster)
@@ -2620,11 +2788,17 @@ func (r *NiFiConnectionReconciler) reconcileConnectionDelete(ctx context.Context
 		_, err := removeFinalizer(ctx, r.Client, instance)
 		return ctrl.Result{}, err
 	}
-	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, gone, err := clusterForDeletion(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(waitingFor) > 0 {
+	if gone {
+		// The cluster (and this component with it) is gone; drop the finalizer instead of waiting
+		// forever for a cluster that will never return.
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	endpoint := clusterEndpoint(cluster)
@@ -3098,11 +3272,17 @@ func (r *NiFiFunnelReconciler) reconcileFunnelDelete(ctx context.Context, instan
 		_, err := removeFinalizer(ctx, r.Client, instance)
 		return ctrl.Result{}, err
 	}
-	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, gone, err := clusterForDeletion(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(waitingFor) > 0 {
+	if gone {
+		// The cluster (and this component with it) is gone; drop the finalizer instead of waiting
+		// forever for a cluster that will never return.
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	endpoint := clusterEndpoint(cluster)
@@ -3258,11 +3438,17 @@ func (r *NiFiLabelReconciler) reconcileLabelDelete(ctx context.Context, instance
 		_, err := removeFinalizer(ctx, r.Client, instance)
 		return ctrl.Result{}, err
 	}
-	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	cluster, gone, err := clusterForDeletion(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(waitingFor) > 0 {
+	if gone {
+		// The cluster (and this component with it) is gone; drop the finalizer instead of waiting
+		// forever for a cluster that will never return.
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	endpoint := clusterEndpoint(cluster)
@@ -4191,12 +4377,13 @@ func (r *NiFiControllerServiceReconciler) desiredControllerService(ctx context.C
 		properties = nil
 	}
 
+	// State is intentionally omitted: a controller service is enabled/disabled through the
+	// run-status endpoint, not a component write.
 	component := nifi.ControllerServiceComponent{
 		ParentGroupID: parentID,
 		Name:          controllerService.Name,
 		Type:          controllerService.Spec.Type,
 		Properties:    properties,
-		State:         nifiScheduledState(controllerService.Spec.State),
 	}
 	if controllerService.Spec.Bundle != nil {
 		component.Bundle = &nifi.Bundle{
@@ -4219,10 +4406,11 @@ func controllerServiceEntityID(entity nifi.ControllerServiceEntity) string {
 }
 
 func controllerServiceNeedsUpdate(desired nifi.ControllerServiceEntity, existing nifi.ControllerServiceEntity) bool {
+	// Enabled/disabled state is reconciled separately via the run-status endpoint, so it is
+	// excluded here.
 	if desired.Component.Name != existing.Component.Name ||
 		desired.Component.Type != existing.Component.Type ||
-		desired.Component.ParentGroupID != "" && desired.Component.ParentGroupID != existing.Component.ParentGroupID ||
-		desired.Component.State != "" && desired.Component.State != existing.Component.State {
+		desired.Component.ParentGroupID != "" && desired.Component.ParentGroupID != existing.Component.ParentGroupID {
 		return true
 	}
 	if !nifiBundlesEqual(desired.Component.Bundle, existing.Component.Bundle) {
@@ -4390,11 +4578,12 @@ func processorDependenciesWaitingFor(ctx context.Context, c client.Client, proce
 }
 
 func desiredProcessor(processor *nifiv1alpha1.NiFiProcessor, parentID string) nifi.ProcessorEntity {
+	// State is intentionally omitted: a processor's run state is changed through the run-status
+	// endpoint, not a component write (NiFi rejects a run-state change made via a component PUT).
 	component := nifi.ProcessorComponent{
 		ParentGroupID: parentID,
 		Name:          processorDisplayName(processor),
 		Type:          processor.Spec.Type,
-		State:         nifiScheduledState(processor.Spec.State),
 		Config: nifi.ProcessorConfig{
 			Properties:                       processor.Spec.Properties,
 			SchedulingStrategy:               processor.Spec.Scheduling.Strategy,
@@ -4438,10 +4627,10 @@ func processorEntityID(entity nifi.ProcessorEntity) string {
 }
 
 func processorNeedsUpdate(desired nifi.ProcessorEntity, existing nifi.ProcessorEntity) bool {
+	// Run state is reconciled separately via the run-status endpoint, so it is excluded here.
 	if desired.Component.Name != existing.Component.Name ||
 		desired.Component.Type != existing.Component.Type ||
-		desired.Component.ParentGroupID != "" && desired.Component.ParentGroupID != existing.Component.ParentGroupID ||
-		desired.Component.State != "" && desired.Component.State != existing.Component.State {
+		desired.Component.ParentGroupID != "" && desired.Component.ParentGroupID != existing.Component.ParentGroupID {
 		return true
 	}
 	if !nifiPositionsEqual(desired.Component.Position, existing.Component.Position) {

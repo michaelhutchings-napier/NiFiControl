@@ -9,6 +9,7 @@ import (
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/flowartifact"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/nifi"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -139,11 +140,28 @@ func (f *fakeProcessGroupClient) DeleteProcessGroup(ctx context.Context, baseURI
 }
 
 type fakeControllerServiceClient struct {
-	entities []nifi.ControllerServiceEntity
-	created  []nifi.ControllerServiceEntity
-	updated  []nifi.ControllerServiceEntity
-	deleted  []string
-	err      error
+	entities  []nifi.ControllerServiceEntity
+	created   []nifi.ControllerServiceEntity
+	updated   []nifi.ControllerServiceEntity
+	deleted   []string
+	runStatus []string
+	err       error
+}
+
+func (f *fakeControllerServiceClient) UpdateControllerServiceRunStatus(ctx context.Context, baseURI string, id string, revisionVersion int64, state string) (*nifi.ControllerServiceEntity, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.runStatus = append(f.runStatus, state)
+	for i := range f.entities {
+		if controllerServiceEntityID(f.entities[i]) == id {
+			f.entities[i].Component.State = state
+			f.entities[i].Revision.Version = revisionVersion + 1
+			e := f.entities[i]
+			return &e, nil
+		}
+	}
+	return &nifi.ControllerServiceEntity{ID: id, Revision: nifi.Revision{Version: revisionVersion + 1}, Component: nifi.ControllerServiceComponent{ID: id, State: state, ValidationStatus: "VALID"}}, nil
 }
 
 func (f *fakeControllerServiceClient) GetControllerService(ctx context.Context, baseURI string, id string) (*nifi.ControllerServiceEntity, error) {
@@ -193,11 +211,28 @@ func (f *fakeControllerServiceClient) DeleteControllerService(ctx context.Contex
 }
 
 type fakeProcessorClient struct {
-	entities []nifi.ProcessorEntity
-	created  []nifi.ProcessorEntity
-	updated  []nifi.ProcessorEntity
-	deleted  []string
-	err      error
+	entities  []nifi.ProcessorEntity
+	created   []nifi.ProcessorEntity
+	updated   []nifi.ProcessorEntity
+	deleted   []string
+	runStatus []string
+	err       error
+}
+
+func (f *fakeProcessorClient) UpdateProcessorRunStatus(ctx context.Context, baseURI string, id string, revisionVersion int64, state string) (*nifi.ProcessorEntity, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.runStatus = append(f.runStatus, state)
+	for i := range f.entities {
+		if processorEntityID(f.entities[i]) == id {
+			f.entities[i].Component.State = state
+			f.entities[i].Revision.Version = revisionVersion + 1
+			e := f.entities[i]
+			return &e, nil
+		}
+	}
+	return &nifi.ProcessorEntity{ID: id, Revision: nifi.Revision{Version: revisionVersion + 1}, Component: nifi.ProcessorComponent{ID: id, State: state, ValidationStatus: "VALID"}}, nil
 }
 
 func (f *fakeProcessorClient) GetProcessor(ctx context.Context, baseURI string, id string) (*nifi.ProcessorEntity, error) {
@@ -248,6 +283,7 @@ func (f *fakeProcessorClient) DeleteProcessor(ctx context.Context, baseURI strin
 
 type fakeFunnelClient struct {
 	created []nifi.FunnelEntity
+	deleted []string
 	err     error
 }
 
@@ -272,6 +308,7 @@ func (f *fakeFunnelClient) UpdateFunnel(ctx context.Context, baseURI string, ent
 }
 
 func (f *fakeFunnelClient) DeleteFunnel(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	f.deleted = append(f.deleted, id)
 	return f.err
 }
 
@@ -490,6 +527,73 @@ func TestNiFiProcessorReconcileCreatesProcessor(t *testing.T) {
 	}
 	if current.Status.ValidationStatus != "VALID" {
 		t.Fatalf("validation status = %q, want VALID", current.Status.ValidationStatus)
+	}
+}
+
+func TestNiFiProcessorReconcileStartsViaRunStatus(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	parent := readyTestProcessGroup("payments", "pg-payments")
+	processor := &nifiv1alpha1.NiFiProcessor{
+		ObjectMeta: metav1.ObjectMeta{Name: "gen", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiProcessorSpec{
+			ClusterRef:            nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			ParentProcessGroupRef: nifiv1alpha1.ProcessGroupReference{Name: parent.Name},
+			Type:                  "org.apache.nifi.processors.standard.GenerateFlowFile",
+			State:                 nifiv1alpha1.RuntimeStateRunning,
+		},
+	}
+	k8sClient := newCanvasTestClient(scheme, cluster, parent, processor)
+	nifiClient := &fakeProcessorClient{}
+	reconciler := &NiFiProcessorReconciler{Client: k8sClient, Scheme: scheme, ProcessorClient: nifiClient}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: processor.Name, Namespace: processor.Namespace}}
+
+	reconcileProcessorTwice(t, reconciler, request)
+
+	// Run state must go through the run-status endpoint, never the component create/update body.
+	if len(nifiClient.created) == 0 || nifiClient.created[0].Component.State != "" {
+		t.Fatalf("component create must not carry run state: %#v", nifiClient.created)
+	}
+	if len(nifiClient.runStatus) == 0 || nifiClient.runStatus[len(nifiClient.runStatus)-1] != "RUNNING" {
+		t.Fatalf("processor should be started via run-status: %#v", nifiClient.runStatus)
+	}
+	current := &nifiv1alpha1.NiFiProcessor{}
+	_ = k8sClient.Get(context.Background(), request.NamespacedName, current)
+	if !current.Status.Ready {
+		t.Fatalf("status = %+v", current.Status)
+	}
+}
+
+func TestNiFiControllerServiceReconcileEnablesViaRunStatus(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	parent := readyTestProcessGroup("payments", "pg-payments")
+	cs := &nifiv1alpha1.NiFiControllerService{
+		ObjectMeta: metav1.ObjectMeta{Name: "dbcp", Namespace: "default", Generation: 1},
+		Spec: nifiv1alpha1.NiFiControllerServiceSpec{
+			ClusterRef:            nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			ParentProcessGroupRef: nifiv1alpha1.ProcessGroupReference{Name: parent.Name},
+			Type:                  "org.apache.nifi.dbcp.DBCPConnectionPool",
+			State:                 nifiv1alpha1.RuntimeStateEnabled,
+		},
+	}
+	k8sClient := newCanvasTestClient(scheme, cluster, parent, cs)
+	nifiClient := &fakeControllerServiceClient{}
+	reconciler := &NiFiControllerServiceReconciler{Client: k8sClient, Scheme: scheme, ControllerServiceClient: nifiClient}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: cs.Name, Namespace: cs.Namespace}}
+
+	reconcileControllerServiceTwice(t, reconciler, request)
+
+	if len(nifiClient.created) == 0 || nifiClient.created[0].Component.State != "" {
+		t.Fatalf("component create must not carry run state: %#v", nifiClient.created)
+	}
+	if len(nifiClient.runStatus) == 0 || nifiClient.runStatus[len(nifiClient.runStatus)-1] != "ENABLED" {
+		t.Fatalf("controller service should be enabled via run-status: %#v", nifiClient.runStatus)
+	}
+	current := &nifiv1alpha1.NiFiControllerService{}
+	_ = k8sClient.Get(context.Background(), request.NamespacedName, current)
+	if !current.Status.Ready {
+		t.Fatalf("status = %+v", current.Status)
 	}
 }
 
@@ -936,6 +1040,38 @@ func TestNiFiFunnelReconcileCreatesFunnel(t *testing.T) {
 	}
 	if !current.Status.Ready || current.Status.NiFiID != "funnel-created" {
 		t.Fatalf("status ready/id = %v/%q, want true/funnel-created", current.Status.Ready, current.Status.NiFiID)
+	}
+}
+
+func TestNiFiFunnelDeleteDropsFinalizerWhenClusterGone(t *testing.T) {
+	scheme := testScheme()
+	// No NiFiCluster object exists, so clusterForDeletion reports the cluster gone.
+	funnel := &nifiv1alpha1.NiFiFunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "orphan", Namespace: "default", Generation: 1, Finalizers: []string{NiFiControlFinalizer}},
+		Spec: nifiv1alpha1.NiFiFunnelSpec{
+			ClusterRef:     nifiv1alpha1.ClusterReference{Name: "gone-cluster"},
+			DeletionPolicy: nifiv1alpha1.DeletionPolicyDelete,
+		},
+		Status: nifiv1alpha1.NiFiFunnelStatus{CommonStatus: nifiv1alpha1.CommonStatus{NiFiID: "funnel-1"}},
+	}
+	k8sClient := newCanvasTestClient(scheme, funnel)
+	nifiClient := &fakeFunnelClient{}
+	reconciler := &NiFiFunnelReconciler{Client: k8sClient, Scheme: scheme, FunnelClient: nifiClient}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: funnel.Name, Namespace: funnel.Namespace}}
+
+	if err := k8sClient.Delete(context.Background(), funnel); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+
+	got := &nifiv1alpha1.NiFiFunnel{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, got); !apierrors.IsNotFound(err) {
+		t.Fatalf("finalizer must be dropped when the cluster is gone (no deadlock); got err=%v finalizers=%v", err, got.Finalizers)
+	}
+	if len(nifiClient.deleted) != 0 {
+		t.Fatalf("must not call NiFi delete when the cluster is gone: %#v", nifiClient.deleted)
 	}
 }
 

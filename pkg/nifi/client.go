@@ -82,6 +82,9 @@ type ControllerServiceClient interface {
 	GetControllerService(ctx context.Context, baseURI string, id string) (*ControllerServiceEntity, error)
 	CreateControllerService(ctx context.Context, baseURI string, parentID string, entity ControllerServiceEntity) (*ControllerServiceEntity, error)
 	UpdateControllerService(ctx context.Context, baseURI string, entity ControllerServiceEntity) (*ControllerServiceEntity, error)
+	// UpdateControllerServiceRunStatus enables or disables a controller service (state ENABLED or
+	// DISABLED) through the dedicated run-status endpoint.
+	UpdateControllerServiceRunStatus(ctx context.Context, baseURI string, id string, revisionVersion int64, state string) (*ControllerServiceEntity, error)
 	DeleteControllerService(ctx context.Context, baseURI string, id string, revisionVersion int64) error
 }
 
@@ -89,6 +92,9 @@ type ProcessorClient interface {
 	GetProcessor(ctx context.Context, baseURI string, id string) (*ProcessorEntity, error)
 	CreateProcessor(ctx context.Context, baseURI string, parentID string, entity ProcessorEntity) (*ProcessorEntity, error)
 	UpdateProcessor(ctx context.Context, baseURI string, entity ProcessorEntity) (*ProcessorEntity, error)
+	// UpdateProcessorRunStatus starts or stops a processor (state RUNNING/STOPPED/DISABLED) through
+	// the dedicated run-status endpoint.
+	UpdateProcessorRunStatus(ctx context.Context, baseURI string, id string, revisionVersion int64, state string) (*ProcessorEntity, error)
 	DeleteProcessor(ctx context.Context, baseURI string, id string, revisionVersion int64) error
 }
 
@@ -405,6 +411,20 @@ type PortComponent struct {
 
 // PortRunStatusEntity changes a port's run state (RUNNING/STOPPED/DISABLED).
 type PortRunStatusEntity struct {
+	Revision                     Revision `json:"revision"`
+	State                        string   `json:"state"`
+	DisconnectedNodeAcknowledged bool     `json:"disconnectedNodeAcknowledged,omitempty"`
+}
+
+// ProcessorRunStatusEntity changes a processor's run state (RUNNING/STOPPED/DISABLED).
+type ProcessorRunStatusEntity struct {
+	Revision                     Revision `json:"revision"`
+	State                        string   `json:"state"`
+	DisconnectedNodeAcknowledged bool     `json:"disconnectedNodeAcknowledged,omitempty"`
+}
+
+// ControllerServiceRunStatusEntity enables or disables a controller service (ENABLED/DISABLED).
+type ControllerServiceRunStatusEntity struct {
 	Revision                     Revision `json:"revision"`
 	State                        string   `json:"state"`
 	DisconnectedNodeAcknowledged bool     `json:"disconnectedNodeAcknowledged,omitempty"`
@@ -781,6 +801,19 @@ func (c HTTPControllerServiceClient) UpdateControllerService(ctx context.Context
 	return &response, nil
 }
 
+func (c HTTPControllerServiceClient) UpdateControllerServiceRunStatus(ctx context.Context, baseURI string, id string, revisionVersion int64, state string) (*ControllerServiceEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/controller-services/%s/run-status", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+	body := ControllerServiceRunStatusEntity{Revision: Revision{Version: revisionVersion}, State: state}
+	var response ControllerServiceEntity
+	if err := c.doJSON(ctx, http.MethodPut, endpoint, body, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
 func (c HTTPControllerServiceClient) DeleteControllerService(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
 	endpoint, err := apiURL(baseURI, fmt.Sprintf("/controller-services/%s", url.PathEscape(id)))
 	if err != nil {
@@ -829,6 +862,19 @@ func (c HTTPProcessorClient) UpdateProcessor(ctx context.Context, baseURI string
 
 	var response ProcessorEntity
 	if err := c.doJSON(ctx, http.MethodPut, endpoint, entity, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c HTTPProcessorClient) UpdateProcessorRunStatus(ctx context.Context, baseURI string, id string, revisionVersion int64, state string) (*ProcessorEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/processors/%s/run-status", url.PathEscape(id)))
+	if err != nil {
+		return nil, err
+	}
+	body := ProcessorRunStatusEntity{Revision: Revision{Version: revisionVersion}, State: state}
+	var response ProcessorEntity
+	if err := c.doJSON(ctx, http.MethodPut, endpoint, body, &response); err != nil {
 		return nil, err
 	}
 	return &response, nil
