@@ -54,9 +54,12 @@ services, and high-level flow deployments.
   operator chart can scrape the operator itself), while controllers emit Events on provision,
   scale/offload, and backup/restore transitions. See
   [docs/observability.md](docs/observability.md).
-- Public Git repositories, OCI images, and NiFi Registry sources fetch and
-  materialize full snapshots. Authenticated source credentials remain under
-  development.
+- Public and private Git repositories, OCI images, and NiFi Registry sources fetch
+  and materialize full snapshots. Private sources authenticate with credentials read
+  from Secrets (see [TLS And Credentials](#tls-and-credentials)): HTTPS Git with a
+  token or username/password, private OCI registries, and token- or basic-authenticated
+  NiFi Registry, each with an optional custom CA. SSH Git remotes and
+  client-certificate/OIDC Registry auth are not yet supported.
 
 ## Full Flow Snapshots
 
@@ -112,7 +115,10 @@ Git, OCI, and NiFi Registry sources accept `credentials` with
 `usernameSecretKeyRef`, `passwordSecretKeyRef`, `tokenSecretKeyRef`, and
 `caSecretKeyRef`. Configure either a token or a username/password pair.
 `insecureSkipVerify` is available for controlled development environments.
-Referenced Secret changes automatically trigger reconciliation.
+Referenced Secret changes automatically trigger reconciliation. Authentication is
+over HTTPS: Git uses HTTP basic auth (a token is sent as the password), OCI uses
+standard registry auth, and NiFi Registry uses a bearer token or basic auth. SSH
+Git remotes and client-certificate/OIDC Registry authentication are not supported.
 
 ### Managed internal HTTPS and mTLS
 
