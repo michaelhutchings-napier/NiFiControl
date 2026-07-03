@@ -1,6 +1,7 @@
 # NiFiControl
 
 [![CI](https://github.com/michaelhutchings-napier/NiFiControl/actions/workflows/ci.yaml/badge.svg)](https://github.com/michaelhutchings-napier/NiFiControl/actions/workflows/ci.yaml)
+[![E2E (kind)](https://github.com/michaelhutchings-napier/NiFiControl/actions/workflows/e2e.yaml/badge.svg)](https://github.com/michaelhutchings-napier/NiFiControl/actions/workflows/e2e.yaml)
 
 NiFiControl is a declarative Kubernetes control plane for Apache NiFi.
 
@@ -229,7 +230,18 @@ Install the CRDs and controller manifests with:
 kubectl apply -k config/default
 ```
 
-Install with Helm:
+Install with Helm from a published release (recommended). Each `vX.Y.Z` tag publishes a
+multi-architecture operator image and the charts to GHCR:
+
+```bash
+helm install nificontrol oci://ghcr.io/michaelhutchings-napier/charts/nificontrol \
+  --namespace nificontrol-system \
+  --create-namespace \
+  --version X.Y.Z
+```
+
+The released chart pins `image.tag` to the same version, so it pulls a matching operator image. Or
+install from a checkout of this repository (build and load your own image for development):
 
 ```bash
 helm upgrade --install nificontrol ./charts/nificontrol \
@@ -271,6 +283,15 @@ The [CI workflow](.github/workflows/ci.yaml) runs on every push and pull request
 RBAC, and deepcopy code to confirm the committed manifests are up to date, and runs
 `make helm-verify`. This is the same gate expected before each change is committed.
 
+The [E2E workflow](.github/workflows/e2e.yaml) runs the kind-based integration harnesses (real
+Apache NiFi, and cert-manager where relevant) nightly and on demand — the live checks that
+exercise the operator against actual NiFi. Heavier multi-node and KEDA/Prometheus harnesses are run
+locally with their `make integration-*-kind` targets.
+
+The [Release workflow](.github/workflows/release.yaml) runs on a `vX.Y.Z` tag: it builds and pushes
+the multi-architecture operator image and the Helm charts to GHCR, and creates a GitHub Release with
+the packaged charts attached.
+
 ## License
 
-NiFiControl is licensed under the [Apache License 2.0](LICENSE).
+NiFiControl is licensed under the [Apache License 2.0](LICENSE); see also [NOTICE](NOTICE).

@@ -1,0 +1,48 @@
+name: E2E (kind)
+
+# The kind harnesses stand up real Apache NiFi (and, where relevant, cert-manager) and drive the
+# operator end to end. They are heavy (each pulls the ~1.5GB NiFi image and runs live NiFi), so they
+# run nightly and on demand rather than on every push. The matrix covers the self-contained,
+# single-cluster (or paired single-node) harnesses; the multi-node and KEDA/Prometheus harnesses are
+# run locally via their `make integration-*-kind` targets.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - integration-registry-kind
+          - integration-reportingtask-kind
+          - integration-authz-kind
+          - integration-bluegreen-kind
+          - integration-remoteprocessgroup-kind
+          - integration-remoteprocessgroup-s2s-kind
+          - integration-remoteprocessgroup-s2s-tls-kind
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: azure/setup-helm@v4
+      - uses: azure/setup-kubectl@v4
+      - name: Install kind
+        run: |
+          curl -fsSLo ./kind https://kind.sigs.k8s.io/dl/v0.23.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+      - name: Run ${{ matrix.target }}
+        env:
+          KIND_DELETE: "1"
+        run: make ${{ matrix.target }}
