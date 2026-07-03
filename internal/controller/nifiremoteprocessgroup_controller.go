@@ -183,6 +183,10 @@ func (r *NiFiRemoteProcessGroupReconciler) reconcileExistingRemoteProcessGroup(c
 	nifiID := nifi.RemoteProcessGroupEntityID(*existing)
 	current := existing
 
+	// componentDrift is set when NiFi's RPG config diverges from desired and driftPolicy is Warn:
+	// the divergence is reported after ports are reconciled (ports are separately-managed state, so
+	// they keep being managed even while the component config is left as-is).
+	var componentDrift []string
 	if remoteProcessGroupNeedsUpdate(desired, *current) {
 		// A spec change (generation moved past the last observed one) is a desired-state change and
 		// is always applied. driftPolicy only governs config that diverges in NiFi while the spec is
@@ -192,15 +196,8 @@ func (r *NiFiRemoteProcessGroupReconciler) reconcileExistingRemoteProcessGroup(c
 		if driftMode == "" {
 			driftMode = nifiv1alpha1.DriftPolicyWarn
 		}
-		if !specChanged && driftMode != nifiv1alpha1.DriftPolicyReconcile {
-			if driftMode == nifiv1alpha1.DriftPolicyIgnore {
-				// Tolerate the drift: leave the NiFi config as-is and keep managing ports/transmission.
-			} else {
-				differences := remoteProcessGroupDifferences(desired, *current)
-				recordEvent(r.Recorder, instance, corev1.EventTypeWarning, "DriftDetected", strings.Join(differences, "; "))
-				return r.markRemoteProcessGroupDrift(ctx, instance, nifiID, current, parentID, differences, driftMode == nifiv1alpha1.DriftPolicyFail)
-			}
-		} else {
+		switch {
+		case specChanged || driftMode == nifiv1alpha1.DriftPolicyReconcile:
 			// NiFi refuses to edit a transmitting RPG; stop transmission first.
 			if current.Component.Transmitting {
 				stopped, err := rpgs.UpdateRemoteProcessGroupRunStatus(ctx, endpoint, nifiID, current.Revision.Version, "STOPPED")
@@ -222,6 +219,17 @@ func (r *NiFiRemoteProcessGroupReconciler) reconcileExistingRemoteProcessGroup(c
 			if updated != nil {
 				current = updated
 			}
+		case driftMode == nifiv1alpha1.DriftPolicyFail:
+			// Fail is a hard stop: report drift and do not touch ports.
+			differences := remoteProcessGroupDifferences(desired, *current)
+			recordEvent(r.Recorder, instance, corev1.EventTypeWarning, "DriftDetected", strings.Join(differences, "; "))
+			return r.markRemoteProcessGroupDrift(ctx, instance, nifiID, current, parentID, differences, true)
+		case driftMode == nifiv1alpha1.DriftPolicyWarn:
+			componentDrift = remoteProcessGroupDifferences(desired, *current)
+			recordEvent(r.Recorder, instance, corev1.EventTypeWarning, "DriftDetected", strings.Join(componentDrift, "; "))
+			// Fall through to keep managing ports; drift is reported below.
+		case driftMode == nifiv1alpha1.DriftPolicyIgnore:
+			// Tolerate the drift: leave the NiFi config as-is and keep managing ports.
 		}
 	}
 
@@ -236,6 +244,11 @@ func (r *NiFiRemoteProcessGroupReconciler) reconcileExistingRemoteProcessGroup(c
 		// NotReady until the declared ports are discovered, connected, and transmitting as configured.
 		message := fmt.Sprintf("Waiting on remote ports: %s", strings.Join(portWaiting, ", "))
 		return r.markRemoteProcessGroupPortsPending(ctx, instance, nifiID, current.Revision.Version, parentID, current.Component, message)
+	}
+
+	if len(componentDrift) > 0 {
+		// Ports are reconciled; report the tolerated component drift (Warn) without failing.
+		return r.markRemoteProcessGroupDrift(ctx, instance, nifiID, current, parentID, componentDrift, false)
 	}
 
 	if !remoteProcessGroupStatusMatches(instance, nifiID, current.Revision.Version, parentID, current.Component) {
@@ -431,9 +444,10 @@ func (r *NiFiRemoteProcessGroupReconciler) reconcileRemoteProcessGroupDelete(ctx
 }
 
 func (r *NiFiRemoteProcessGroupReconciler) desiredRemoteProcessGroup(ctx context.Context, instance *nifiv1alpha1.NiFiRemoteProcessGroup, parentID string) (nifi.RemoteProcessGroupEntity, []string, error) {
+	// Name is intentionally not set: NiFi derives an RPG's name from the target's flow name and
+	// overwrites any value we send, so setting it would cause perpetual spurious drift.
 	component := nifi.RemoteProcessGroupComponent{
 		ParentGroupID:         parentID,
-		Name:                  instance.Name,
 		Comments:              instance.Spec.Comments,
 		TargetURIs:            strings.Join(instance.Spec.TargetURIs, ","),
 		TransportProtocol:     instance.Spec.TransportProtocol,
@@ -629,8 +643,8 @@ func remoteProcessGroupNeedsUpdate(desired nifi.RemoteProcessGroupEntity, existi
 	if desired.Component.ParentGroupID != "" && desired.Component.ParentGroupID != existing.Component.ParentGroupID {
 		return true
 	}
-	if desired.Component.Name != existing.Component.Name ||
-		desired.Component.Comments != existing.Component.Comments ||
+	// Name is not compared: NiFi derives the RPG name from the target's flow name.
+	if desired.Component.Comments != existing.Component.Comments ||
 		desired.Component.TransportProtocol != existing.Component.TransportProtocol ||
 		desired.Component.CommunicationsTimeout != existing.Component.CommunicationsTimeout ||
 		desired.Component.YieldDuration != existing.Component.YieldDuration ||

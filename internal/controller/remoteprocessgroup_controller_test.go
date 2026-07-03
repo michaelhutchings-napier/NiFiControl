@@ -432,6 +432,44 @@ func TestNiFiRemoteProcessGroupConfiguresAndTransmitsConnectedPort(t *testing.T)
 	}
 }
 
+func TestNiFiRemoteProcessGroupConfiguresAndTransmitsOutputPort(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	rpg := newRemoteProcessGroup("central")
+	rpg.Spec.OutputPorts = []nifiv1alpha1.RemoteProcessGroupPortConfig{{Name: "egress", Transmitting: true, ConcurrentTasks: 3}}
+	rpg.Status = nifiv1alpha1.NiFiRemoteProcessGroupStatus{
+		CommonStatus:         nifiv1alpha1.CommonStatus{Ready: true, NiFiID: "rpg-1", ObservedGeneration: 1},
+		ParentProcessGroupID: "root",
+	}
+	k8sClient := remoteProcessGroupTestClient(scheme, cluster, rpg)
+	rpgs := &fakeRemoteProcessGroupClient{store: &nifi.RemoteProcessGroupEntity{
+		ID:       "rpg-1",
+		Revision: nifi.Revision{Version: 3},
+		Component: nifi.RemoteProcessGroupComponent{
+			ID: "rpg-1", ParentGroupID: "root", Name: "central",
+			TargetURIs: "https://central-nifi.example.com:8443/nifi", TransportProtocol: "HTTP",
+			CommunicationsTimeout: "30 sec", YieldDuration: "10 sec",
+			Contents: &nifi.RemoteProcessGroupContents{
+				OutputPorts: []nifi.RemoteProcessGroupPort{{ID: "egress-id", Name: "egress", Connected: true, Exists: true}},
+			},
+		},
+	}}
+	r := &NiFiRemoteProcessGroupReconciler{Client: k8sClient, Scheme: scheme, RemoteProcessGroupClient: rpgs}
+	reconcileTwice(t, r, rpg.Name)
+
+	if len(rpgs.portUpdates) == 0 || rpgs.portUpdates[len(rpgs.portUpdates)-1].RemoteProcessGroupPort.ConcurrentlySchedulableTaskCount != 3 {
+		t.Fatalf("output port config not applied: %#v", rpgs.portUpdates)
+	}
+	if len(rpgs.portRunStatus) == 0 || rpgs.portRunStatus[len(rpgs.portRunStatus)-1] != "TRANSMITTING" {
+		t.Fatalf("connected output port should be started: %#v", rpgs.portRunStatus)
+	}
+	got := &nifiv1alpha1.NiFiRemoteProcessGroup{}
+	_ = k8sClient.Get(context.Background(), types.NamespacedName{Name: rpg.Name, Namespace: "default"}, got)
+	if !got.Status.Ready || len(got.Status.DiscoveredOutputPorts) != 1 || got.Status.DiscoveredOutputPorts[0].NiFiID != "egress-id" {
+		t.Fatalf("status = %+v", got.Status)
+	}
+}
+
 func TestNiFiRemoteProcessGroupPortPendingUntilConnected(t *testing.T) {
 	scheme := testScheme()
 	cluster := readyTestCluster()

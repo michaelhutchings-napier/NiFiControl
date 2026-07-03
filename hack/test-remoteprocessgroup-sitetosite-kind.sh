@@ -210,7 +210,13 @@ spec:
   transportProtocol: HTTP
   position: {x: 400, "y": 200}
   inputPorts:
-    - {name: from-edge, transmitting: true, concurrentTasks: 2, useCompression: true}
+    - name: from-edge
+      transmitting: true
+      concurrentTasks: 2
+      useCompression: true
+      batchCount: 500
+      batchSize: 4 MB
+      batchDuration: 5 sec
   deletionPolicy: Delete
 YAML
 wait_ready nifiprocessor generate 30
@@ -254,6 +260,9 @@ for _ in $(seq 1 24); do
   # Fallback simple checks on the whole entity JSON for the input port block.
   echo "${full}" | grep -q '"useCompression":true' && \
   echo "${full}" | grep -q '"concurrentlySchedulableTaskCount":2' && \
+  echo "${full}" | grep -q '"count":500' && \
+  echo "${full}" | grep -q '"size":"4 MB"' && \
+  echo "${full}" | grep -q '"duration":"5 sec"' && \
   echo "${full}" | grep -q '"transmitting":true' && \
   echo "${full}" | grep -q '"connected":true' && { ok=1; break; }
   sleep 5
@@ -263,6 +272,6 @@ if [ "${ok}" != "1" ]; then
   nifi_curl edge-nifi-0 "${edge_fqdn}" "remote-process-groups/${rid}" >&2 || true
   exit 1
 fi
-echo "  remote input port 'from-edge' is connected=true, transmitting=true, concurrentTasks=2, useCompression=true."
+echo "  remote input port 'from-edge' is connected=true, transmitting=true, concurrentTasks=2, useCompression=true, batch=500/4 MB/5 sec."
 
 echo "PASS: NiFiControl wired site-to-site end-to-end (discover -> configure -> connect -> transmit) with no NiFi UI action."
