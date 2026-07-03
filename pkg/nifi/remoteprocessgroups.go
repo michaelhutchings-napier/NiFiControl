@@ -93,9 +93,15 @@ type RemoteProcessGroupRunStatusEntity struct {
 	DisconnectedNodeAcknowledged bool     `json:"disconnectedNodeAcknowledged,omitempty"`
 }
 
+type remoteProcessGroupsResponse struct {
+	RemoteProcessGroups []RemoteProcessGroupEntity `json:"remoteProcessGroups"`
+}
+
 // RemoteProcessGroupClient manages NiFi remote process groups.
 type RemoteProcessGroupClient interface {
 	GetRemoteProcessGroup(ctx context.Context, baseURI string, id string) (*RemoteProcessGroupEntity, error)
+	// ListRemoteProcessGroups returns the remote process groups directly under a process group.
+	ListRemoteProcessGroups(ctx context.Context, baseURI string, parentID string) ([]RemoteProcessGroupEntity, error)
 	CreateRemoteProcessGroup(ctx context.Context, baseURI string, parentID string, entity RemoteProcessGroupEntity) (*RemoteProcessGroupEntity, error)
 	UpdateRemoteProcessGroup(ctx context.Context, baseURI string, entity RemoteProcessGroupEntity) (*RemoteProcessGroupEntity, error)
 	// UpdateRemoteProcessGroupRunStatus starts or stops transmission (state TRANSMITTING or STOPPED).
@@ -130,6 +136,18 @@ func (c HTTPRemoteProcessGroupClient) GetRemoteProcessGroup(ctx context.Context,
 		return nil, err
 	}
 	return &response, nil
+}
+
+func (c HTTPRemoteProcessGroupClient) ListRemoteProcessGroups(ctx context.Context, baseURI string, parentID string) ([]RemoteProcessGroupEntity, error) {
+	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/%s/remote-process-groups", url.PathEscape(parentID)))
+	if err != nil {
+		return nil, err
+	}
+	var response remoteProcessGroupsResponse
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
+		return nil, err
+	}
+	return response.RemoteProcessGroups, nil
 }
 
 func (c HTTPRemoteProcessGroupClient) CreateRemoteProcessGroup(ctx context.Context, baseURI string, parentID string, entity RemoteProcessGroupEntity) (*RemoteProcessGroupEntity, error) {

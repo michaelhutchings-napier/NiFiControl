@@ -104,7 +104,7 @@ func main() {
 	if err := (&controller.NiFiPolicyReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), AccessPolicyClient: nifi.HTTPAccessPolicyClient{}}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
-	if err := (&controller.NiFiRemoteProcessGroupReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), RemoteProcessGroupClient: nifi.HTTPRemoteProcessGroupClient{}}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.NiFiRemoteProcessGroupReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), RemoteProcessGroupClient: nifi.HTTPRemoteProcessGroupClient{}, Recorder: mgr.GetEventRecorderFor("nifiremoteprocessgroup-controller")}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
 

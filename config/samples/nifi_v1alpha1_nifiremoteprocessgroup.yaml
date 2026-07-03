@@ -43,6 +43,14 @@ spec:
   #     key: password
   # Take over a remote process group that already exists in NiFi instead of creating one:
   # adoptionPolicy:
-  #   mode: AdoptById
+  #   mode: AdoptById          # adopt the RPG with this exact NiFi id
   #   nifiId: <existing-remote-process-group-id>
+  #   # or: mode: AdoptByName   — adopt an existing RPG under the parent with a matching name
+  #   # or: mode: IfExists      — adopt an existing RPG under the parent with matching targetUris
+  # Config-drift handling. Default is Warn: if the RPG config is changed in NiFi the operator
+  # reports drift (status.drift + a DriftDetected event/condition) but does not overwrite it, since
+  # a remote endpoint may legitimately change. Set mode: Reconcile to self-heal, Ignore to tolerate,
+  # or Fail to block. Changes to this spec are always applied regardless of the drift mode.
+  # driftPolicy:
+  #   mode: Reconcile
   deletionPolicy: Orphan

@@ -34,7 +34,10 @@ services, and high-level flow deployments.
   on the remote input/output ports discovered from the target (concurrency, compression, batching);
   and stops transmission before any configuration change or deletion. `NiFiConnection` can attach a
   `RemoteInputPort`/`RemoteOutputPort` endpoint, so a complete flow — generate, connect, transmit —
-  is declared without touching the NiFi UI.
+  is declared without touching the NiFi UI. It can adopt an existing remote process group
+  (`adoptionPolicy` by id, name, or matching target URIs), reports config drift per `driftPolicy`
+  (Warn by default — remote endpoints may change legitimately — with Reconcile/Ignore/Fail), and
+  emits Kubernetes Events on create, transmission changes, and deletion.
 - `NiFiReportingTask` manages a controller-level reporting task: it reconciles the task's type,
   bundle, properties (including sensitive properties from Secrets), and scheduling, and
   starts/stops it via NiFi's run-status endpoint (`state: Enabled`/`Disabled`).

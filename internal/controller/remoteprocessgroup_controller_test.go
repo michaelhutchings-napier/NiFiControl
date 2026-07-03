@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
@@ -12,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -33,6 +35,13 @@ func (f *fakeRemoteProcessGroupClient) GetRemoteProcessGroup(ctx context.Context
 		return &s, nil
 	}
 	return nil, &nifi.HTTPStatusError{StatusCode: http.StatusNotFound}
+}
+
+func (f *fakeRemoteProcessGroupClient) ListRemoteProcessGroups(ctx context.Context, baseURI, parentID string) ([]nifi.RemoteProcessGroupEntity, error) {
+	if f.store != nil {
+		return []nifi.RemoteProcessGroupEntity{*f.store}, nil
+	}
+	return nil, nil
 }
 
 func (f *fakeRemoteProcessGroupClient) CreateRemoteProcessGroup(ctx context.Context, baseURI, parentID string, entity nifi.RemoteProcessGroupEntity) (*nifi.RemoteProcessGroupEntity, error) {
@@ -221,7 +230,8 @@ func TestNiFiRemoteProcessGroupUpdateStopsTransmissionFirst(t *testing.T) {
 	scheme := testScheme()
 	cluster := readyTestCluster()
 	rpg := newRemoteProcessGroup("central")
-	rpg.Spec.YieldDuration = "5 sec" // differs from what NiFi stored -> triggers an update
+	rpg.Spec.YieldDuration = "5 sec" // a spec change (generation moved past observed) -> always applied
+	rpg.Generation = 2
 	rpg.Status = nifiv1alpha1.NiFiRemoteProcessGroupStatus{
 		CommonStatus:         nifiv1alpha1.CommonStatus{Ready: true, NiFiID: "rpg-1", ObservedGeneration: 1},
 		ParentProcessGroupID: "root",
@@ -251,6 +261,68 @@ func TestNiFiRemoteProcessGroupUpdateStopsTransmissionFirst(t *testing.T) {
 	}
 }
 
+func driftTestRPG(name, driftMode string) *nifiv1alpha1.NiFiRemoteProcessGroup {
+	rpg := newRemoteProcessGroup(name)
+	if driftMode != "" {
+		rpg.Spec.DriftPolicy = nifiv1alpha1.DriftPolicy{Mode: nifiv1alpha1.DriftPolicyMode(driftMode)}
+	}
+	// Spec unchanged (observedGeneration == generation): a config difference is true NiFi-side drift.
+	rpg.Status = nifiv1alpha1.NiFiRemoteProcessGroupStatus{
+		CommonStatus:         nifiv1alpha1.CommonStatus{Ready: true, NiFiID: "rpg-1", ObservedGeneration: 1},
+		ParentProcessGroupID: "root",
+	}
+	return rpg
+}
+
+func driftTestStore() *nifi.RemoteProcessGroupEntity {
+	return &nifi.RemoteProcessGroupEntity{
+		ID:       "rpg-1",
+		Revision: nifi.Revision{Version: 4},
+		Component: nifi.RemoteProcessGroupComponent{
+			ID: "rpg-1", ParentGroupID: "root", Name: "central",
+			TargetURIs: "https://central-nifi.example.com:8443/nifi", TransportProtocol: "HTTP",
+			CommunicationsTimeout: "30 sec", YieldDuration: "99 sec", // drifted from the desired "10 sec"
+		},
+	}
+}
+
+func TestNiFiRemoteProcessGroupDriftWarnDoesNotCorrect(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	rpg := driftTestRPG("central", "") // unset -> Warn default
+	k8sClient := remoteProcessGroupTestClient(scheme, cluster, rpg)
+	rpgs := &fakeRemoteProcessGroupClient{store: driftTestStore()}
+	r := &NiFiRemoteProcessGroupReconciler{Client: k8sClient, Scheme: scheme, RemoteProcessGroupClient: rpgs}
+	reconcileTwice(t, r, rpg.Name)
+
+	if len(rpgs.updated) != 0 {
+		t.Fatalf("Warn drift policy must not correct config: %#v", rpgs.updated)
+	}
+	got := &nifiv1alpha1.NiFiRemoteProcessGroup{}
+	_ = k8sClient.Get(context.Background(), types.NamespacedName{Name: rpg.Name, Namespace: "default"}, got)
+	if got.Status.Drift.Status != "OutOfSync" || len(got.Status.Drift.Differences) == 0 {
+		t.Fatalf("expected drift to be reported, drift = %+v", got.Status.Drift)
+	}
+	assertControllerCondition(t, got.Status.Conditions, nifiv1alpha1.ConditionDriftDetected, metav1.ConditionTrue, "DriftDetected")
+}
+
+func TestNiFiRemoteProcessGroupDriftReconcileCorrects(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	rpg := driftTestRPG("central", "Reconcile")
+	k8sClient := remoteProcessGroupTestClient(scheme, cluster, rpg)
+	rpgs := &fakeRemoteProcessGroupClient{store: driftTestStore()}
+	r := &NiFiRemoteProcessGroupReconciler{Client: k8sClient, Scheme: scheme, RemoteProcessGroupClient: rpgs}
+	reconcileTwice(t, r, rpg.Name)
+
+	if len(rpgs.updated) == 0 {
+		t.Fatalf("Reconcile drift policy must correct config, got no update")
+	}
+	if got := rpgs.updated[len(rpgs.updated)-1].Component.YieldDuration; got != "10 sec" {
+		t.Fatalf("drift correction did not restore the desired yieldDuration: %q", got)
+	}
+}
+
 func TestNiFiRemoteProcessGroupWaitsForProxyPasswordSecret(t *testing.T) {
 	scheme := testScheme()
 	cluster := readyTestCluster()
@@ -272,6 +344,35 @@ func TestNiFiRemoteProcessGroupWaitsForProxyPasswordSecret(t *testing.T) {
 	_ = k8sClient.Get(context.Background(), types.NamespacedName{Name: rpg.Name, Namespace: "default"}, got)
 	if got.Status.Ready || got.Status.Dependencies.Ready {
 		t.Fatalf("expected waiting-for-dependencies status, got %+v", got.Status)
+	}
+}
+
+func TestNiFiRemoteProcessGroupAdoptsByName(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	rpg := newRemoteProcessGroup("central")
+	rpg.Spec.AdoptionPolicy = nifiv1alpha1.AdoptionPolicy{Mode: nifiv1alpha1.AdoptionPolicyAdoptByName}
+	k8sClient := remoteProcessGroupTestClient(scheme, cluster, rpg)
+	// An RPG named "central" already exists under the parent, matching the desired config.
+	rpgs := &fakeRemoteProcessGroupClient{store: &nifi.RemoteProcessGroupEntity{
+		ID:       "existing-rpg",
+		Revision: nifi.Revision{Version: 4},
+		Component: nifi.RemoteProcessGroupComponent{
+			ID: "existing-rpg", ParentGroupID: "root", Name: "central",
+			TargetURIs: "https://central-nifi.example.com:8443/nifi", TransportProtocol: "HTTP",
+			CommunicationsTimeout: "30 sec", YieldDuration: "10 sec",
+		},
+	}}
+	r := &NiFiRemoteProcessGroupReconciler{Client: k8sClient, Scheme: scheme, RemoteProcessGroupClient: rpgs}
+	reconcileTwice(t, r, rpg.Name)
+
+	if len(rpgs.created) != 0 {
+		t.Fatalf("adoption by name must not create a new RPG: %#v", rpgs.created)
+	}
+	got := &nifiv1alpha1.NiFiRemoteProcessGroup{}
+	_ = k8sClient.Get(context.Background(), types.NamespacedName{Name: rpg.Name, Namespace: "default"}, got)
+	if !got.Status.Ready || got.Status.NiFiID != "existing-rpg" {
+		t.Fatalf("expected the CR to adopt existing-rpg by name, status = %+v", got.Status)
 	}
 }
 
@@ -298,11 +399,21 @@ func TestNiFiRemoteProcessGroupConfiguresAndTransmitsConnectedPort(t *testing.T)
 			},
 		},
 	}}
-	r := &NiFiRemoteProcessGroupReconciler{Client: k8sClient, Scheme: scheme, RemoteProcessGroupClient: rpgs}
+	rec := record.NewFakeRecorder(10)
+	r := &NiFiRemoteProcessGroupReconciler{Client: k8sClient, Scheme: scheme, RemoteProcessGroupClient: rpgs, Recorder: rec}
 	reconcileTwice(t, r, rpg.Name)
 
 	if len(rpgs.portUpdates) == 0 {
 		t.Fatalf("expected the port to be configured, portUpdates empty")
+	}
+	transmitEvent := false
+	for len(rec.Events) > 0 {
+		if strings.Contains(<-rec.Events, "PortTransmissionStarted") {
+			transmitEvent = true
+		}
+	}
+	if !transmitEvent {
+		t.Fatalf("expected a PortTransmissionStarted event to be recorded")
 	}
 	last := rpgs.portUpdates[len(rpgs.portUpdates)-1].RemoteProcessGroupPort
 	if !last.UseCompression || last.ConcurrentlySchedulableTaskCount != 2 {
