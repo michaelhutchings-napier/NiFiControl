@@ -133,6 +133,24 @@ Override the common names with `internalTLS.certificate.operatorCommonName` /
 in sync with these. `login-identity-providers.xml` is intentionally left untouched —
 certificate authentication needs only the managed authorizer.
 
+### Canvas authorization bootstrap
+
+NiFi's file access policy provider seeds the initial admin (the operator) with the
+*global* policies — `/flow`, `/tenants`, `/policies`, `/controller` — but it does **not**
+seed access to the **root process group** when no flow, and therefore no root group id,
+exists at first-boot authorizer initialization. That is always the case for a freshly
+provisioned managed cluster, so without intervention the operator authenticates but every
+canvas reconcile fails with `HTTP 403: No applicable policies could be found`.
+
+Because the initial admin does hold `/policies` and `/tenants` read/write, the operator
+repairs this itself: once a secured managed cluster is reachable, and before it is marked
+`Ready`, the operator resolves the concrete root group id (via `/flow/process-groups/root`,
+authorized by `/flow` read) and grants its own identity read/write on
+`/process-groups/{rootId}` and `/data/process-groups/{rootId}` — exactly the root-group
+policies NiFi would have seeded had the flow existed. The step is idempotent, retried until
+it succeeds (reported as `AuthorizationBootstrapPending`), and is a no-op on insecure
+clusters (no managed authorizer) and external clusters (not the operator's to bootstrap).
+
 ### Shared node identity limitation
 
 The cluster uses a **single shared server/node certificate** whose DNS SANs cover the

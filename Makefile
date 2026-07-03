@@ -101,3 +101,7 @@ integration-remoteprocessgroup-kind:
 .PHONY: integration-remoteprocessgroup-s2s-kind
 integration-remoteprocessgroup-s2s-kind:
 	./hack/test-remoteprocessgroup-sitetosite-kind.sh
+
+.PHONY: integration-remoteprocessgroup-s2s-tls-kind
+integration-remoteprocessgroup-s2s-tls-kind:
+	./hack/test-remoteprocessgroup-sitetosite-tls-kind.sh

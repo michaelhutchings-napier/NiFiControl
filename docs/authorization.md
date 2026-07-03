@@ -73,6 +73,46 @@ authenticated, authorized caller (see [docs/observability.md](observability.md))
 scrape identity read access with a `NiFiUser` for its certificate DN plus a `NiFiPolicy` for
 `/flow` read — exactly the sample in `config/samples/nifi_v1alpha1_nifipolicy.yaml`.
 
+## Use case: authorize a remote cluster for site-to-site
+
+On a secured cluster, a remote NiFi must be authorized before it can pull site-to-site details or
+transfer data — trust (a shared/known CA) alone is not enough. The sending cluster connects with its
+**node identity** (`CN=<cluster>-node` for a managed cluster), so grant that identity the two NiFi
+site-to-site policies on the *receiving* cluster:
+
+```yaml
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiUser
+metadata: {name: edge-node}
+spec:
+  clusterRef: {name: central}
+  identity: "CN=edge-node"          # the sending cluster's node certificate subject
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiPolicy
+metadata: {name: edge-s2s-details}
+spec:
+  clusterRef: {name: central}
+  resource: /site-to-site           # "retrieve site-to-site details"
+  action: read
+  userRefs: [{name: edge-node}]
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiPolicy
+metadata: {name: edge-receive}
+spec:
+  clusterRef: {name: central}
+  # "receive data via site-to-site" for one input port (use the port's status.nifiId).
+  # For an output port the sender reads from, use /data-transfer/output-ports/{id}.
+  resource: /data-transfer/input-ports/<from-edge-port-id>
+  action: write
+  userRefs: [{name: edge-node}]
+```
+
+The remote process group on the sending cluster will only discover the target port once both grants
+exist. `hack/test-remoteprocessgroup-sitetosite-tls-kind.sh` exercises this end to end over mutual
+TLS.
+
 ## Deletion
 
 With `deletionPolicy: Delete`, removing a `NiFiPolicy`/`NiFiUser`/`NiFiUserGroup` deletes the

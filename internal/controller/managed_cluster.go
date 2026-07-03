@@ -270,6 +270,20 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
+	// A freshly secured NiFi does not seed the initial admin (the operator) with root-process-group
+	// policies, so the operator grants them to itself before the cluster is considered ready —
+	// otherwise every canvas reconcile against it would fail authorization. This is a no-op on
+	// insecure and external clusters.
+	if err := r.ensureOperatorCanvasAccess(ctx, cluster, endpoint); err != nil {
+		message := fmt.Sprintf("The managed NiFi is reachable, but bootstrapping the operator's canvas authorization is not complete: %v", err)
+		if managedClusterStatusNeedsUpdate(cluster, false, endpoint, workload, "AuthorizationBootstrapPending") {
+			if statusErr := markManagedClusterNotReady(ctx, r.Client, cluster, "AuthorizationBootstrapPending", message, endpoint, workload); statusErr != nil {
+				return ctrl.Result{}, statusErr
+			}
+		}
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+
 	if managedClusterStatusNeedsUpdate(cluster, true, endpoint, workload, "ClusterReachable") {
 		recordEvent(r.Recorder, cluster, corev1.EventTypeNormal, "Ready",
 			fmt.Sprintf("NiFi cluster is ready (%d/%d nodes); API reachable at %s.", workload.ReadyReplicas, workload.Replicas, endpoint))

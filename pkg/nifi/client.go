@@ -637,6 +637,27 @@ func (c HTTPProcessGroupClient) GetProcessGroup(ctx context.Context, baseURI str
 	return &response, nil
 }
 
+// RootProcessGroupID returns the concrete id of the root process group. It reads the
+// /flow/process-groups/root endpoint, which NiFi authorizes with read access to /flow (held by the
+// initial admin) rather than component read on the root group itself. This lets a caller resolve
+// the root id before it has been granted access to the root group — which is exactly the situation
+// when bootstrapping the initial admin's canvas authorization on a freshly secured cluster.
+func (c HTTPProcessGroupClient) RootProcessGroupID(ctx context.Context, baseURI string) (string, error) {
+	endpoint, err := apiURL(baseURI, "/flow/process-groups/root")
+	if err != nil {
+		return "", err
+	}
+	var response struct {
+		ProcessGroupFlow struct {
+			ID string `json:"id"`
+		} `json:"processGroupFlow"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
+		return "", err
+	}
+	return response.ProcessGroupFlow.ID, nil
+}
+
 func (c HTTPProcessGroupClient) CreateProcessGroup(ctx context.Context, baseURI string, parentID string, entity ProcessGroupEntity) (*ProcessGroupEntity, error) {
 	endpoint, err := apiURL(baseURI, fmt.Sprintf("/process-groups/%s/process-groups", url.PathEscape(parentID)))
 	if err != nil {

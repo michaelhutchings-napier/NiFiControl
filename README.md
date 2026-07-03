@@ -139,7 +139,10 @@ directly, derives the NiFi initial admin and node identities from predictable co
 names, and rolls pods on certificate rotation. See
 [docs/internal-tls.md](docs/internal-tls.md) for the trust model, ownership, rotation
 behaviour, the shared node-identity limitation, and migration from development HTTP.
-`insecureSkipVerify` is never used for managed clusters.
+`insecureSkipVerify` is never used for managed clusters. Because NiFi does not seed the initial
+admin with root-process-group access on a fresh secured cluster, the operator grants its own
+identity that access before marking the cluster `Ready`, so it can manage the canvas without any
+manual authorization step.
 
 ## Flow Safety
 
