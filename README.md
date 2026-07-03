@@ -83,6 +83,14 @@ OCI sources read `path` from the image filesystem (`flow.json` by default) and
 record the resolved manifest digest. Set `source.oci.digest` to pin retrieval;
 otherwise `source.oci.image` may contain a tag that is periodically refreshed.
 
+Set `source.oci.verify.cosignPublicKeySecretRef` to require the image to carry a valid
+[cosign](https://docs.sigstore.dev/) signature before it is materialized. Verification is
+key-based (cosign "simple signing"): the operator fetches the companion `sha256-<digest>.sig`
+artifact, checks the signature against the PEM public key from the Secret (ECDSA, Ed25519, or
+RSA), and confirms the signed payload names the exact manifest digest being resolved — so an
+unsigned, tampered, wrongly-signed, or replayed image is rejected and never imported. Keyless
+(Fulcio/Rekor/OIDC) verification is not supported.
+
 ## TLS And Credentials
 
 Secure external NiFi 2 APIs can use a custom CA and automatic token exchange:

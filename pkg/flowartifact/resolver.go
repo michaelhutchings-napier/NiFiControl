@@ -41,6 +41,16 @@ type Request struct {
 	Source      nifiv1alpha1.FlowBundleSource
 	RegistryURI string
 	Credentials Credentials
+	// Verification, when set, requires an OCI artifact to carry a valid cosign signature made by
+	// the configured public key before its snapshot is used.
+	Verification *Verification
+}
+
+// Verification carries the material needed to verify an artifact's signature.
+type Verification struct {
+	// CosignPublicKeyPEM is a PEM-encoded public key (ECDSA, Ed25519, or RSA) that must have signed
+	// the artifact.
+	CosignPublicKeyPEM []byte
 }
 
 type Credentials struct {
@@ -75,13 +85,13 @@ func (r DefaultResolver) Resolve(ctx context.Context, request Request) (*Artifac
 	case request.Source.Registry != nil:
 		return r.resolveRegistry(ctx, request.RegistryURI, *request.Source.Registry, request.Credentials)
 	case request.Source.OCI != nil:
-		return r.resolveOCI(ctx, *request.Source.OCI, request.Credentials)
+		return r.resolveOCI(ctx, *request.Source.OCI, request.Credentials, request.Verification)
 	default:
 		return nil, fmt.Errorf("flow artifact source is not configured")
 	}
 }
 
-func (r DefaultResolver) resolveOCI(ctx context.Context, source nifiv1alpha1.OCISource, credentials Credentials) (*Artifact, error) {
+func (r DefaultResolver) resolveOCI(ctx context.Context, source nifiv1alpha1.OCISource, credentials Credentials, verification *Verification) (*Artifact, error) {
 	nameOptions := []name.Option{}
 	if r.AllowInsecureOCI {
 		nameOptions = append(nameOptions, name.Insecure)
@@ -114,6 +124,11 @@ func (r DefaultResolver) resolveOCI(ctx context.Context, source nifiv1alpha1.OCI
 	digest, err := image.Digest()
 	if err != nil {
 		return nil, fmt.Errorf("resolve OCI flow artifact digest: %w", err)
+	}
+	if verification != nil {
+		if err := verifyCosignSignature(ctx, reference.Context(), digest, verification.CosignPublicKeyPEM, remoteOptions); err != nil {
+			return nil, fmt.Errorf("verify OCI flow artifact signature: %w", err)
+		}
 	}
 	snapshotPath, err := secureOCISnapshotPath(source.Path)
 	if err != nil {

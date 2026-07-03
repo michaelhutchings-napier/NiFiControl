@@ -3925,10 +3925,11 @@ func clusterAPIReferencesSecret(cluster *nifiv1alpha1.NiFiCluster, secretName st
 }
 
 func flowSourceReferencesSecret(source *nifiv1alpha1.FlowBundleSource, secretName string) bool {
+	if source == nil {
+		return false
+	}
 	var credentials *nifiv1alpha1.FlowArtifactCredentials
 	switch {
-	case source == nil:
-		return false
 	case source.Git != nil:
 		credentials = source.Git.Credentials
 	case source.OCI != nil:
@@ -3936,12 +3937,14 @@ func flowSourceReferencesSecret(source *nifiv1alpha1.FlowBundleSource, secretNam
 	case source.Registry != nil:
 		credentials = source.Registry.Credentials
 	}
-	if credentials == nil {
-		return false
+	refs := []*nifiv1alpha1.SecretKeyRef{}
+	if credentials != nil {
+		refs = append(refs, credentials.UsernameSecretKeyRef, credentials.PasswordSecretKeyRef, credentials.TokenSecretKeyRef, credentials.CASecretKeyRef)
 	}
-	return secretRefsContainName([]*nifiv1alpha1.SecretKeyRef{
-		credentials.UsernameSecretKeyRef, credentials.PasswordSecretKeyRef, credentials.TokenSecretKeyRef, credentials.CASecretKeyRef,
-	}, secretName)
+	if source.OCI != nil && source.OCI.Verify != nil {
+		refs = append(refs, source.OCI.Verify.CosignPublicKeySecretRef)
+	}
+	return secretRefsContainName(refs, secretName)
 }
 
 func secretRefsContainName(refs []*nifiv1alpha1.SecretKeyRef, name string) bool {

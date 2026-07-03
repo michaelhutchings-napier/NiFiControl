@@ -90,3 +90,16 @@ spec:
               font-size: 20px
         processGroups: []
         remoteProcessGroups: []
+# Alternatively, pull the snapshot from a private, signed OCI artifact. Exactly one source may be
+# set, so this is shown commented out. The image is verified against a cosign public key (key-based
+# "simple signing") before it is materialized; an unsigned, tampered, or wrongly-signed image is
+# rejected. Keyless (Fulcio/Rekor/OIDC) verification is not supported.
+#  source:
+#    oci:
+#      image: registry.example.com/flows/payments:v1
+#      path: flow.json
+#      credentials:
+#        usernameSecretKeyRef: {name: oci-creds, key: username}
+#        passwordSecretKeyRef: {name: oci-creds, key: password}
+#      verify:
+#        cosignPublicKeySecretRef: {name: cosign-key, key: cosign.pub}

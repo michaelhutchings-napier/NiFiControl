@@ -499,6 +499,39 @@ spec:
                             description: Path is the snapshot file in the OCI image
                               filesystem and defaults to flow.json.
                             type: string
+                          verify:
+                            description: Verify requires the image to carry a valid
+                              cosign signature before it is materialized.
+                            properties:
+                              cosignPublicKeySecretRef:
+                                description: |-
+                                  CosignPublicKeySecretRef references a PEM-encoded public key (ECDSA, Ed25519, or RSA, such as
+                                  a cosign.pub) that must have signed the artifact.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.  Must
+                                      be a valid secret key.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                  optional:
+                                    description: Specify whether the Secret or its
+                                      key must be defined
+                                    type: boolean
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                            required:
+                            - cosignPublicKeySecretRef
+                            type: object
                         required:
                         - image
                         type: object

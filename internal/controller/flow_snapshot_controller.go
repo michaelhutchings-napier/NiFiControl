@@ -151,7 +151,11 @@ func resolvedFlowArtifact(ctx context.Context, c client.Client, resolver flowart
 	if err != nil {
 		return nil, "", "", err
 	}
-	artifact, err := resolver.Resolve(ctx, flowartifact.Request{Source: *source, RegistryURI: registryURI, Credentials: credentials})
+	verification, err := resolvedFlowArtifactVerification(ctx, c, namespace, source)
+	if err != nil {
+		return nil, "", "", err
+	}
+	artifact, err := resolver.Resolve(ctx, flowartifact.Request{Source: *source, RegistryURI: registryURI, Credentials: credentials, Verification: verification})
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -209,6 +213,19 @@ func resolvedFlowArtifactCredentials(ctx context.Context, c client.Client, names
 		resolved.CAData = data
 	}
 	return resolved, nil
+}
+
+// resolvedFlowArtifactVerification loads the cosign public key an OCI source must be signed with, or
+// returns nil when signature verification is not configured.
+func resolvedFlowArtifactVerification(ctx context.Context, c client.Client, namespace string, source *nifiv1alpha1.FlowBundleSource) (*flowartifact.Verification, error) {
+	if source.OCI == nil || source.OCI.Verify == nil || source.OCI.Verify.CosignPublicKeySecretRef == nil {
+		return nil, nil
+	}
+	data, err := secretKeyValue(ctx, c, namespace, source.OCI.Verify.CosignPublicKeySecretRef)
+	if err != nil {
+		return nil, err
+	}
+	return &flowartifact.Verification{CosignPublicKeyPEM: data}, nil
 }
 
 func (r *NiFiFlowDeploymentReconciler) reconcileSnapshotFlowDeployment(ctx context.Context, deployment *nifiv1alpha1.NiFiFlowDeployment, endpoint string, parentID string, snapshot json.RawMessage, version string, digest string) (ctrl.Result, error) {

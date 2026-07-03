@@ -93,6 +93,58 @@ func TestResolvedFlowArtifactCredentialsReadsSecrets(t *testing.T) {
 	})
 }
 
+func TestResolvedFlowArtifactVerification(t *testing.T) {
+	key := []byte("-----BEGIN PUBLIC KEY-----\nMFkwEwYH\n-----END PUBLIC KEY-----\n")
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "cosign-pub", Namespace: "default"},
+		Data:       map[string][]byte{"cosign.pub": key},
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(secret).Build()
+
+	t.Run("nil when verification is not configured", func(t *testing.T) {
+		v, err := resolvedFlowArtifactVerification(context.Background(), c, "default", &nifiv1alpha1.FlowBundleSource{OCI: &nifiv1alpha1.OCISource{Image: "registry/flows:v1"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v != nil {
+			t.Fatalf("expected nil verification, got %#v", v)
+		}
+	})
+
+	t.Run("nil for non-OCI sources", func(t *testing.T) {
+		v, err := resolvedFlowArtifactVerification(context.Background(), c, "default", &nifiv1alpha1.FlowBundleSource{Git: &nifiv1alpha1.GitSource{URL: "https://git.example.com/flows.git"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v != nil {
+			t.Fatalf("expected nil verification for a Git source, got %#v", v)
+		}
+	})
+
+	t.Run("resolves the cosign public key", func(t *testing.T) {
+		v, err := resolvedFlowArtifactVerification(context.Background(), c, "default", &nifiv1alpha1.FlowBundleSource{OCI: &nifiv1alpha1.OCISource{
+			Image:  "registry/flows:v1",
+			Verify: &nifiv1alpha1.FlowArtifactVerification{CosignPublicKeySecretRef: srcRef("cosign-pub", "cosign.pub")},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v == nil || string(v.CosignPublicKeyPEM) != string(key) {
+			t.Fatalf("verification key = %#v", v)
+		}
+	})
+
+	t.Run("missing key secret is an error", func(t *testing.T) {
+		_, err := resolvedFlowArtifactVerification(context.Background(), c, "default", &nifiv1alpha1.FlowBundleSource{OCI: &nifiv1alpha1.OCISource{
+			Image:  "registry/flows:v1",
+			Verify: &nifiv1alpha1.FlowArtifactVerification{CosignPublicKeySecretRef: srcRef("absent", "cosign.pub")},
+		}})
+		if err == nil {
+			t.Fatal("expected an error resolving a missing cosign key secret")
+		}
+	})
+}
+
 func TestFlowSourceReferencesSecret(t *testing.T) {
 	git := &nifiv1alpha1.FlowBundleSource{Git: &nifiv1alpha1.GitSource{
 		Credentials: &nifiv1alpha1.FlowArtifactCredentials{UsernameSecretKeyRef: srcRef("creds", "username")},
@@ -102,6 +154,9 @@ func TestFlowSourceReferencesSecret(t *testing.T) {
 	}}
 	registry := &nifiv1alpha1.FlowBundleSource{Registry: &nifiv1alpha1.RegistryFlowSource{
 		Credentials: &nifiv1alpha1.FlowArtifactCredentials{CASecretKeyRef: srcRef("creds", "ca.crt")},
+	}}
+	ociVerify := &nifiv1alpha1.FlowBundleSource{OCI: &nifiv1alpha1.OCISource{
+		Verify: &nifiv1alpha1.FlowArtifactVerification{CosignPublicKeySecretRef: srcRef("creds", "cosign.pub")},
 	}}
 	noCreds := &nifiv1alpha1.FlowBundleSource{Git: &nifiv1alpha1.GitSource{URL: "https://git.example.com/flows.git"}}
 
@@ -114,6 +169,7 @@ func TestFlowSourceReferencesSecret(t *testing.T) {
 		{"git matches", git, "creds", true},
 		{"git wrong name", git, "other", false},
 		{"oci token matches", oci, "creds", true},
+		{"oci verify key matches", ociVerify, "creds", true},
 		{"registry ca matches", registry, "creds", true},
 		{"source without credentials", noCreds, "creds", false},
 		{"nil source", nil, "creds", false},

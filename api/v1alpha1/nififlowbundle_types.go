@@ -31,6 +31,18 @@ type OCISource struct {
 	// Path is the snapshot file in the OCI image filesystem and defaults to flow.json.
 	Path        string                   `json:"path,omitempty"`
 	Credentials *FlowArtifactCredentials `json:"credentials,omitempty"`
+	// Verify requires the image to carry a valid cosign signature before it is materialized.
+	Verify *FlowArtifactVerification `json:"verify,omitempty"`
+}
+
+// FlowArtifactVerification requires an OCI flow artifact to carry a valid cosign signature before
+// its snapshot is used. Only key-based verification (cosign "simple signing" with a public key) is
+// supported; keyless verification (Fulcio/Rekor/OIDC) is not.
+type FlowArtifactVerification struct {
+	// CosignPublicKeySecretRef references a PEM-encoded public key (ECDSA, Ed25519, or RSA, such as
+	// a cosign.pub) that must have signed the artifact.
+	// +kubebuilder:validation:Required
+	CosignPublicKeySecretRef *SecretKeyRef `json:"cosignPublicKeySecretRef"`
 }
 
 type RegistryFlowSource struct {
