@@ -33,7 +33,12 @@ const (
 	defaultNiFiImage         = "apache/nifi:2.10.0"
 	defaultNiFiWebPort       = int32(8080)
 	defaultClusterPort       = int32(11443)
+	defaultRemoteInputPort   = int32(10000)
+	defaultLoadBalancePort   = int32(6342)
 	managedDataVolume        = "data"
+	// managedExternalServiceLabel marks Services the operator provisions from
+	// spec.externalServices so they can be listed and pruned when dropped from the spec.
+	managedExternalServiceLabel = "nifi.controlnifi.io/external-service"
 )
 
 const managedNiFiStartCommand = `. /opt/nifi/scripts/common.sh
@@ -67,6 +72,7 @@ prop_replace 'nifi.cluster.is.node' "${NIFI_CLUSTER_IS_NODE:-false}"
 prop_replace 'nifi.cluster.node.address' "${NIFI_CLUSTER_ADDRESS:-${HOSTNAME}}"
 prop_replace 'nifi.cluster.node.protocol.port' "${NIFI_CLUSTER_NODE_PROTOCOL_PORT:-}"
 prop_replace 'nifi.cluster.load.balance.host' "${NIFI_CLUSTER_LOAD_BALANCE_HOST:-}"
+prop_replace 'nifi.cluster.load.balance.port' "${NIFI_CLUSTER_LOAD_BALANCE_PORT:-6342}"
 prop_replace 'nifi.zookeeper.connect.string' "${NIFI_ZK_CONNECT_STRING:-}"
 prop_replace 'nifi.zookeeper.root.node' "${NIFI_ZK_ROOT_NODE:-/nifi}"
 if [ -n "${NIFI_ZK_CONNECT_STRING:-}" ]; then
@@ -163,6 +169,7 @@ prop_replace 'nifi.cluster.is.node' "${NIFI_CLUSTER_IS_NODE:-false}"
 prop_replace 'nifi.cluster.node.address' "${NIFI_CLUSTER_ADDRESS:-${HOSTNAME}}"
 prop_replace 'nifi.cluster.node.protocol.port' "${NIFI_CLUSTER_NODE_PROTOCOL_PORT:-}"
 prop_replace 'nifi.cluster.load.balance.host' "${NIFI_CLUSTER_LOAD_BALANCE_HOST:-}"
+prop_replace 'nifi.cluster.load.balance.port' "${NIFI_CLUSTER_LOAD_BALANCE_PORT:-6342}"
 prop_replace 'nifi.zookeeper.connect.string' "${NIFI_ZK_CONNECT_STRING:-}"
 prop_replace 'nifi.zookeeper.root.node' "${NIFI_ZK_ROOT_NODE:-/nifi}"
 if [ -n "${NIFI_ZK_CONNECT_STRING:-}" ]; then
@@ -221,6 +228,9 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 	}
 	if err := r.reconcileManagedClusterService(ctx, cluster, true); err != nil {
 		return r.managedClusterReconcileFailed(ctx, cluster, "ServiceReconcileFailed", err)
+	}
+	if err := r.reconcileManagedClusterExternalServices(ctx, cluster); err != nil {
+		return r.managedClusterReconcileFailed(ctx, cluster, "ExternalServiceReconcileFailed", err)
 	}
 	// Every managed node needs a stable sensitive properties key, including a single
 	// standalone node: NiFi self-generates one into nifi.properties when it is blank, and
@@ -405,12 +415,20 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterService(ctx context.Conte
 		if headless {
 			service.Spec.Type = corev1.ServiceTypeClusterIP
 			service.Spec.PublishNotReadyAddresses = true
-			service.Spec.Ports = append(service.Spec.Ports, corev1.ServicePort{
-				Name:       "cluster",
-				Port:       defaultClusterPort,
-				TargetPort: intstrFromString("cluster"),
-				Protocol:   corev1.ProtocolTCP,
-			})
+			service.Spec.Ports = append(service.Spec.Ports,
+				corev1.ServicePort{
+					Name:       "cluster",
+					Port:       managedClusterClusterProtocolPort(cluster),
+					TargetPort: intstrFromString("cluster"),
+					Protocol:   corev1.ProtocolTCP,
+				},
+				corev1.ServicePort{
+					Name:       "load-balance",
+					Port:       managedClusterLoadBalancePort(cluster),
+					TargetPort: intstrFromString("load-balance"),
+					Protocol:   corev1.ProtocolTCP,
+				},
+			)
 			if service.ResourceVersion == "" {
 				service.Spec.ClusterIP = corev1.ClusterIPNone
 			}
@@ -453,7 +471,7 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterStatefulSet(ctx context.C
 
 func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials, overridesChecksum string, auth *resolvedClusterAuth) appsv1.StatefulSetSpec {
 	podLabels := managedClusterPodLabels(cluster)
-	webPort := defaultNiFiWebPort
+	webPort := managedClusterHTTPPort(cluster)
 	startCommand := managedNiFiStartCommand
 	if tls != nil {
 		webPort = tls.httpsPort
@@ -467,7 +485,9 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls
 		Env:             managedClusterEnvironment(cluster, tls, auth),
 		Ports: []corev1.ContainerPort{
 			{Name: "web", ContainerPort: webPort, Protocol: corev1.ProtocolTCP},
-			{Name: "cluster", ContainerPort: defaultClusterPort, Protocol: corev1.ProtocolTCP},
+			{Name: "cluster", ContainerPort: managedClusterClusterProtocolPort(cluster), Protocol: corev1.ProtocolTCP},
+			{Name: "s2s", ContainerPort: managedClusterRemoteInputPort(cluster), Protocol: corev1.ProtocolTCP},
+			{Name: "load-balance", ContainerPort: managedClusterLoadBalancePort(cluster), Protocol: corev1.ProtocolTCP},
 		},
 		Resources:      cluster.Spec.Resources,
 		StartupProbe:   managedClusterStartupProbe(tls),
@@ -749,9 +769,14 @@ func nodeEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials
 	} else {
 		environment = append(environment,
 			corev1.EnvVar{Name: "NIFI_WEB_HTTP_HOST", Value: webHTTPHost},
-			corev1.EnvVar{Name: "NIFI_WEB_HTTP_PORT", Value: strconv.Itoa(int(defaultNiFiWebPort))},
+			corev1.EnvVar{Name: "NIFI_WEB_HTTP_PORT", Value: strconv.Itoa(int(managedClusterHTTPPort(cluster)))},
 		)
 	}
+	// Site-to-site and load-balance ports apply to every node regardless of TLS mode.
+	environment = append(environment,
+		corev1.EnvVar{Name: "NIFI_REMOTE_INPUT_SOCKET_PORT", Value: strconv.Itoa(int(managedClusterRemoteInputPort(cluster)))},
+		corev1.EnvVar{Name: "NIFI_CLUSTER_LOAD_BALANCE_PORT", Value: strconv.Itoa(int(managedClusterLoadBalancePort(cluster)))},
+	)
 	// Allowed proxy host and context path (TLS Service DNS names plus any Ingress host).
 	environment = append(environment,
 		corev1.EnvVar{Name: "NIFI_WEB_PROXY_HOST", Value: managedClusterProxyHost(cluster, tls)},
@@ -762,7 +787,7 @@ func nodeEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials
 		environment = append(environment,
 			corev1.EnvVar{Name: "NIFI_CLUSTER_IS_NODE", Value: "true"},
 			corev1.EnvVar{Name: "NIFI_CLUSTER_ADDRESS", Value: fmt.Sprintf("$(POD_NAME).%s.$(POD_NAMESPACE).svc", managedClusterHeadlessServiceName(cluster))},
-			corev1.EnvVar{Name: "NIFI_CLUSTER_NODE_PROTOCOL_PORT", Value: strconv.Itoa(int(defaultClusterPort))},
+			corev1.EnvVar{Name: "NIFI_CLUSTER_NODE_PROTOCOL_PORT", Value: strconv.Itoa(int(managedClusterClusterProtocolPort(cluster)))},
 			corev1.EnvVar{Name: "NIFI_ZK_CONNECT_STRING", Value: coordination.ZooKeeperConnectString},
 			corev1.EnvVar{Name: "NIFI_ZK_ROOT_NODE", Value: managedClusterZooKeeperRootNode(cluster)},
 			corev1.EnvVar{Name: "NIFI_ELECTION_MAX_WAIT", Value: managedClusterElectionMaxWait(cluster)},
@@ -807,6 +832,11 @@ func (r *NiFiClusterReconciler) reconcileClusterDelete(ctx context.Context, clus
 		if err := r.deleteManagedClusterResource(ctx, cluster, object); err != nil {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 		}
+	}
+	// External Services carry no owner reference (so Orphan leaves them), so remove them
+	// explicitly under the Delete policy.
+	if err := r.pruneManagedClusterExternalServices(ctx, cluster, nil); err != nil {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 	}
 	pvcs := &corev1.PersistentVolumeClaimList{}
 	if err := r.List(ctx, pvcs, client.InNamespace(cluster.Namespace), client.MatchingLabels{managedClusterLabel: managedClusterResourceName(cluster)}); err != nil {
@@ -1028,6 +1058,38 @@ func managedClusterServicePort(cluster *nifiv1alpha1.NiFiCluster) int32 {
 		return cluster.Spec.Service.Port
 	}
 	return defaultNiFiWebPort
+}
+
+// managedClusterHTTPPort is the plaintext web port NiFi binds in non-TLS mode.
+func managedClusterHTTPPort(cluster *nifiv1alpha1.NiFiCluster) int32 {
+	if cluster.Spec.Ports != nil && cluster.Spec.Ports.HTTP > 0 {
+		return cluster.Spec.Ports.HTTP
+	}
+	return defaultNiFiWebPort
+}
+
+// managedClusterClusterProtocolPort is the node-to-node cluster protocol port.
+func managedClusterClusterProtocolPort(cluster *nifiv1alpha1.NiFiCluster) int32 {
+	if cluster.Spec.Ports != nil && cluster.Spec.Ports.ClusterProtocol > 0 {
+		return cluster.Spec.Ports.ClusterProtocol
+	}
+	return defaultClusterPort
+}
+
+// managedClusterRemoteInputPort is the site-to-site raw socket port.
+func managedClusterRemoteInputPort(cluster *nifiv1alpha1.NiFiCluster) int32 {
+	if cluster.Spec.Ports != nil && cluster.Spec.Ports.RemoteInput > 0 {
+		return cluster.Spec.Ports.RemoteInput
+	}
+	return defaultRemoteInputPort
+}
+
+// managedClusterLoadBalancePort is the cluster connection load-balance port.
+func managedClusterLoadBalancePort(cluster *nifiv1alpha1.NiFiCluster) int32 {
+	if cluster.Spec.Ports != nil && cluster.Spec.Ports.LoadBalance > 0 {
+		return cluster.Spec.Ports.LoadBalance
+	}
+	return defaultLoadBalancePort
 }
 
 func managedClusterServiceType(cluster *nifiv1alpha1.NiFiCluster) corev1.ServiceType {

@@ -20,6 +20,29 @@ spec:
     annotations:
       {{- toYaml . | nindent 6 }}
     {{- end }}
+  {{- with .Values.ports }}
+  ports:
+    {{- with .http }}
+    http: {{ . }}
+    {{- end }}
+    {{- with .clusterProtocol }}
+    clusterProtocol: {{ . }}
+    {{- end }}
+    {{- with .remoteInput }}
+    remoteInput: {{ . }}
+    {{- end }}
+    {{- with .loadBalance }}
+    loadBalance: {{ . }}
+    {{- end }}
+  {{- end }}
+  {{- with .Values.externalServices }}
+  externalServices:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.proxyHosts }}
+  proxyHosts:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   storage:
     enabled: {{ .Values.storage.enabled }}
     size: {{ .Values.storage.size }}

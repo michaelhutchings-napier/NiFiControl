@@ -19,6 +19,9 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.internalTLS) || !self.internalTLS.enabled || self.mode != 'External'",message="internalTLS only applies to operator-managed (Internal) clusters"
 // +kubebuilder:validation:XValidation:rule="!has(self.configOverrides) || self.mode != 'External'",message="configOverrides only applies to operator-managed (Internal) clusters"
 // +kubebuilder:validation:XValidation:rule="!has(self.pod) || self.mode != 'External'",message="pod only applies to operator-managed (Internal) clusters"
+// +kubebuilder:validation:XValidation:rule="!has(self.ports) || self.mode != 'External'",message="ports only applies to operator-managed (Internal) clusters"
+// +kubebuilder:validation:XValidation:rule="!has(self.externalServices) || self.mode != 'External'",message="externalServices only applies to operator-managed (Internal) clusters"
+// +kubebuilder:validation:XValidation:rule="!has(self.proxyHosts) || self.mode != 'External'",message="proxyHosts only applies to operator-managed (Internal) clusters"
 // +kubebuilder:validation:XValidation:rule="!has(self.authentication) || (has(self.internalTLS) && self.internalTLS.enabled)",message="authentication requires internalTLS: NiFi only allows user authentication over HTTPS"
 type NiFiClusterSpec struct {
 	// +kubebuilder:validation:Enum=Internal;External
@@ -31,21 +34,41 @@ type NiFiClusterSpec struct {
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=1
-	Replicas     int32                        `json:"replicas,omitempty"`
-	API          *NiFiClusterAPISpec          `json:"api,omitempty"`
-	Service      NiFiClusterServiceSpec       `json:"service,omitempty"`
-	Storage      NiFiClusterStorageSpec       `json:"storage,omitempty"`
-	Resources    corev1.ResourceRequirements  `json:"resources,omitempty"`
-	JVM          NiFiClusterJVMSpec           `json:"jvm,omitempty"`
-	Coordination *NiFiClusterCoordinationSpec `json:"coordination,omitempty"`
-	InternalTLS  *NiFiClusterInternalTLSSpec  `json:"internalTLS,omitempty"`
-	Scheduling   *NiFiClusterScheduling       `json:"scheduling,omitempty"`
+	Replicas int32                  `json:"replicas,omitempty"`
+	API      *NiFiClusterAPISpec    `json:"api,omitempty"`
+	Service  NiFiClusterServiceSpec `json:"service,omitempty"`
+	// Ports customizes the network ports NiFi binds: the HTTP web port (non-TLS mode),
+	// the node-to-node cluster protocol port, the site-to-site remote input port, and the
+	// cluster load-balance port. Unset ports keep NiFi's defaults. The HTTPS web port is
+	// configured through internalTLS.httpsPort. Only applies to Internal clusters.
+	Ports *NiFiClusterPortsSpec `json:"ports,omitempty"`
+	// ExternalServices provisions additional Kubernetes Services in front of the managed
+	// nodes beyond the operator's own ClusterIP and headless Services — for example a
+	// LoadBalancer for the web UI or a NodePort for site-to-site. Each targets the node
+	// pods by the same selector. Only applies to Internal (operator-managed) clusters.
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=16
+	ExternalServices []NiFiClusterExternalService `json:"externalServices,omitempty"`
+	Storage          NiFiClusterStorageSpec       `json:"storage,omitempty"`
+	Resources        corev1.ResourceRequirements  `json:"resources,omitempty"`
+	JVM              NiFiClusterJVMSpec           `json:"jvm,omitempty"`
+	Coordination     *NiFiClusterCoordinationSpec `json:"coordination,omitempty"`
+	InternalTLS      *NiFiClusterInternalTLSSpec  `json:"internalTLS,omitempty"`
+	Scheduling       *NiFiClusterScheduling       `json:"scheduling,omitempty"`
 	// PodDisruptionBudget keeps a minimum number of NiFi nodes available during voluntary
 	// disruptions such as node drains and certificate-rotation rolls.
 	PodDisruptionBudget *NiFiClusterPDBSpec `json:"podDisruptionBudget,omitempty"`
 	// Ingress exposes the managed NiFi cluster through a Kubernetes Ingress and configures
 	// NiFi's allowed proxy host and context path accordingly.
 	Ingress *NiFiClusterIngressSpec `json:"ingress,omitempty"`
+	// ProxyHosts adds extra host[:port] entries to NiFi's nifi.web.proxy.host allow-list,
+	// on top of the operator-computed Service DNS names and any Ingress host. Set this for
+	// external load balancers or DNS names people reach NiFi through, otherwise NiFi
+	// rejects those requests with an untrusted-proxy error. Only applies to Internal
+	// clusters.
+	// +kubebuilder:validation:MaxItems=32
+	ProxyHosts []ProxyHost `json:"proxyHosts,omitempty"`
 	// Upgrade controls how managed NiFi version changes roll out across the StatefulSet.
 	Upgrade *NiFiClusterUpgradeSpec `json:"upgrade,omitempty"`
 	// ScaleDown controls how managed NiFi nodes are gracefully removed when replicas is
@@ -136,6 +159,78 @@ type NiFiClusterServiceSpec struct {
 	// +kubebuilder:validation:Maximum=65535
 	NodePort    int32             `json:"nodePort,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
+// ProxyHost is a single host[:port] entry for NiFi's proxy allow-list. The length bound
+// keeps the generated CRD within the API server's admission cost budget.
+// +kubebuilder:validation:MaxLength=253
+type ProxyHost string
+
+// NiFiClusterPortsSpec customizes the network ports NiFi binds. An unset (zero) field
+// keeps NiFi's default for that port.
+type NiFiClusterPortsSpec struct {
+	// HTTP is the plaintext web UI/API port NiFi binds in non-TLS mode. Default 8080.
+	// Ignored when internalTLS is enabled; use internalTLS.httpsPort for the HTTPS port.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	HTTP int32 `json:"http,omitempty"`
+	// ClusterProtocol is the node-to-node cluster protocol port (nifi.cluster.node.protocol.port).
+	// Default 11443. Only relevant for clustered deployments.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	ClusterProtocol int32 `json:"clusterProtocol,omitempty"`
+	// RemoteInput is the site-to-site raw socket port (nifi.remote.input.socket.port).
+	// Default 10000.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	RemoteInput int32 `json:"remoteInput,omitempty"`
+	// LoadBalance is the cluster connection load-balance port (nifi.cluster.load.balance.port).
+	// Default 6342. Only relevant for clustered deployments.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	LoadBalance int32 `json:"loadBalance,omitempty"`
+}
+
+// NiFiClusterExternalService describes an additional Service placed in front of the
+// managed NiFi node pods. The operator sets the selector and owner reference; the Service
+// is garbage-collected with the cluster and removed when dropped from the spec.
+type NiFiClusterExternalService struct {
+	// Name is the Service metadata.name. It must be a DNS-1035 label, unique in the
+	// namespace, and distinct from the operator's own Service names.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Name string `json:"name"`
+	// +kubebuilder:validation:Enum=ClusterIP;NodePort;LoadBalancer
+	// +kubebuilder:default=ClusterIP
+	Type corev1.ServiceType `json:"type,omitempty"`
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	Ports                    []NiFiClusterExternalServicePort        `json:"ports"`
+	Annotations              map[string]string                       `json:"annotations,omitempty"`
+	Labels                   map[string]string                       `json:"labels,omitempty"`
+	LoadBalancerIP           string                                  `json:"loadBalancerIP,omitempty"`
+	LoadBalancerSourceRanges []string                                `json:"loadBalancerSourceRanges,omitempty"`
+	ExternalTrafficPolicy    corev1.ServiceExternalTrafficPolicyType `json:"externalTrafficPolicy,omitempty"`
+}
+
+// NiFiClusterExternalServicePort is one port exposed by an external Service.
+type NiFiClusterExternalServicePort struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=15
+	Name string `json:"name"`
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port"`
+	// TargetPort is the container port this Service port routes to: a named NiFi container
+	// port ("web", "cluster", "s2s", "load-balance") or a numeric port. Defaults to Port.
+	TargetPort string `json:"targetPort,omitempty"`
+	// NodePort requests a specific node port when the Service type is NodePort or LoadBalancer.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=65535
+	NodePort int32 `json:"nodePort,omitempty"`
+	// +kubebuilder:validation:Enum=TCP;UDP;SCTP
+	// +kubebuilder:default=TCP
+	Protocol corev1.Protocol `json:"protocol,omitempty"`
 }
 
 // +kubebuilder:validation:XValidation:rule="!has(self.repositories) || !has(self.enabled) || self.enabled",message="repositories requires persistent storage (storage.enabled)"

@@ -93,6 +93,134 @@
         }
       }
     },
+    "ports": {
+      "type": "object",
+      "properties": {
+        "http": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "clusterProtocol": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "remoteInput": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "loadBalance": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      },
+      "additionalProperties": false
+    },
+    "externalServices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "ports"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "ClusterIP",
+              "NodePort",
+              "LoadBalancer"
+            ]
+          },
+          "ports": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "port"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 15
+                },
+                "port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "targetPort": {
+                  "type": "string"
+                },
+                "nodePort": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65535
+                },
+                "protocol": {
+                  "type": "string",
+                  "enum": [
+                    "TCP",
+                    "UDP",
+                    "SCTP"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "annotations": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "loadBalancerIP": {
+            "type": "string"
+          },
+          "loadBalancerSourceRanges": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "externalTrafficPolicy": {
+            "type": "string",
+            "enum": [
+              "Cluster",
+              "Local"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "proxyHosts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 253
+      }
+    },
     "storage": {
       "type": "object",
       "required": [

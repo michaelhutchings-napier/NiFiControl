@@ -14,6 +14,33 @@ service:
   nodePort: 0
   annotations: {}
 
+# ports customizes the network ports NiFi binds. Unset (0/omitted) fields keep NiFi's
+# defaults. The HTTPS web port is set through internalTLS.httpsPort, not here.
+ports: {}
+  # http: 8080            # plaintext web port (non-TLS mode)
+  # clusterProtocol: 11443 # node-to-node cluster protocol port
+  # remoteInput: 10000    # site-to-site raw socket port
+  # loadBalance: 6342     # cluster connection load-balance port
+
+# externalServices provisions additional Services in front of the node pods beyond the
+# operator's own ClusterIP and headless Services (for example a LoadBalancer for the UI).
+externalServices: []
+  # - name: nifi-lb
+  #   type: LoadBalancer
+  #   annotations: {}
+  #   ports:
+  #     - name: https
+  #       port: 8443
+  #       targetPort: web   # named container port: web, cluster, s2s, load-balance
+  #   # loadBalancerSourceRanges: ["10.0.0.0/8"]
+  #   # externalTrafficPolicy: Local
+
+# proxyHosts adds extra host[:port] entries to NiFi's proxy allow-list, on top of the
+# Service DNS names and any Ingress host the operator adds automatically.
+proxyHosts: []
+  # - nifi.example.com
+  # - nifi.example.com:8443
+
 storage:
   enabled: true
   size: 10Gi

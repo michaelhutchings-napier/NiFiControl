@@ -720,6 +720,105 @@ spec:
                     - Fail
                     type: string
                 type: object
+              externalServices:
+                description: |-
+                  ExternalServices provisions additional Kubernetes Services in front of the managed
+                  nodes beyond the operator's own ClusterIP and headless Services — for example a
+                  LoadBalancer for the web UI or a NodePort for site-to-site. Each targets the node
+                  pods by the same selector. Only applies to Internal (operator-managed) clusters.
+                items:
+                  description: |-
+                    NiFiClusterExternalService describes an additional Service placed in front of the
+                    managed NiFi node pods. The operator sets the selector and owner reference; the Service
+                    is garbage-collected with the cluster and removed when dropped from the spec.
+                  properties:
+                    annotations:
+                      additionalProperties:
+                        type: string
+                      type: object
+                    externalTrafficPolicy:
+                      description: |-
+                        ServiceExternalTrafficPolicy describes how nodes distribute service traffic they
+                        receive on one of the Service's "externally-facing" addresses (NodePorts, ExternalIPs,
+                        and LoadBalancer IPs.
+                      type: string
+                    labels:
+                      additionalProperties:
+                        type: string
+                      type: object
+                    loadBalancerIP:
+                      type: string
+                    loadBalancerSourceRanges:
+                      items:
+                        type: string
+                      type: array
+                    name:
+                      description: |-
+                        Name is the Service metadata.name. It must be a DNS-1035 label, unique in the
+                        namespace, and distinct from the operator's own Service names.
+                      maxLength: 63
+                      minLength: 1
+                      type: string
+                    ports:
+                      items:
+                        description: NiFiClusterExternalServicePort is one port exposed
+                          by an external Service.
+                        properties:
+                          name:
+                            maxLength: 15
+                            minLength: 1
+                            type: string
+                          nodePort:
+                            description: NodePort requests a specific node port when
+                              the Service type is NodePort or LoadBalancer.
+                            format: int32
+                            maximum: 65535
+                            minimum: 0
+                            type: integer
+                          port:
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                          protocol:
+                            default: TCP
+                            description: Protocol defines network protocols supported
+                              for things like container ports.
+                            enum:
+                            - TCP
+                            - UDP
+                            - SCTP
+                            type: string
+                          targetPort:
+                            description: |-
+                              TargetPort is the container port this Service port routes to: a named NiFi container
+                              port ("web", "cluster", "s2s", "load-balance") or a numeric port. Defaults to Port.
+                            type: string
+                        required:
+                        - name
+                        - port
+                        type: object
+                      maxItems: 16
+                      minItems: 1
+                      type: array
+                    type:
+                      default: ClusterIP
+                      description: Service Type string describes ingress methods for
+                        a service
+                      enum:
+                      - ClusterIP
+                      - NodePort
+                      - LoadBalancer
+                      type: string
+                  required:
+                  - name
+                  - ports
+                  type: object
+                maxItems: 16
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               image:
                 default: apache/nifi:2.10.0
                 type: string
@@ -6109,6 +6208,61 @@ spec:
                 x-kubernetes-validations:
                 - message: set only one of minAvailable or maxUnavailable
                   rule: '!self.enabled || !(has(self.minAvailable) && has(self.maxUnavailable))'
+              ports:
+                description: |-
+                  Ports customizes the network ports NiFi binds: the HTTP web port (non-TLS mode),
+                  the node-to-node cluster protocol port, the site-to-site remote input port, and the
+                  cluster load-balance port. Unset ports keep NiFi's defaults. The HTTPS web port is
+                  configured through internalTLS.httpsPort. Only applies to Internal clusters.
+                properties:
+                  clusterProtocol:
+                    description: |-
+                      ClusterProtocol is the node-to-node cluster protocol port (nifi.cluster.node.protocol.port).
+                      Default 11443. Only relevant for clustered deployments.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  http:
+                    description: |-
+                      HTTP is the plaintext web UI/API port NiFi binds in non-TLS mode. Default 8080.
+                      Ignored when internalTLS is enabled; use internalTLS.httpsPort for the HTTPS port.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  loadBalance:
+                    description: |-
+                      LoadBalance is the cluster connection load-balance port (nifi.cluster.load.balance.port).
+                      Default 6342. Only relevant for clustered deployments.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  remoteInput:
+                    description: |-
+                      RemoteInput is the site-to-site raw socket port (nifi.remote.input.socket.port).
+                      Default 10000.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                type: object
+              proxyHosts:
+                description: |-
+                  ProxyHosts adds extra host[:port] entries to NiFi's nifi.web.proxy.host allow-list,
+                  on top of the operator-computed Service DNS names and any Ingress host. Set this for
+                  external load balancers or DNS names people reach NiFi through, otherwise NiFi
+                  rejects those requests with an untrusted-proxy error. Only applies to Internal
+                  clusters.
+                items:
+                  description: |-
+                    ProxyHost is a single host[:port] entry for NiFi's proxy allow-list. The length bound
+                    keeps the generated CRD within the API server's admission cost budget.
+                  maxLength: 253
+                  type: string
+                maxItems: 32
+                type: array
               reconciliation:
                 properties:
                   paused:
@@ -7538,6 +7692,13 @@ spec:
               rule: '!has(self.configOverrides) || self.mode != ''External'''
             - message: pod only applies to operator-managed (Internal) clusters
               rule: '!has(self.pod) || self.mode != ''External'''
+            - message: ports only applies to operator-managed (Internal) clusters
+              rule: '!has(self.ports) || self.mode != ''External'''
+            - message: externalServices only applies to operator-managed (Internal)
+                clusters
+              rule: '!has(self.externalServices) || self.mode != ''External'''
+            - message: proxyHosts only applies to operator-managed (Internal) clusters
+              rule: '!has(self.proxyHosts) || self.mode != ''External'''
             - message: 'authentication requires internalTLS: NiFi only allows user
                 authentication over HTTPS'
               rule: '!has(self.authentication) || (has(self.internalTLS) && self.internalTLS.enabled)'

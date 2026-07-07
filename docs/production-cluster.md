@@ -53,6 +53,63 @@ requests with an "invalid host header" error. Ingress TLS termination uses a Sec
 supply via `ingress.tls.secretName`; it is independent of `internalTLS` (operator-managed
 pod-to-pod mTLS).
 
+`spec.proxyHosts` adds extra `host[:port]` entries to the allow-list *on top of* the
+operator-computed Service DNS names and the Ingress host — for an external load balancer or
+a DNS name people reach NiFi through that the operator cannot infer:
+
+```yaml
+spec:
+  proxyHosts:
+    - nifi.example.com
+    - nifi.example.com:8443
+```
+
+Unlike a `configOverrides` override of `nifi.web.proxy.host` (which *replaces* the whole
+allow-list), `proxyHosts` is additive, so the operator's own Service names stay trusted.
+
+## Extra Services
+
+`spec.externalServices` provisions additional Kubernetes Services in front of the node pods
+beyond the operator's own ClusterIP and headless Services — for example a LoadBalancer for
+the web UI, or a NodePort for site-to-site. Each Service selects the node pods with the
+operator's own selector and is tracked (like the operator's Services) by annotation, so an
+`Orphan` deletion leaves it behind and it is removed only under the `Delete` policy or when
+dropped from the spec.
+
+```yaml
+spec:
+  externalServices:
+    - name: nifi-lb
+      type: LoadBalancer
+      annotations:
+        external-dns.alpha.kubernetes.io/hostname: nifi.example.com
+      ports:
+        - name: https
+          port: 8443
+          targetPort: web        # named container port: web, cluster, s2s, load-balance
+      loadBalancerSourceRanges: ["10.0.0.0/8"]
+      externalTrafficPolicy: Local
+```
+
+`targetPort` accepts a named container port or a numeric port as a string. Remember to add
+the load balancer's hostname to `proxyHosts` so NiFi accepts requests arriving through it.
+
+## Custom ports
+
+`spec.ports` overrides the network ports NiFi binds; unset fields keep NiFi's defaults. The
+operator applies each to `nifi.properties`, the container ports, and the relevant Services.
+
+```yaml
+spec:
+  ports:
+    http: 8080             # plaintext web port (non-TLS mode; HTTPS is internalTLS.httpsPort)
+    clusterProtocol: 11443 # node-to-node cluster protocol port
+    remoteInput: 10000     # site-to-site raw socket port
+    loadBalance: 6342      # cluster connection load-balance port
+```
+
+The HTTPS web port is configured through `internalTLS.httpsPort`, not here.
+
 ## Safe version upgrades
 
 Change `spec.image` to upgrade NiFi. `spec.upgrade` controls the StatefulSet roll:
@@ -130,9 +187,10 @@ Keys the operator itself manages are rejected at admission because a raw overrid
 sever the operator's own wiring: the web listener host/port, TLS keystore and truststore
 settings, the sensitive properties key, cluster/ZooKeeper node settings, and the heap
 arguments `java.arg.2`/`java.arg.3` (set `spec.jvm` instead). `nifi.web.proxy.host` *can*
-be overridden — for example to allow an external load balancer hostname — but the override
-replaces the operator-computed allow-list, so include the in-cluster Service DNS names or
-the operator (and Ingress) will be rejected with an "invalid host header" error.
+be overridden — but the override replaces the operator-computed allow-list, so include the
+in-cluster Service DNS names or the operator (and Ingress) will be rejected with an "invalid
+host header" error. To *add* an external load balancer hostname without replacing the
+allow-list, prefer the additive `spec.proxyHosts` (see "Ingress and proxy host" above).
 
 `configOverrides.logbackXml` replaces `conf/logback.xml` wholesale for custom log levels,
 appenders, or retention. The content is not validated — a malformed document surfaces as a

@@ -75,6 +75,13 @@ func managedClusterProxyHost(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSM
 	if ingress := cluster.Spec.Ingress; ingress != nil && ingress.Enabled && ingress.Host != "" {
 		hosts[ingress.Host] = struct{}{}
 	}
+	// User-supplied additive entries: external load balancers or DNS names people reach
+	// NiFi through that the operator cannot infer from the Service or Ingress.
+	for _, host := range cluster.Spec.ProxyHosts {
+		if trimmed := strings.TrimSpace(string(host)); trimmed != "" {
+			hosts[trimmed] = struct{}{}
+		}
+	}
 	if len(hosts) == 0 {
 		return ""
 	}
