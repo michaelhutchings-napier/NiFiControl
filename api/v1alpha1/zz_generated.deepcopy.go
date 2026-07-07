@@ -1334,6 +1334,11 @@ func (in *NiFiClusterPodSpec) DeepCopyInto(out *NiFiClusterPodSpec) {
 		*out = make([]corev1.LocalObjectReference, len(*in))
 		copy(*out, *in)
 	}
+	if in.SecurityContext != nil {
+		in, out := &in.SecurityContext, &out.SecurityContext
+		*out = new(corev1.PodSecurityContext)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.ExtraVolumes != nil {
 		in, out := &in.ExtraVolumes, &out.ExtraVolumes
 		*out = make([]corev1.Volume, len(*in))

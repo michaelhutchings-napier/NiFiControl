@@ -246,6 +246,9 @@ spec:
     annotations: {example.com/scrape: "true"}
     imagePullSecrets: [{name: regcred}]
     serviceAccountName: nifi-nodes
+    securityContext:
+      runAsUser: 1000
+      runAsNonRoot: true
     extraVolumes:
       - name: nars
         persistentVolumeClaim: {claimName: custom-nars}
@@ -261,6 +264,11 @@ spec:
       - name: log-shipper
         image: fluent/fluent-bit:3.0
 ```
+
+`spec.pod.securityContext` sets the pod-level security context (for example `runAsUser`,
+`runAsGroup`, `runAsNonRoot`, `seccompProfile`). It replaces the operator default, except
+that `fsGroup` falls back to `1000` — the `apache/nifi` image's uid/gid — when you leave it
+unset, so mounted volumes stay writable even if you only override `runAsUser`.
 
 Like `configOverrides`, `spec.pod` applies to the primary pool and all NiFiNodeGroup pools.
 Operator-managed metadata wins on conflicts (selector labels and checksum annotations

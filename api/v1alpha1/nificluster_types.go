@@ -448,6 +448,12 @@ type NiFiClusterPodSpec struct {
 	// ServiceAccountName runs the node pods under a specific ServiceAccount.
 	// +optional
 	ServiceAccountName string `json:"serviceAccountName,omitempty"`
+	// SecurityContext sets the pod-level security context for the node pods (for example
+	// runAsUser, runAsGroup, fsGroup, seccompProfile). When set it replaces the operator
+	// default, except that fsGroup defaults to 1000 (the apache/nifi image's uid/gid) when
+	// left unset, so volume ownership stays correct.
+	// +optional
+	SecurityContext *corev1.PodSecurityContext `json:"securityContext,omitempty"`
 	// ExtraVolumes are appended to the pod volumes, for mounting NAR extensions,
 	// driver libraries, or sidecar data.
 	// +optional

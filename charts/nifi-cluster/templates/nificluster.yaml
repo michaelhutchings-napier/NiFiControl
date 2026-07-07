@@ -229,10 +229,14 @@ spec:
     logbackXml: {{ . | quote }}
     {{- end }}
   {{- end }}
-  {{- if or .Values.pod.labels .Values.pod.annotations .Values.pod.imagePullSecrets .Values.pod.serviceAccountName .Values.pod.extraVolumes .Values.pod.extraVolumeMounts .Values.pod.extraInitContainers .Values.pod.extraContainers }}
+  {{- if or .Values.pod.labels .Values.pod.annotations .Values.pod.imagePullSecrets .Values.pod.serviceAccountName .Values.pod.securityContext .Values.pod.extraVolumes .Values.pod.extraVolumeMounts .Values.pod.extraInitContainers .Values.pod.extraContainers }}
   pod:
     {{- with .Values.pod.labels }}
     labels:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.pod.securityContext }}
+    securityContext:
       {{- toYaml . | nindent 6 }}
     {{- end }}
     {{- with .Values.pod.annotations }}

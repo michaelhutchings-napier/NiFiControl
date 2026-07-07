@@ -496,13 +496,10 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls
 		VolumeMounts:   managedClusterVolumeMounts(cluster.Spec.Storage, tls, hasConfigOverrides(cluster), managedClusterAuthVolumeSource(cluster, auth) != ""),
 	}
 	podSpec := corev1.PodSpec{
-		SecurityContext: &corev1.PodSecurityContext{
-			FSGroup:             ptr.To[int64](1000),
-			FSGroupChangePolicy: ptr.To(corev1.FSGroupChangeOnRootMismatch),
-		},
-		InitContainers: []corev1.Container{managedClusterDataInitializer(cluster)},
-		Containers:     []corev1.Container{container},
-		Volumes:        managedClusterVolumes(cluster, tls, auth),
+		SecurityContext: managedClusterPodSecurityContext(cluster),
+		InitContainers:  []corev1.Container{managedClusterDataInitializer(cluster)},
+		Containers:      []corev1.Container{container},
+		Volumes:         managedClusterVolumes(cluster, tls, auth),
 	}
 	applyManagedClusterScheduling(&podSpec, cluster)
 	annotations := managedClusterAnnotations(cluster)
@@ -1058,6 +1055,28 @@ func managedClusterServicePort(cluster *nifiv1alpha1.NiFiCluster) int32 {
 		return cluster.Spec.Service.Port
 	}
 	return defaultNiFiWebPort
+}
+
+// managedClusterPodSecurityContext returns the pod-level security context for the node
+// pods. It defaults to fsGroup 1000 (the apache/nifi image's uid/gid) so mounted volumes
+// are writable. A spec.pod.securityContext replaces the default, but fsGroup and its change
+// policy fall back to the operator defaults when the user leaves them unset, so volume
+// ownership stays correct even when only runAsUser/runAsGroup are customized.
+func managedClusterPodSecurityContext(cluster *nifiv1alpha1.NiFiCluster) *corev1.PodSecurityContext {
+	if cluster.Spec.Pod == nil || cluster.Spec.Pod.SecurityContext == nil {
+		return &corev1.PodSecurityContext{
+			FSGroup:             ptr.To[int64](1000),
+			FSGroupChangePolicy: ptr.To(corev1.FSGroupChangeOnRootMismatch),
+		}
+	}
+	sc := cluster.Spec.Pod.SecurityContext.DeepCopy()
+	if sc.FSGroup == nil {
+		sc.FSGroup = ptr.To[int64](1000)
+	}
+	if sc.FSGroupChangePolicy == nil {
+		sc.FSGroupChangePolicy = ptr.To(corev1.FSGroupChangeOnRootMismatch)
+	}
+	return sc
 }
 
 // managedClusterHTTPPort is the plaintext web port NiFi binds in non-TLS mode.

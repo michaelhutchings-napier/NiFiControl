@@ -214,6 +214,13 @@ pod:
   annotations: {}
   imagePullSecrets: []      # e.g. [{name: regcred}]
   serviceAccountName: ""
+  # Pod-level security context. Replaces the operator default, except fsGroup falls back
+  # to 1000 (the apache/nifi image's uid/gid) when unset so volumes stay writable.
+  securityContext: {}
+    # runAsUser: 1000
+    # runAsGroup: 1000
+    # fsGroup: 1000
+    # runAsNonRoot: true
   # Appended to the pod volumes / NiFi container mounts — e.g. custom NAR extensions
   # or JDBC drivers at /opt/nifi/nifi-current/nar_extensions.
   extraVolumes: []

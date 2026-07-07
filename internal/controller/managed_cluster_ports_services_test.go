@@ -10,6 +10,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -165,6 +166,40 @@ func TestManagedClusterDomainInSANsAndProxyHosts(t *testing.T) {
 	}
 	if strings.Contains(proxy, "cluster.local") {
 		t.Fatalf("custom-domain proxy hosts %q must not carry cluster.local", proxy)
+	}
+}
+
+func TestManagedClusterPodSecurityContext(t *testing.T) {
+	// Default: fsGroup 1000, OnRootMismatch.
+	cluster := hardeningCluster()
+	sc := managedClusterPodSecurityContext(cluster)
+	if sc.FSGroup == nil || *sc.FSGroup != 1000 || sc.FSGroupChangePolicy == nil || *sc.FSGroupChangePolicy != corev1.FSGroupChangeOnRootMismatch {
+		t.Fatalf("default security context = %#v", sc)
+	}
+
+	// Custom runAsUser without fsGroup keeps the operator's fsGroup default.
+	cluster.Spec.Pod = &nifiv1alpha1.NiFiClusterPodSpec{
+		SecurityContext: &corev1.PodSecurityContext{RunAsUser: ptr.To[int64](2000), RunAsNonRoot: ptr.To(true)},
+	}
+	sc = managedClusterPodSecurityContext(cluster)
+	if sc.RunAsUser == nil || *sc.RunAsUser != 2000 || sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
+		t.Fatalf("custom runAsUser not applied: %#v", sc)
+	}
+	if sc.FSGroup == nil || *sc.FSGroup != 1000 {
+		t.Fatalf("fsGroup default not preserved when unset: %#v", sc)
+	}
+
+	// Explicit fsGroup wins over the default.
+	cluster.Spec.Pod.SecurityContext.FSGroup = ptr.To[int64](3000)
+	if sc = managedClusterPodSecurityContext(cluster); sc.FSGroup == nil || *sc.FSGroup != 3000 {
+		t.Fatalf("explicit fsGroup not honored: %#v", sc)
+	}
+
+	// The resolver returns a copy; it must not mutate the spec's fsGroup.
+	cluster.Spec.Pod.SecurityContext.FSGroup = nil
+	_ = managedClusterPodSecurityContext(cluster)
+	if cluster.Spec.Pod.SecurityContext.FSGroup != nil {
+		t.Fatal("resolver mutated the spec's securityContext")
 	}
 }
 
