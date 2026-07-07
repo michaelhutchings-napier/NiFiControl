@@ -106,6 +106,10 @@ integration-secureauth-kind:
 integration-oidc-kind:
 	./hack/test-oidc-kind.sh
 
+.PHONY: integration-oidc-tls-kind
+integration-oidc-tls-kind:
+	./hack/test-oidc-tls-kind.sh
+
 .PHONY: integration-remoteprocessgroup-kind
 integration-remoteprocessgroup-kind:
 	./hack/test-remoteprocessgroup-kind.sh

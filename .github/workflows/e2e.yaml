@@ -26,6 +26,7 @@ jobs:
           - integration-configoverrides-kind
           - integration-secureauth-kind
           - integration-oidc-kind
+          - integration-oidc-tls-kind
           - integration-reportingtask-kind
           - integration-authz-kind
           - integration-bluegreen-kind

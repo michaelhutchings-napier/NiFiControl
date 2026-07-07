@@ -259,6 +259,13 @@ spec:
       userSearchBase: {{ .Values.authentication.ldap.userSearchBase | quote }}
       userSearchFilter: {{ .Values.authentication.ldap.userSearchFilter | quote }}
       identityStrategy: {{ .Values.authentication.ldap.identityStrategy }}
+      {{- with .Values.authentication.ldap.caSecretRef.name }}
+      caSecretRef:
+        name: {{ . | quote }}
+        {{- with $.Values.authentication.ldap.caSecretRef.key }}
+        key: {{ . | quote }}
+        {{- end }}
+      {{- end }}
     {{- else if eq .Values.authentication.mode "OIDC" }}
     oidc:
       discoveryURL: {{ .Values.authentication.oidc.discoveryURL | quote }}
@@ -270,6 +277,13 @@ spec:
       {{- with .Values.authentication.oidc.additionalScopes }}
       additionalScopes:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.authentication.oidc.caSecretRef.name }}
+      caSecretRef:
+        name: {{ . | quote }}
+        {{- with $.Values.authentication.oidc.caSecretRef.key }}
+        key: {{ . | quote }}
+        {{- end }}
       {{- end }}
     {{- end }}
   {{- end }}

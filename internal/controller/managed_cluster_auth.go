@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/pem"
 	"encoding/xml"
 	"fmt"
 	"strings"
@@ -22,6 +24,20 @@ const (
 	managedAuthVolume             = "nificontrol-auth"
 	managedAuthChecksumAnnotation = "nifi.controlnifi.io/auth-checksum"
 	authLoginProvidersKey         = "login-identity-providers.xml"
+	// authCAKey is the mounted PEM CA bundle the start script builds into a truststore
+	// so NiFi trusts an LDAPS/OIDC endpoint signed by a private CA. The authentication
+	// mode is exclusive, so a single key serves whichever mode is active.
+	authCAKey = "auth-ca.crt"
+	// ldapTruststorePath / ldapTruststorePassword are where the start script builds the
+	// LDAP truststore and the password embedded in the rendered provider. A truststore
+	// holds only public CA certificates, so the password guards integrity, not secrecy;
+	// "changeit" is the JDK convention and lets the operator render the XML without the
+	// runtime keystore password. The path is under the image install directory
+	// (writable by the nifi user), not conf/, which is a mounted subPath where new files
+	// cannot be created.
+	managedTruststoreDir   = "/opt/nifi/nifi-current/nificontrol-truststores"
+	ldapTruststorePath     = managedTruststoreDir + "/ldap-truststore.p12"
+	ldapTruststorePassword = "changeit"
 )
 
 // resolvedClusterAuth carries everything the node pods need for the configured
@@ -93,14 +109,26 @@ func resolveClusterAuthentication(ctx context.Context, c client.Client, cluster 
 		if err != nil {
 			return nil, err
 		}
-		document := renderLDAPLoginProvidersXML(ldap, password)
+		caPEM, err := resolveAuthCA(ctx, c, cluster.Namespace, ldap.CASecretRef, "authentication.ldap.caSecretRef")
+		if err != nil {
+			return nil, err
+		}
+		document := renderLDAPLoginProvidersXML(ldap, password, len(caPEM) > 0)
 		resolved.secretData = map[string][]byte{authLoginProvidersKey: []byte(document)}
 		resolved.env = append(resolved.env, corev1.EnvVar{Name: "NIFI_LOGIN_IDENTITY_PROVIDER", Value: "ldap-provider"})
 		hasher.Write([]byte(document))
+		if len(caPEM) > 0 {
+			resolved.secretData[authCAKey] = caPEM
+			hasher.Write(caPEM)
+		}
 
 	case "OIDC":
 		oidc := auth.OIDC
 		clientSecret, err := authSecretKeyValue(ctx, c, cluster.Namespace, oidc.ClientSecretRef, "authentication.oidc.clientSecretRef")
+		if err != nil {
+			return nil, err
+		}
+		caPEM, err := resolveAuthCA(ctx, c, cluster.Namespace, oidc.CASecretRef, "authentication.oidc.caSecretRef")
 		if err != nil {
 			return nil, err
 		}
@@ -118,6 +146,14 @@ func resolveClusterAuthentication(ctx context.Context, c client.Client, cluster 
 		)
 		fmt.Fprintf(hasher, "%s\n%s\n%s\n%s\n", oidc.DiscoveryURL, oidc.ClientID, claim, strings.Join(oidc.AdditionalScopes, ","))
 		hasher.Write([]byte(clientSecret))
+		if len(caPEM) > 0 {
+			// The mounted CA triggers the start script to add it to NiFi's truststore and
+			// switch the OIDC truststore strategy to NIFI; NIFI_OIDC_PRIVATE_CA tells the
+			// script which CA file to import for the OIDC (vs LDAP) path.
+			resolved.secretData = map[string][]byte{authCAKey: caPEM}
+			resolved.env = append(resolved.env, corev1.EnvVar{Name: "NIFI_OIDC_PRIVATE_CA", Value: "true"})
+			hasher.Write(caPEM)
+		}
 
 	default:
 		return nil, fmt.Errorf("unsupported authentication mode %q", auth.Mode)
@@ -154,10 +190,56 @@ func authSecretKeyValue(ctx context.Context, c client.Client, namespace string, 
 	return string(value), nil
 }
 
+// authCAKeyOrDefault falls back to ca.crt, the conventional CA-bundle key, so callers can
+// omit the key in caSecretRef.
+func authCAKeyOrDefault(key string) string {
+	if key == "" {
+		return "ca.crt"
+	}
+	return key
+}
+
+// resolveAuthCA reads and validates the PEM CA bundle referenced by a caSecretRef. It
+// returns nil when the reference is unset. Validating here (rather than letting keytool
+// fail at pod startup) surfaces a bad CA as a clear AuthenticationInvalid status.
+func resolveAuthCA(ctx context.Context, c client.Client, namespace string, reference *nifiv1alpha1.SecretKeyRef, field string) ([]byte, error) {
+	if reference == nil {
+		return nil, nil
+	}
+	secret := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Name: reference.Name, Namespace: namespace}, secret); err != nil {
+		return nil, fmt.Errorf("%s %q: %w", field, reference.Name, err)
+	}
+	key := authCAKeyOrDefault(reference.Key)
+	pemBytes := secret.Data[key]
+	if len(pemBytes) == 0 {
+		return nil, fmt.Errorf("%s %q: key %q is missing or empty", field, reference.Name, key)
+	}
+	found := 0
+	for rest := pemBytes; ; {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+			return nil, fmt.Errorf("%s %q: invalid certificate in key %q: %w", field, reference.Name, key, err)
+		}
+		found++
+	}
+	if found == 0 {
+		return nil, fmt.Errorf("%s %q: key %q contains no PEM CERTIFICATE blocks", field, reference.Name, key)
+	}
+	return pemBytes, nil
+}
+
 // renderLDAPLoginProvidersXML renders NiFi's ldap-provider configuration. The manager
 // password is embedded here, which is why the rendered document lives in a Secret; NiFi
 // itself stores it the same way in conf/login-identity-providers.xml on the node volume.
-func renderLDAPLoginProvidersXML(ldap *nifiv1alpha1.NiFiClusterLDAPAuthSpec, managerPassword string) string {
+func renderLDAPLoginProvidersXML(ldap *nifiv1alpha1.NiFiClusterLDAPAuthSpec, managerPassword string, privateCA bool) string {
 	strategy := ldap.AuthenticationStrategy
 	if strategy == "" {
 		strategy = "SIMPLE"
@@ -165,6 +247,13 @@ func renderLDAPLoginProvidersXML(ldap *nifiv1alpha1.NiFiClusterLDAPAuthSpec, man
 	identityStrategy := ldap.IdentityStrategy
 	if identityStrategy == "" {
 		identityStrategy = "USE_USERNAME"
+	}
+	// When a private CA is supplied the start script builds a PKCS12 truststore at
+	// ldapTruststorePath; point the provider at it. Otherwise leave the truststore
+	// properties empty so LDAPS/START_TLS fall back to the JDK trust store.
+	trustStore, trustStorePassword, trustStoreType := "", "", ""
+	if privateCA {
+		trustStore, trustStorePassword, trustStoreType = ldapTruststorePath, ldapTruststorePassword, "PKCS12"
 	}
 	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <loginIdentityProviders>
@@ -177,9 +266,9 @@ func renderLDAPLoginProvidersXML(ldap *nifiv1alpha1.NiFiClusterLDAPAuthSpec, man
         <property name="TLS - Keystore"></property>
         <property name="TLS - Keystore Password"></property>
         <property name="TLS - Keystore Type"></property>
-        <property name="TLS - Truststore"></property>
-        <property name="TLS - Truststore Password"></property>
-        <property name="TLS - Truststore Type"></property>
+        <property name="TLS - Truststore">` + xmlEscape(trustStore) + `</property>
+        <property name="TLS - Truststore Password">` + xmlEscape(trustStorePassword) + `</property>
+        <property name="TLS - Truststore Type">` + xmlEscape(trustStoreType) + `</property>
         <property name="TLS - Client Auth"></property>
         <property name="TLS - Protocol">TLSv1.2</property>
         <property name="TLS - Shutdown Gracefully"></property>

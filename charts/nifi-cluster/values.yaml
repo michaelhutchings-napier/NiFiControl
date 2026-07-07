@@ -208,12 +208,18 @@ authentication:
     userSearchBase: ""
     userSearchFilter: ""         # e.g. (uid={0})
     identityStrategy: USE_USERNAME   # USE_USERNAME | USE_DN
+    # For LDAPS/START_TLS against a directory signed by a private CA, point at a Secret
+    # holding the PEM CA bundle; the operator builds it into NiFi's truststore.
+    caSecretRef: {}              # e.g. {name: corp-ca, key: ca.crt}
   oidc:
     discoveryURL: ""             # .../.well-known/openid-configuration
     clientID: ""
     clientSecretRef: {name: "", key: password}
     claim: email
     additionalScopes: []
+    # For an identity provider whose HTTPS cert is signed by a private CA, point at a
+    # Secret holding the PEM CA bundle; NiFi trusts only the JDK CA bundle without it.
+    caSecretRef: {}              # e.g. {name: corp-ca, key: ca.crt}
 
 deletionPolicy: Delete
 driftPolicy:

@@ -386,12 +386,40 @@ spec:
                         default: SIMPLE
                         description: |-
                           AuthenticationStrategy for the directory connection. LDAPS and START_TLS trust
-                          the JDK trust store; private directory CAs are not yet supported.
+                          the JDK trust store unless caSecretRef supplies a private CA.
                         enum:
                         - SIMPLE
                         - LDAPS
                         - START_TLS
                         type: string
+                      caSecretRef:
+                        description: |-
+                          CASecretRef supplies a PEM CA bundle (default key ca.crt) that the operator builds
+                          into a truststore so NiFi trusts a directory server whose LDAPS/START_TLS
+                          certificate is signed by a private CA. Only meaningful with LDAPS or START_TLS.
+                          Rotating the referenced Secret rolls the nodes.
+                        properties:
+                          key:
+                            description: The key of the secret to select from.  Must
+                              be a valid secret key.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the Secret or its key must
+                              be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
                       identityStrategy:
                         default: USE_USERNAME
                         description: |-
@@ -464,6 +492,34 @@ spec:
                         items:
                           type: string
                         type: array
+                      caSecretRef:
+                        description: |-
+                          CASecretRef supplies a PEM CA bundle (default key ca.crt) so NiFi trusts an
+                          identity provider whose HTTPS certificate is signed by a private CA. The operator
+                          adds it to NiFi's truststore and switches the OIDC truststore strategy to NIFI.
+                          Without it, NiFi trusts only the JDK CA bundle. Rotating the Secret rolls the nodes.
+                        properties:
+                          key:
+                            description: The key of the secret to select from.  Must
+                              be a valid secret key.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the Secret or its key must
+                              be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
                       claim:
                         default: email
                         description: Claim that identifies the user, for example email

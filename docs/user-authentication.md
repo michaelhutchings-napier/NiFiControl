@@ -65,14 +65,18 @@ spec:
       userSearchBase: ou=users,dc=example,dc=org
       userSearchFilter: (uid={0})
       identityStrategy: USE_USERNAME      # or USE_DN
+      caSecretRef: {name: ldap-ca, key: ca.crt}   # optional; for LDAPS/START_TLS with a private CA
     adminIdentities: [alice]
 ```
 
 The operator renders `login-identity-providers.xml` (manager password included) into a
 per-cluster Secret that the nodes mount and copy into place at startup. `LDAPS` and
-`START_TLS` trust the JDK trust store; directories signed by a private CA are not yet
-supported. Group synchronization (`ldap-user-group-provider`) is not yet wired — manage
-groups with `NiFiUserGroup` resources instead.
+`START_TLS` trust the JDK trust store by default. To trust a directory whose certificate
+is signed by a **private CA**, set `caSecretRef` to a Secret holding the PEM CA bundle
+(default key `ca.crt`): the operator validates the PEM, ships it to the nodes, and builds
+it into a PKCS12 truststore that the LDAP provider references — no custom image needed.
+Group synchronization (`ldap-user-group-provider`) is not yet wired — manage groups with
+`NiFiUserGroup` resources instead.
 
 ## OIDC
 
@@ -86,6 +90,7 @@ spec:
       clientSecretRef: {name: oidc-client, key: secret}
       claim: email                        # the claim that becomes the NiFi identity
       additionalScopes: [groups]
+      caSecretRef: {name: oidc-ca, key: ca.crt}   # optional; provider served by a private CA
     adminIdentities: [alice@example.com]
 ```
 
@@ -95,13 +100,23 @@ URL (`https://<host>/nifi-api/access/oidc/callback`) with the identity provider,
 sure the host people use (Ingress host or load balancer) is in NiFi's proxy allow-list —
 the operator adds the Service DNS names and the Ingress host automatically.
 
-OIDC is exercised end to end in the kind E2E suite (`integration-oidc-kind`) against a
-real [dex](https://dexidp.io) identity provider: the harness asserts the operator wires
-OIDC into `nifi.properties`, that NiFi builds its OIDC client from dex's discovery
+If the provider's HTTPS endpoint is served by a **private CA** (so NiFi can't fetch the
+discovery document against the JDK trust store), set `caSecretRef` to a Secret holding the
+PEM CA bundle (default key `ca.crt`). NiFi's OIDC discovery has no custom-truststore path,
+so the operator adds the CA to a writable copy of the node's own server truststore and
+switches `nifi.security.user.oidc.truststore.strategy` to `NIFI` — NiFi then trusts both
+the internal mTLS CA and your provider's CA.
+
+OIDC is exercised end to end in the kind E2E suite against a real
+[dex](https://dexidp.io) identity provider. `integration-oidc-kind` asserts the operator
+wires OIDC into `nifi.properties`, that NiFi builds its OIDC client from dex's discovery
 document, and that NiFi issues a spec-correct authorization-code request to dex (correct
-`client_id`, callback `redirect_uri`, `scope`, and PKCE). The interactive browser login
-itself (entering credentials at the provider) is not scripted — validate that against
-your own provider in staging.
+`client_id`, callback `redirect_uri`, `scope`, and PKCE). `integration-oidc-tls-kind`
+additionally runs dex over HTTPS behind a cert-manager private CA and proves the
+`caSecretRef` path: NiFi fetches the HTTPS discovery document trusting only the supplied
+CA and completes the same handshake. The interactive browser login itself (entering
+credentials at the provider) is not scripted — validate that against your own provider in
+staging.
 
 ## Credential rotation and rollouts
 

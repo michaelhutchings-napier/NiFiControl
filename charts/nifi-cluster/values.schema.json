@@ -802,6 +802,18 @@
                 "USE_DN",
                 "USE_USERNAME"
               ]
+            },
+            "caSecretRef": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false
@@ -835,6 +847,18 @@
               "items": {
                 "type": "string"
               }
+            },
+            "caSecretRef": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false

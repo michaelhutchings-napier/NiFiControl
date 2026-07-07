@@ -124,6 +124,34 @@ prop_replace 'nifi.security.user.oidc.additional.scopes' "${NIFI_OIDC_ADDITIONAL
 if [ -f "${NIFI_AUTH_DIR:-/opt/nifi/nificontrol-auth}/login-identity-providers.xml" ]; then
   cp "${NIFI_AUTH_DIR:-/opt/nifi/nificontrol-auth}/login-identity-providers.xml" "${NIFI_HOME}/conf/login-identity-providers.xml"
 fi
+# Private-CA trust for LDAPS / OIDC over HTTPS. The mounted PEM CA bundle is built into a
+# PKCS12 truststore with the JDK keytool (cacerts itself is not writable by the nifi user).
+# The truststores live under the image install directory, which the nifi user can write;
+# conf/ is a mounted subPath where new files cannot be created.
+auth_ca="${NIFI_AUTH_DIR:-/opt/nifi/nificontrol-auth}/auth-ca.crt"
+if [ -f "${auth_ca}" ]; then
+  keytool_bin="${JAVA_HOME}/bin/keytool"
+  ts_dir="/opt/nifi/nifi-current/nificontrol-truststores"
+  mkdir -p "${ts_dir}"
+  if [ -n "${NIFI_OIDC_PRIVATE_CA:-}" ]; then
+    # OIDC has no custom truststore path: add the CA to a writable copy of the server
+    # truststore (a superset that still trusts the cluster/mTLS CA) and use strategy NIFI.
+    oidc_ts="${ts_dir}/oidc-truststore.p12"
+    cp "${NIFI_SECURITY_DIR}/truststore.p12" "${oidc_ts}"
+    # cp inherits the read-only mode of the Secret-mounted source; keytool must rewrite it.
+    chmod u+w "${oidc_ts}"
+    "${keytool_bin}" -importcert -noprompt -alias nificontrol-oidc-ca -file "${auth_ca}" \
+      -keystore "${oidc_ts}" -storetype PKCS12 -storepass "${NIFI_KEYSTORE_PASSWORD}"
+    prop_replace 'nifi.security.truststore' "${oidc_ts}"
+    prop_replace 'nifi.security.user.oidc.truststore.strategy' 'NIFI'
+  else
+    # LDAP: dedicated truststore referenced by the rendered login-identity-providers.xml.
+    ldap_ts="${ts_dir}/ldap-truststore.p12"
+    rm -f "${ldap_ts}"
+    "${keytool_bin}" -importcert -noprompt -alias nificontrol-ldap-ca -file "${auth_ca}" \
+      -keystore "${ldap_ts}" -storetype PKCS12 -storepass changeit
+  fi
+fi
 if [ -n "${NIFI_SINGLE_USER_USERNAME:-}" ]; then
   "${NIFI_HOME}/bin/nifi.sh" set-single-user-credentials "${NIFI_SINGLE_USER_USERNAME}" "${NIFI_SINGLE_USER_PASSWORD}" >/dev/null 2>&1
 fi

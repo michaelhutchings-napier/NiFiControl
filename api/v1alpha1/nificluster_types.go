@@ -282,8 +282,14 @@ type NiFiClusterLDAPAuthSpec struct {
 	// +kubebuilder:validation:Enum=SIMPLE;LDAPS;START_TLS
 	// +kubebuilder:default=SIMPLE
 	// AuthenticationStrategy for the directory connection. LDAPS and START_TLS trust
-	// the JDK trust store; private directory CAs are not yet supported.
+	// the JDK trust store unless caSecretRef supplies a private CA.
 	AuthenticationStrategy string `json:"authenticationStrategy,omitempty"`
+	// CASecretRef supplies a PEM CA bundle (default key ca.crt) that the operator builds
+	// into a truststore so NiFi trusts a directory server whose LDAPS/START_TLS
+	// certificate is signed by a private CA. Only meaningful with LDAPS or START_TLS.
+	// Rotating the referenced Secret rolls the nodes.
+	// +optional
+	CASecretRef *SecretKeyRef `json:"caSecretRef,omitempty"`
 	// ManagerDN binds for user lookups, for example cn=admin,dc=example,dc=org.
 	ManagerDN string `json:"managerDN"`
 	// ManagerPasswordSecretRef references the Secret key holding the manager password.
@@ -313,6 +319,12 @@ type NiFiClusterOIDCAuthSpec struct {
 	Claim string `json:"claim,omitempty"`
 	// +optional
 	AdditionalScopes []string `json:"additionalScopes,omitempty"`
+	// CASecretRef supplies a PEM CA bundle (default key ca.crt) so NiFi trusts an
+	// identity provider whose HTTPS certificate is signed by a private CA. The operator
+	// adds it to NiFi's truststore and switches the OIDC truststore strategy to NIFI.
+	// Without it, NiFi trusts only the JDK CA bundle. Rotating the Secret rolls the nodes.
+	// +optional
+	CASecretRef *SecretKeyRef `json:"caSecretRef,omitempty"`
 }
 
 // NiFiClusterPodSpec customizes the node pods the operator generates. Operator-managed
