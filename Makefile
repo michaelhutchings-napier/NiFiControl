@@ -102,6 +102,10 @@ integration-configoverrides-kind:
 integration-secureauth-kind:
 	./hack/test-secure-auth-kind.sh
 
+.PHONY: integration-oidc-kind
+integration-oidc-kind:
+	./hack/test-oidc-kind.sh
+
 .PHONY: integration-remoteprocessgroup-kind
 integration-remoteprocessgroup-kind:
 	./hack/test-remoteprocessgroup-kind.sh

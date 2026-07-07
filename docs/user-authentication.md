@@ -93,9 +93,15 @@ OIDC is configured purely through `nifi.properties`; the client secret reaches t
 as an environment variable from the referenced Secret. Register the cluster's callback
 URL (`https://<host>/nifi-api/access/oidc/callback`) with the identity provider, and make
 sure the host people use (Ingress host or load balancer) is in NiFi's proxy allow-list —
-the operator adds the Service DNS names and the Ingress host automatically. OIDC is
-covered by rendering/unit tests but is not exercised in the kind E2E suite (it needs a
-running identity provider); validate your provider integration in a staging environment.
+the operator adds the Service DNS names and the Ingress host automatically.
+
+OIDC is exercised end to end in the kind E2E suite (`integration-oidc-kind`) against a
+real [dex](https://dexidp.io) identity provider: the harness asserts the operator wires
+OIDC into `nifi.properties`, that NiFi builds its OIDC client from dex's discovery
+document, and that NiFi issues a spec-correct authorization-code request to dex (correct
+`client_id`, callback `redirect_uri`, `scope`, and PKCE). The interactive browser login
+itself (entering credentials at the provider) is not scripted — validate that against
+your own provider in staging.
 
 ## Credential rotation and rollouts
 
