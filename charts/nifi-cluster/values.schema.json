@@ -213,7 +213,7 @@
         "additionalProperties": false
       }
     },
-    "proxyHosts": {
+    "additionalProxyHosts": {
       "type": "array",
       "items": {
         "type": "string",

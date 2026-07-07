@@ -77,7 +77,7 @@ func managedClusterProxyHost(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSM
 	}
 	// User-supplied additive entries: external load balancers or DNS names people reach
 	// NiFi through that the operator cannot infer from the Service or Ingress.
-	for _, host := range cluster.Spec.ProxyHosts {
+	for _, host := range cluster.Spec.AdditionalProxyHosts {
 		if trimmed := strings.TrimSpace(string(host)); trimmed != "" {
 			hosts[trimmed] = struct{}{}
 		}

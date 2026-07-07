@@ -109,7 +109,7 @@ func TestManagedClusterHeadlessServiceCustomPorts(t *testing.T) {
 func TestManagedClusterAdditiveProxyHosts(t *testing.T) {
 	cluster := hardeningCluster()
 	cluster.Spec.Ingress = &nifiv1alpha1.NiFiClusterIngressSpec{Enabled: true, Host: "nifi.example.com"}
-	cluster.Spec.ProxyHosts = []nifiv1alpha1.ProxyHost{"lb.example.com", "lb.example.com:8443", "  "}
+	cluster.Spec.AdditionalProxyHosts = []nifiv1alpha1.ProxyHost{"lb.example.com", "lb.example.com:8443", "  "}
 
 	got := managedClusterProxyHost(cluster, nil)
 	for _, want := range []string{"nifi.example.com", "lb.example.com", "lb.example.com:8443"} {

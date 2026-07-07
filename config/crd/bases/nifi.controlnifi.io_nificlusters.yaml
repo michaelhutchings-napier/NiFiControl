@@ -193,6 +193,21 @@ spec:
                   - name
                   type: object
                 type: array
+              additionalProxyHosts:
+                description: |-
+                  AdditionalProxyHosts adds extra host[:port] entries to NiFi's nifi.web.proxy.host
+                  allow-list, on top of the operator-computed Service DNS names and any Ingress host.
+                  Set this for external load balancers or DNS names people reach NiFi through, otherwise
+                  NiFi rejects those requests with an untrusted-proxy error. Additive: it never replaces
+                  the computed entries. Only applies to Internal clusters.
+                items:
+                  description: |-
+                    ProxyHost is a single host[:port] entry for NiFi's proxy allow-list. The length bound
+                    keeps the generated CRD within the API server's admission cost budget.
+                  maxLength: 253
+                  type: string
+                maxItems: 32
+                type: array
               adoptionPolicy:
                 properties:
                   mode:
@@ -6248,21 +6263,6 @@ spec:
                     minimum: 1
                     type: integer
                 type: object
-              proxyHosts:
-                description: |-
-                  ProxyHosts adds extra host[:port] entries to NiFi's nifi.web.proxy.host allow-list,
-                  on top of the operator-computed Service DNS names and any Ingress host. Set this for
-                  external load balancers or DNS names people reach NiFi through, otherwise NiFi
-                  rejects those requests with an untrusted-proxy error. Only applies to Internal
-                  clusters.
-                items:
-                  description: |-
-                    ProxyHost is a single host[:port] entry for NiFi's proxy allow-list. The length bound
-                    keeps the generated CRD within the API server's admission cost budget.
-                  maxLength: 253
-                  type: string
-                maxItems: 32
-                type: array
               reconciliation:
                 properties:
                   paused:
@@ -7697,8 +7697,9 @@ spec:
             - message: externalServices only applies to operator-managed (Internal)
                 clusters
               rule: '!has(self.externalServices) || self.mode != ''External'''
-            - message: proxyHosts only applies to operator-managed (Internal) clusters
-              rule: '!has(self.proxyHosts) || self.mode != ''External'''
+            - message: additionalProxyHosts only applies to operator-managed (Internal)
+                clusters
+              rule: '!has(self.additionalProxyHosts) || self.mode != ''External'''
             - message: 'authentication requires internalTLS: NiFi only allows user
                 authentication over HTTPS'
               rule: '!has(self.authentication) || (has(self.internalTLS) && self.internalTLS.enabled)'

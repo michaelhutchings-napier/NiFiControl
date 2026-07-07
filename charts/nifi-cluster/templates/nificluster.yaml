@@ -39,8 +39,8 @@ spec:
   externalServices:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  {{- with .Values.proxyHosts }}
-  proxyHosts:
+  {{- with .Values.additionalProxyHosts }}
+  additionalProxyHosts:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   storage:

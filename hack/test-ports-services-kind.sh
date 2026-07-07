@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end test of spec.ports (port customization), spec.externalServices (extra Services),
-# and spec.proxyHosts (additive proxy allow-list) against a real Apache NiFi 2.10 in kind:
+# and spec.additionalProxyHosts (additive proxy allow-list) against a real Apache NiFi 2.10 in kind:
 #
 #   1. build + load the operator image and (re)deploy it via helm,
 #   2. provision an insecure single-node NiFiCluster with a custom HTTP port, remote-input and
@@ -104,7 +104,7 @@ spec:
     http: 8090
     remoteInput: 10001
     loadBalance: 6343
-  proxyHosts:
+  additionalProxyHosts:
     - nifi.example.com
     - nifi.example.com:8443
   externalServices:

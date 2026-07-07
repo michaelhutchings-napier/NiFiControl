@@ -35,9 +35,10 @@ externalServices: []
   #   # loadBalancerSourceRanges: ["10.0.0.0/8"]
   #   # externalTrafficPolicy: Local
 
-# proxyHosts adds extra host[:port] entries to NiFi's proxy allow-list, on top of the
-# Service DNS names and any Ingress host the operator adds automatically.
-proxyHosts: []
+# additionalProxyHosts adds extra host[:port] entries to NiFi's proxy allow-list, on top
+# of the Service DNS names and any Ingress host the operator adds automatically (additive;
+# it never replaces the computed entries).
+additionalProxyHosts: []
   # - nifi.example.com
   # - nifi.example.com:8443
 

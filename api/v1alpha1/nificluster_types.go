@@ -21,7 +21,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.pod) || self.mode != 'External'",message="pod only applies to operator-managed (Internal) clusters"
 // +kubebuilder:validation:XValidation:rule="!has(self.ports) || self.mode != 'External'",message="ports only applies to operator-managed (Internal) clusters"
 // +kubebuilder:validation:XValidation:rule="!has(self.externalServices) || self.mode != 'External'",message="externalServices only applies to operator-managed (Internal) clusters"
-// +kubebuilder:validation:XValidation:rule="!has(self.proxyHosts) || self.mode != 'External'",message="proxyHosts only applies to operator-managed (Internal) clusters"
+// +kubebuilder:validation:XValidation:rule="!has(self.additionalProxyHosts) || self.mode != 'External'",message="additionalProxyHosts only applies to operator-managed (Internal) clusters"
 // +kubebuilder:validation:XValidation:rule="!has(self.authentication) || (has(self.internalTLS) && self.internalTLS.enabled)",message="authentication requires internalTLS: NiFi only allows user authentication over HTTPS"
 type NiFiClusterSpec struct {
 	// +kubebuilder:validation:Enum=Internal;External
@@ -62,13 +62,13 @@ type NiFiClusterSpec struct {
 	// Ingress exposes the managed NiFi cluster through a Kubernetes Ingress and configures
 	// NiFi's allowed proxy host and context path accordingly.
 	Ingress *NiFiClusterIngressSpec `json:"ingress,omitempty"`
-	// ProxyHosts adds extra host[:port] entries to NiFi's nifi.web.proxy.host allow-list,
-	// on top of the operator-computed Service DNS names and any Ingress host. Set this for
-	// external load balancers or DNS names people reach NiFi through, otherwise NiFi
-	// rejects those requests with an untrusted-proxy error. Only applies to Internal
-	// clusters.
+	// AdditionalProxyHosts adds extra host[:port] entries to NiFi's nifi.web.proxy.host
+	// allow-list, on top of the operator-computed Service DNS names and any Ingress host.
+	// Set this for external load balancers or DNS names people reach NiFi through, otherwise
+	// NiFi rejects those requests with an untrusted-proxy error. Additive: it never replaces
+	// the computed entries. Only applies to Internal clusters.
 	// +kubebuilder:validation:MaxItems=32
-	ProxyHosts []ProxyHost `json:"proxyHosts,omitempty"`
+	AdditionalProxyHosts []ProxyHost `json:"additionalProxyHosts,omitempty"`
 	// Upgrade controls how managed NiFi version changes roll out across the StatefulSet.
 	Upgrade *NiFiClusterUpgradeSpec `json:"upgrade,omitempty"`
 	// ScaleDown controls how managed NiFi nodes are gracefully removed when replicas is

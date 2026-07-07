@@ -53,19 +53,20 @@ requests with an "invalid host header" error. Ingress TLS termination uses a Sec
 supply via `ingress.tls.secretName`; it is independent of `internalTLS` (operator-managed
 pod-to-pod mTLS).
 
-`spec.proxyHosts` adds extra `host[:port]` entries to the allow-list *on top of* the
-operator-computed Service DNS names and the Ingress host — for an external load balancer or
-a DNS name people reach NiFi through that the operator cannot infer:
+`spec.additionalProxyHosts` adds extra `host[:port]` entries to the allow-list *on top of*
+the operator-computed Service DNS names and the Ingress host — for an external load balancer
+or a DNS name people reach NiFi through that the operator cannot infer:
 
 ```yaml
 spec:
-  proxyHosts:
+  additionalProxyHosts:
     - nifi.example.com
     - nifi.example.com:8443
 ```
 
 Unlike a `configOverrides` override of `nifi.web.proxy.host` (which *replaces* the whole
-allow-list), `proxyHosts` is additive, so the operator's own Service names stay trusted.
+allow-list), `additionalProxyHosts` is additive, so the operator's own Service names stay
+trusted.
 
 ## Extra Services
 
@@ -92,7 +93,8 @@ spec:
 ```
 
 `targetPort` accepts a named container port or a numeric port as a string. Remember to add
-the load balancer's hostname to `proxyHosts` so NiFi accepts requests arriving through it.
+the load balancer's hostname to `additionalProxyHosts` so NiFi accepts requests arriving
+through it.
 
 ## Custom ports
 
@@ -190,7 +192,8 @@ arguments `java.arg.2`/`java.arg.3` (set `spec.jvm` instead). `nifi.web.proxy.ho
 be overridden — but the override replaces the operator-computed allow-list, so include the
 in-cluster Service DNS names or the operator (and Ingress) will be rejected with an "invalid
 host header" error. To *add* an external load balancer hostname without replacing the
-allow-list, prefer the additive `spec.proxyHosts` (see "Ingress and proxy host" above).
+allow-list, prefer the additive `spec.additionalProxyHosts` (see "Ingress and proxy host"
+above).
 
 `configOverrides.logbackXml` replaces `conf/logback.xml` wholesale for custom log levels,
 appenders, or retention. The content is not validated — a malformed document surfaces as a

@@ -1639,8 +1639,8 @@ func (in *NiFiClusterSpec) DeepCopyInto(out *NiFiClusterSpec) {
 		*out = new(NiFiClusterIngressSpec)
 		(*in).DeepCopyInto(*out)
 	}
-	if in.ProxyHosts != nil {
-		in, out := &in.ProxyHosts, &out.ProxyHosts
+	if in.AdditionalProxyHosts != nil {
+		in, out := &in.AdditionalProxyHosts, &out.AdditionalProxyHosts
 		*out = make([]ProxyHost, len(*in))
 		copy(*out, *in)
 	}
