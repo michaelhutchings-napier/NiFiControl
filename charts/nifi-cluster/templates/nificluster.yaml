@@ -43,6 +43,9 @@ spec:
   additionalProxyHosts:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- with .Values.clusterDomain }}
+  clusterDomain: {{ . | quote }}
+  {{- end }}
   storage:
     enabled: {{ .Values.storage.enabled }}
     size: {{ .Values.storage.size }}

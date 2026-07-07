@@ -22,6 +22,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.ports) || self.mode != 'External'",message="ports only applies to operator-managed (Internal) clusters"
 // +kubebuilder:validation:XValidation:rule="!has(self.externalServices) || self.mode != 'External'",message="externalServices only applies to operator-managed (Internal) clusters"
 // +kubebuilder:validation:XValidation:rule="!has(self.additionalProxyHosts) || self.mode != 'External'",message="additionalProxyHosts only applies to operator-managed (Internal) clusters"
+// +kubebuilder:validation:XValidation:rule="!has(self.clusterDomain) || self.mode != 'External'",message="clusterDomain only applies to operator-managed (Internal) clusters"
 // +kubebuilder:validation:XValidation:rule="!has(self.authentication) || (has(self.internalTLS) && self.internalTLS.enabled)",message="authentication requires internalTLS: NiFi only allows user authentication over HTTPS"
 type NiFiClusterSpec struct {
 	// +kubebuilder:validation:Enum=Internal;External
@@ -69,6 +70,12 @@ type NiFiClusterSpec struct {
 	// the computed entries. Only applies to Internal clusters.
 	// +kubebuilder:validation:MaxItems=32
 	AdditionalProxyHosts []ProxyHost `json:"additionalProxyHosts,omitempty"`
+	// ClusterDomain is the Kubernetes cluster DNS domain used to build the fully-qualified
+	// Service names in the node TLS certificate SANs and the operator-computed
+	// nifi.web.proxy.host allow-list. Defaults to "cluster.local"; set it for clusters
+	// configured with a non-default DNS domain. Only applies to Internal clusters.
+	// +kubebuilder:validation:MaxLength=253
+	ClusterDomain string `json:"clusterDomain,omitempty"`
 	// Upgrade controls how managed NiFi version changes roll out across the StatefulSet.
 	Upgrade *NiFiClusterUpgradeSpec `json:"upgrade,omitempty"`
 	// ScaleDown controls how managed NiFi nodes are gracefully removed when replicas is

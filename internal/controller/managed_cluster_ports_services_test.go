@@ -127,6 +127,47 @@ func TestManagedClusterAdditiveProxyHosts(t *testing.T) {
 	assertEnvironmentValue(t, env, "NIFI_WEB_PROXY_HOST", got)
 }
 
+func TestManagedClusterDomainInSANsAndProxyHosts(t *testing.T) {
+	cluster := hardeningCluster()
+	// Default: cluster.local.
+	if got := managedClusterDomain(cluster); got != "cluster.local" {
+		t.Fatalf("default cluster domain = %q, want cluster.local", got)
+	}
+	names := managedClusterServerDNSNames(cluster)
+	proxy := managedClusterProxyHosts(cluster)
+	for _, want := range []string{"production-nifi.default.svc", "production-nifi.default.svc.cluster.local"} {
+		if !containsString(names, want) {
+			t.Fatalf("default SANs %v missing %q", names, want)
+		}
+	}
+	if !strings.Contains(proxy, "production-nifi.default.svc.cluster.local") {
+		t.Fatalf("default proxy hosts %q missing cluster.local FQDN", proxy)
+	}
+
+	// Custom domain flows into the FQDN SANs and proxy hosts; the short .svc names remain.
+	cluster.Spec.ClusterDomain = "cluster.internal"
+	names = managedClusterServerDNSNames(cluster)
+	proxy = managedClusterProxyHosts(cluster)
+	for _, want := range []string{
+		"production-nifi.default.svc",
+		"production-nifi.default.svc.cluster.internal",
+		"*.production-nifi-headless.default.svc.cluster.internal",
+	} {
+		if !containsString(names, want) {
+			t.Fatalf("custom-domain SANs %v missing %q", names, want)
+		}
+	}
+	if containsString(names, "production-nifi.default.svc.cluster.local") {
+		t.Fatalf("custom-domain SANs must not carry the default cluster.local FQDN: %v", names)
+	}
+	if !strings.Contains(proxy, "production-nifi.default.svc.cluster.internal") {
+		t.Fatalf("custom-domain proxy hosts %q missing the custom FQDN", proxy)
+	}
+	if strings.Contains(proxy, "cluster.local") {
+		t.Fatalf("custom-domain proxy hosts %q must not carry cluster.local", proxy)
+	}
+}
+
 func TestManagedClusterExternalServicesReconcileAndPrune(t *testing.T) {
 	scheme := managedClusterTestScheme()
 	cluster := hardeningCluster()

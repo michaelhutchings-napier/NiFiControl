@@ -613,6 +613,14 @@ spec:
                   rule: self.mode != 'LDAP' || has(self.ldap)
                 - message: oidc is required when mode is OIDC
                   rule: self.mode != 'OIDC' || has(self.oidc)
+              clusterDomain:
+                description: |-
+                  ClusterDomain is the Kubernetes cluster DNS domain used to build the fully-qualified
+                  Service names in the node TLS certificate SANs and the operator-computed
+                  nifi.web.proxy.host allow-list. Defaults to "cluster.local"; set it for clusters
+                  configured with a non-default DNS domain. Only applies to Internal clusters.
+                maxLength: 253
+                type: string
               configOverrides:
                 description: |-
                   ConfigOverrides merges raw configuration entries into the managed nodes' NiFi
@@ -7700,6 +7708,8 @@ spec:
             - message: additionalProxyHosts only applies to operator-managed (Internal)
                 clusters
               rule: '!has(self.additionalProxyHosts) || self.mode != ''External'''
+            - message: clusterDomain only applies to operator-managed (Internal) clusters
+              rule: '!has(self.clusterDomain) || self.mode != ''External'''
             - message: 'authentication requires internalTLS: NiFi only allows user
                 authentication over HTTPS'
               rule: '!has(self.authentication) || (has(self.internalTLS) && self.internalTLS.enabled)'

@@ -221,6 +221,10 @@
         "maxLength": 253
       }
     },
+    "clusterDomain": {
+      "type": "string",
+      "maxLength": 253
+    },
     "storage": {
       "type": "object",
       "required": [

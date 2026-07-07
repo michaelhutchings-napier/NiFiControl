@@ -112,6 +112,22 @@ spec:
 
 The HTTPS web port is configured through `internalTLS.httpsPort`, not here.
 
+## Non-default cluster DNS domain
+
+`spec.clusterDomain` sets the Kubernetes cluster DNS domain (default `cluster.local`) used
+to build the fully-qualified Service names in the node TLS certificate SANs and the
+operator-computed `nifi.web.proxy.host` allow-list. Set it on clusters configured with a
+non-default domain so the generated certificate and allow-list carry the right FQDNs:
+
+```yaml
+spec:
+  clusterDomain: cluster.internal
+```
+
+Intra-cluster clustering and mTLS use the short `<pod>.<svc>.<ns>.svc` names (resolved via
+the pod's DNS search path), so they work regardless; `clusterDomain` matters when something
+reaches a node by its full `.svc.<domain>` FQDN.
+
 ## Safe version upgrades
 
 Change `spec.image` to upgrade NiFi. `spec.upgrade` controls the StatefulSet roll:

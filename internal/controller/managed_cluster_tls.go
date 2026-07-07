@@ -552,6 +552,15 @@ func (p *tlsPlan) applyDerivedIdentities(cluster *nifiv1alpha1.NiFiCluster) {
 	p.initialAdminIdentity = "CN=" + p.operatorCommonName
 }
 
+// managedClusterDomain is the Kubernetes cluster DNS domain used to build fully-qualified
+// Service names, defaulting to cluster.local when spec.clusterDomain is unset.
+func managedClusterDomain(cluster *nifiv1alpha1.NiFiCluster) string {
+	if cluster.Spec.ClusterDomain != "" {
+		return cluster.Spec.ClusterDomain
+	}
+	return "cluster.local"
+}
+
 // managedClusterServerDNSNames returns the DNS SANs for the shared server/node
 // certificate. Per-pod headless addresses are covered with a wildcard rather than an
 // enumerated list, so the certificate does not need regenerating when replicas change.
@@ -559,15 +568,16 @@ func managedClusterServerDNSNames(cluster *nifiv1alpha1.NiFiCluster) []string {
 	service := managedClusterResourceName(cluster)
 	headless := managedClusterHeadlessServiceName(cluster)
 	ns := cluster.Namespace
+	domain := managedClusterDomain(cluster)
 	names := []string{
 		"localhost",
 		service,
 		fmt.Sprintf("%s.%s.svc", service, ns),
-		fmt.Sprintf("%s.%s.svc.cluster.local", service, ns),
+		fmt.Sprintf("%s.%s.svc.%s", service, ns, domain),
 		fmt.Sprintf("%s.%s.svc", headless, ns),
-		fmt.Sprintf("%s.%s.svc.cluster.local", headless, ns),
+		fmt.Sprintf("%s.%s.svc.%s", headless, ns, domain),
 		fmt.Sprintf("*.%s.%s.svc", headless, ns),
-		fmt.Sprintf("*.%s.%s.svc.cluster.local", headless, ns),
+		fmt.Sprintf("*.%s.%s.svc.%s", headless, ns, domain),
 	}
 	return names
 }
@@ -578,15 +588,16 @@ func managedClusterProxyHosts(cluster *nifiv1alpha1.NiFiCluster) string {
 	service := managedClusterResourceName(cluster)
 	headless := managedClusterHeadlessServiceName(cluster)
 	ns := cluster.Namespace
+	domain := managedClusterDomain(cluster)
 	port := managedClusterHTTPSPort(cluster)
 	hosts := map[string]struct{}{}
 	for _, host := range []string{
 		"localhost",
 		service,
 		fmt.Sprintf("%s.%s.svc", service, ns),
-		fmt.Sprintf("%s.%s.svc.cluster.local", service, ns),
+		fmt.Sprintf("%s.%s.svc.%s", service, ns, domain),
 		fmt.Sprintf("%s.%s.svc", headless, ns),
-		fmt.Sprintf("%s.%s.svc.cluster.local", headless, ns),
+		fmt.Sprintf("%s.%s.svc.%s", headless, ns, domain),
 	} {
 		hosts[host] = struct{}{}
 		hosts[fmt.Sprintf("%s:%d", host, port)] = struct{}{}

@@ -42,6 +42,11 @@ additionalProxyHosts: []
   # - nifi.example.com
   # - nifi.example.com:8443
 
+# clusterDomain is the Kubernetes cluster DNS domain used to build the fully-qualified
+# Service names in the node TLS certificate SANs and the computed proxy-host allow-list.
+# Leave empty to use the default (cluster.local); set it for a non-default DNS domain.
+clusterDomain: ""
+
 storage:
   enabled: true
   size: 10Gi
