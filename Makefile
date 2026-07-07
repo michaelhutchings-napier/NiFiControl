@@ -114,6 +114,10 @@ integration-oidc-tls-kind:
 integration-portsvc-kind:
 	./hack/test-ports-services-kind.sh
 
+.PHONY: integration-clusterports-kind
+integration-clusterports-kind:
+	./hack/test-cluster-ports-kind.sh
+
 .PHONY: integration-remoteprocessgroup-kind
 integration-remoteprocessgroup-kind:
 	./hack/test-remoteprocessgroup-kind.sh

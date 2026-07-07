@@ -25,6 +25,7 @@ jobs:
           - integration-registry-kind
           - integration-configoverrides-kind
           - integration-portsvc-kind
+          - integration-clusterports-kind
           - integration-secureauth-kind
           - integration-oidc-kind
           - integration-oidc-tls-kind
