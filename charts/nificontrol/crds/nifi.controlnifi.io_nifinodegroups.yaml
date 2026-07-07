@@ -1501,6 +1501,101 @@ spec:
                   enabled:
                     default: true
                     type: boolean
+                  repositories:
+                    description: |-
+                      Repositories places individual NiFi repositories on dedicated PersistentVolumes —
+                      for example the content repository on bulk storage while the flowfile repository
+                      stays on fast disk. Repositories without an entry (and conf and local state)
+                      remain on the main data volume. Adding or removing an entry on an existing
+                      cluster recreates the StatefulSet (pods roll one at a time) and the affected
+                      repository starts empty on its new volume: drain queues first, or take a backup,
+                      because existing repository contents are not migrated.
+                    properties:
+                      content:
+                        description: NiFiClusterRepositoryVolumeSpec sizes one repository's
+                          dedicated PersistentVolume.
+                        properties:
+                          accessModes:
+                            items:
+                              type: string
+                            type: array
+                          size:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 10Gi
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          storageClassName:
+                            description: |-
+                              An empty value explicitly disables dynamic provisioning; unset inherits the main
+                              data volume's storage class.
+                            type: string
+                        type: object
+                      database:
+                        description: NiFiClusterRepositoryVolumeSpec sizes one repository's
+                          dedicated PersistentVolume.
+                        properties:
+                          accessModes:
+                            items:
+                              type: string
+                            type: array
+                          size:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 10Gi
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          storageClassName:
+                            description: |-
+                              An empty value explicitly disables dynamic provisioning; unset inherits the main
+                              data volume's storage class.
+                            type: string
+                        type: object
+                      flowfile:
+                        description: NiFiClusterRepositoryVolumeSpec sizes one repository's
+                          dedicated PersistentVolume.
+                        properties:
+                          accessModes:
+                            items:
+                              type: string
+                            type: array
+                          size:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 10Gi
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          storageClassName:
+                            description: |-
+                              An empty value explicitly disables dynamic provisioning; unset inherits the main
+                              data volume's storage class.
+                            type: string
+                        type: object
+                      provenance:
+                        description: NiFiClusterRepositoryVolumeSpec sizes one repository's
+                          dedicated PersistentVolume.
+                        properties:
+                          accessModes:
+                            items:
+                              type: string
+                            type: array
+                          size:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            default: 10Gi
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          storageClassName:
+                            description: |-
+                              An empty value explicitly disables dynamic provisioning; unset inherits the main
+                              data volume's storage class.
+                            type: string
+                        type: object
+                    type: object
                   size:
                     anyOf:
                     - type: integer
@@ -1512,6 +1607,9 @@ spec:
                     description: An empty value explicitly disables dynamic provisioning.
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: repositories requires persistent storage (storage.enabled)
+                  rule: '!has(self.repositories) || !has(self.enabled) || self.enabled'
               upgrade:
                 description: Upgrade overrides the StatefulSet update strategy for
                   this group.

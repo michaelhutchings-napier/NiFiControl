@@ -43,7 +43,7 @@ func TestDesiredNodeGroupStatefulSetSpec(t *testing.T) {
 			Scheduling: &nifiv1alpha1.NiFiClusterScheduling{NodeSelector: map[string]string{"workload": "nifi-workers"}},
 		},
 	}
-	spec := desiredNodeGroupStatefulSetSpec(cluster, group, nil, 2, "")
+	spec := desiredNodeGroupStatefulSetSpec(cluster, group, nil, 2, "", "", nil)
 
 	if spec.ServiceName != managedClusterHeadlessServiceName(cluster) {
 		t.Fatalf("serviceName = %q, want the cluster headless service", spec.ServiceName)

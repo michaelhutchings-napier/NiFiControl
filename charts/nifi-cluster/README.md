@@ -50,3 +50,19 @@ For externally supplied TLS material, provide both server and operator-client
 Secrets with `keystore.p12`, `truststore.p12`, `tls.crt`, and `tls.key`. `ca.crt`
 is optional; when present NiFiControl uses it to pin trust, otherwise it uses the
 system trust store.
+
+NiFi settings the chart does not model directly can be set raw through
+`configOverrides.nifiProperties` and `configOverrides.bootstrapProperties`; they
+are merged into the node configuration after the operator-managed settings, so an
+override wins and removing it restores the image default. Keys the operator
+manages (web listener, TLS keystores, sensitive properties key, cluster/ZooKeeper
+wiring, heap arguments) are rejected — use the dedicated fields instead.
+`configOverrides.logbackXml` replaces the logging configuration wholesale, and the
+`pod` block adds pod metadata, image pull secrets, a ServiceAccount, sidecars,
+init containers, and extra volumes/mounts (for example custom NAR libraries):
+
+```bash
+helm upgrade --install production ./charts/nifi-cluster \
+  --namespace dataflows \
+  --set 'configOverrides.nifiProperties.nifi\.queue\.swap\.threshold=40000'
+```

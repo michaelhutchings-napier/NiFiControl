@@ -94,6 +94,14 @@ integration-reportingtask-kind:
 integration-registry-kind:
 	./hack/test-registry-kind.sh
 
+.PHONY: integration-configoverrides-kind
+integration-configoverrides-kind:
+	./hack/test-config-overrides-kind.sh
+
+.PHONY: integration-secureauth-kind
+integration-secureauth-kind:
+	./hack/test-secure-auth-kind.sh
+
 .PHONY: integration-remoteprocessgroup-kind
 integration-remoteprocessgroup-kind:
 	./hack/test-remoteprocessgroup-kind.sh

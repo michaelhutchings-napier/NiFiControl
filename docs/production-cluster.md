@@ -76,3 +76,117 @@ repository snapshots are covered in a separate sub-milestone).
 Reducing `spec.replicas` on a clustered cluster drains each removed node through NiFi's
 cluster offload API before its pod is deleted, so queued FlowFiles are redistributed rather
 than stranded on a removed node's volume. See [node-lifecycle.md](node-lifecycle.md).
+
+## Repository storage
+
+`spec.storage.repositories` places individual NiFi repositories on dedicated
+PersistentVolumes, so the content repository can use bulk storage while the flowfile
+repository stays on fast disk:
+
+```yaml
+spec:
+  storage:
+    enabled: true
+    size: 10Gi               # conf, local state, and unlisted repositories
+    storageClassName: fast
+    repositories:
+      content:    {size: 100Gi, storageClassName: bulk}
+      provenance: {size: 50Gi, storageClassName: bulk}
+      # flowfile and database stay on the main data volume
+```
+
+An unset `storageClassName` inherits the main volume's class. Because StatefulSet volume
+claim templates are immutable, adding or removing a repository entry on an existing
+cluster recreates the StatefulSet around the running pods and then rolls them one at a
+time; the affected repository starts empty on its new volume — existing repository
+contents are **not** migrated, so drain queues (or take a backup) before changing the
+layout. NiFiNodeGroup pools inherit the cluster's layout unless the group overrides
+`spec.storage`.
+
+## Raw configuration overrides
+
+For NiFi settings the API does not model directly — repository tuning, timeouts, custom
+extension properties, extra JVM arguments — `spec.configOverrides` merges raw entries into
+the generated node configuration:
+
+```yaml
+spec:
+  configOverrides:
+    nifiProperties:
+      nifi.queue.swap.threshold: "40000"
+      nifi.content.repository.archive.max.retention.period: "3 days"
+    bootstrapProperties:
+      java.arg.16: "-XX:+UseG1GC"
+```
+
+The entries are rendered into a per-cluster ConfigMap and applied on every node — the
+primary pool and all NiFiNodeGroup pools — at startup, *after* the operator-managed
+settings, so an override wins over the image's shipped default. Changing an override rolls
+the nodes (a checksum annotation on the pod template triggers the StatefulSet update), and
+removing one restores the running image's shipped default on the next roll; custom keys the
+image does not ship are removed entirely.
+
+Keys the operator itself manages are rejected at admission because a raw override would
+sever the operator's own wiring: the web listener host/port, TLS keystore and truststore
+settings, the sensitive properties key, cluster/ZooKeeper node settings, and the heap
+arguments `java.arg.2`/`java.arg.3` (set `spec.jvm` instead). `nifi.web.proxy.host` *can*
+be overridden — for example to allow an external load balancer hostname — but the override
+replaces the operator-computed allow-list, so include the in-cluster Service DNS names or
+the operator (and Ingress) will be rejected with an "invalid host header" error.
+
+`configOverrides.logbackXml` replaces `conf/logback.xml` wholesale for custom log levels,
+appenders, or retention. The content is not validated — a malformed document surfaces as a
+NiFi startup failure — and removing it restores the image's shipped `logback.xml` on the
+next roll.
+
+Values that must not appear in the NiFiCluster resource itself — an LDAP manager
+password, a proxy credential — come from Secrets via `configOverrides.nifiPropertiesFrom`:
+
+```yaml
+spec:
+  configOverrides:
+    nifiPropertiesFrom:
+      - name: nifi-extra-properties   # Secret data keys are property names
+```
+
+Secrets merge in list order and inline `nifiProperties` entries win. The payload the
+nodes mount is itself a Secret, so Secret-sourced values never land in a ConfigMap. The
+same property-name rules and operator-managed denylist apply, but because admission
+cannot read Secret contents they are enforced at reconcile time: a violation puts the
+cluster `Ready=False` with reason `ConfigOverridesInvalid` instead of rejecting the
+update. Changing a referenced Secret's content rolls the nodes automatically.
+
+## Pod customization
+
+`spec.pod` customizes the generated node pods beyond the dedicated fields — most commonly
+to mount custom NAR extensions or JDBC drivers, attach a log-shipping sidecar, or pull the
+NiFi image from a private registry:
+
+```yaml
+spec:
+  pod:
+    labels: {team: data}
+    annotations: {example.com/scrape: "true"}
+    imagePullSecrets: [{name: regcred}]
+    serviceAccountName: nifi-nodes
+    extraVolumes:
+      - name: nars
+        persistentVolumeClaim: {claimName: custom-nars}
+    extraVolumeMounts:
+      - name: nars
+        mountPath: /opt/nifi/nifi-current/nar_extensions
+    extraInitContainers:
+      - name: fetch-drivers
+        image: curlimages/curl:8.7.1
+        command: ["sh", "-c", "curl -fsSLo /drivers/postgresql.jar https://example.com/postgresql.jar"]
+        volumeMounts: [{name: drivers, mountPath: /drivers}]
+    extraContainers:
+      - name: log-shipper
+        image: fluent/fluent-bit:3.0
+```
+
+Like `configOverrides`, `spec.pod` applies to the primary pool and all NiFiNodeGroup pools.
+Operator-managed metadata wins on conflicts (selector labels and checksum annotations
+cannot be overridden), extra containers and volumes are appended after the operator's own,
+and the reserved volume names (`data`, `nificontrol-*`) and container names (`nifi`,
+`initialize-data`) are rejected at admission.

@@ -28,6 +28,10 @@ spec:
     {{- end }}
     accessModes:
       {{- toYaml .Values.storage.accessModes | nindent 6 }}
+    {{- with .Values.storage.repositories }}
+    repositories:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
   resources:
     {{- toYaml .Values.resources | nindent 4 }}
   jvm:
@@ -180,6 +184,94 @@ spec:
   {{- with .Values.additionalEnv }}
   additionalEnv:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- if or .Values.configOverrides.nifiProperties .Values.configOverrides.nifiPropertiesFrom .Values.configOverrides.bootstrapProperties .Values.configOverrides.logbackXml }}
+  configOverrides:
+    {{- with .Values.configOverrides.nifiProperties }}
+    nifiProperties:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.configOverrides.nifiPropertiesFrom }}
+    nifiPropertiesFrom:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.configOverrides.bootstrapProperties }}
+    bootstrapProperties:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.configOverrides.logbackXml }}
+    logbackXml: {{ . | quote }}
+    {{- end }}
+  {{- end }}
+  {{- if or .Values.pod.labels .Values.pod.annotations .Values.pod.imagePullSecrets .Values.pod.serviceAccountName .Values.pod.extraVolumes .Values.pod.extraVolumeMounts .Values.pod.extraInitContainers .Values.pod.extraContainers }}
+  pod:
+    {{- with .Values.pod.labels }}
+    labels:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.pod.annotations }}
+    annotations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.pod.imagePullSecrets }}
+    imagePullSecrets:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.pod.serviceAccountName }}
+    serviceAccountName: {{ . | quote }}
+    {{- end }}
+    {{- with .Values.pod.extraVolumes }}
+    extraVolumes:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.pod.extraVolumeMounts }}
+    extraVolumeMounts:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.pod.extraInitContainers }}
+    extraInitContainers:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.pod.extraContainers }}
+    extraContainers:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.authentication.mode }}
+  authentication:
+    mode: {{ .Values.authentication.mode }}
+    {{- with .Values.authentication.adminIdentities }}
+    adminIdentities:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- if eq .Values.authentication.mode "SingleUser" }}
+    singleUser:
+      credentialsSecretRef:
+        name: {{ .Values.authentication.singleUser.credentialsSecretRef.name | quote }}
+    {{- else if eq .Values.authentication.mode "LDAP" }}
+    ldap:
+      url: {{ .Values.authentication.ldap.url | quote }}
+      authenticationStrategy: {{ .Values.authentication.ldap.authenticationStrategy }}
+      managerDN: {{ .Values.authentication.ldap.managerDN | quote }}
+      managerPasswordSecretRef:
+        name: {{ .Values.authentication.ldap.managerPasswordSecretRef.name | quote }}
+        key: {{ .Values.authentication.ldap.managerPasswordSecretRef.key | quote }}
+      userSearchBase: {{ .Values.authentication.ldap.userSearchBase | quote }}
+      userSearchFilter: {{ .Values.authentication.ldap.userSearchFilter | quote }}
+      identityStrategy: {{ .Values.authentication.ldap.identityStrategy }}
+    {{- else if eq .Values.authentication.mode "OIDC" }}
+    oidc:
+      discoveryURL: {{ .Values.authentication.oidc.discoveryURL | quote }}
+      clientID: {{ .Values.authentication.oidc.clientID | quote }}
+      clientSecretRef:
+        name: {{ .Values.authentication.oidc.clientSecretRef.name | quote }}
+        key: {{ .Values.authentication.oidc.clientSecretRef.key | quote }}
+      claim: {{ .Values.authentication.oidc.claim | quote }}
+      {{- with .Values.authentication.oidc.additionalScopes }}
+      additionalScopes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
   {{- end }}
   deletionPolicy: {{ .Values.deletionPolicy }}
   driftPolicy:

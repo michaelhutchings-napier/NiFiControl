@@ -17,11 +17,12 @@ func managedClusterSensitivePropsSecretName(cluster *nifiv1alpha1.NiFiCluster) s
 	return boundedManagedName(cluster.Name, "nifi-sensitive")
 }
 
-// reconcileSensitivePropsKeySecret generates, once, the shared sensitive properties key that
-// NiFi 2.x requires on every node of a cluster. It is created only for clustered managed
-// clusters (replicas > 1) and never overwritten, so the key stays stable across restarts and
-// identical on all nodes — changing it would orphan any sensitive values already encrypted in
-// the flow.
+// reconcileSensitivePropsKeySecret generates, once, the sensitive properties key every
+// managed NiFi node boots with. It is never overwritten, so the key stays stable across
+// restarts and identical on all nodes — changing it would orphan any sensitive values
+// already encrypted in the flow. (The start script re-encrypts the flow via nifi.sh
+// set-sensitive-properties-key when a node's persisted key differs, which migrates
+// clusters that predate the operator-provided key.)
 func (r *NiFiClusterReconciler) reconcileSensitivePropsKeySecret(ctx context.Context, cluster *nifiv1alpha1.NiFiCluster) error {
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: managedClusterSensitivePropsSecretName(cluster), Namespace: cluster.Namespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {

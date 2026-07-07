@@ -130,8 +130,15 @@ Identities are derived from predictable certificate common names:
 
 Override the common names with `internalTLS.certificate.operatorCommonName` /
 `nodeCommonName`. The `authorizers.xml` initial-admin and node-identity entries are kept
-in sync with these. `login-identity-providers.xml` is intentionally left untouched —
-certificate authentication needs only the managed authorizer.
+in sync with these. Without `spec.authentication`, `login-identity-providers.xml` is left
+untouched — certificate authentication needs only the managed authorizer.
+
+### User login on secured clusters
+
+Internal TLS gives the operator (and any certificate holder) mutual-TLS access. To let
+people log in with credentials — single-user, LDAP, or OIDC — configure
+`spec.authentication` on top of internalTLS; see
+[user-authentication.md](user-authentication.md).
 
 ### Canvas authorization bootstrap
 

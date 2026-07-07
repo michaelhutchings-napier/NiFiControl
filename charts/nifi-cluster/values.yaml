@@ -20,6 +20,17 @@ storage:
   storageClassName: ""
   accessModes:
     - ReadWriteOnce
+  # Place individual NiFi repositories on dedicated PersistentVolumes (flowfile,
+  # content, provenance, database). Repositories without an entry stay on the main
+  # data volume; an unset storageClassName inherits the main volume's class. Adding
+  # or removing an entry on an existing cluster recreates the StatefulSet and the
+  # affected repository starts empty on its new volume — drain queues first.
+  repositories: {}
+    # content:
+    #   size: 100Gi
+    #   storageClassName: bulk
+    # provenance:
+    #   size: 50Gi
 
 resources:
   requests:
@@ -140,6 +151,69 @@ metrics:
     insecureSkipVerify: false
 
 additionalEnv: []
+
+# Raw configuration entries merged into the nodes' nifi.properties / bootstrap.conf at
+# startup, after the operator-managed settings, so an override wins over the shipped
+# default. Removing an entry restores the NiFi image's default on the next rollout.
+# Keys the operator manages (web listener, TLS keystores, sensitive properties key,
+# cluster/ZooKeeper wiring, heap arguments) are rejected; use the dedicated fields.
+configOverrides:
+  nifiProperties: {}
+    # nifi.queue.swap.threshold: "15000"
+    # nifi.content.repository.archive.max.retention.period: "3 days"
+  # Merge nifi.properties entries from Secrets (data keys are property names) for
+  # values that must not appear in this file, e.g. an LDAP manager password. Secrets
+  # merge in list order; inline nifiProperties entries win. The denylist is enforced
+  # when the cluster reconciles.
+  nifiPropertiesFrom: []
+    # - name: nifi-extra-properties
+  bootstrapProperties: {}
+    # java.arg.debug: -XX:+PrintFlagsFinal
+  # Replaces conf/logback.xml wholesale (custom log levels, appenders, retention).
+  # Removing it restores the image's shipped logback.xml on the next rollout.
+  logbackXml: ""
+
+# Customize the generated NiFi node pods beyond the dedicated fields above. Operator-
+# managed metadata wins on conflicts; the volume names data / nificontrol-* and the
+# container names nifi / initialize-data are reserved.
+pod:
+  labels: {}
+  annotations: {}
+  imagePullSecrets: []      # e.g. [{name: regcred}]
+  serviceAccountName: ""
+  # Appended to the pod volumes / NiFi container mounts — e.g. custom NAR extensions
+  # or JDBC drivers at /opt/nifi/nifi-current/nar_extensions.
+  extraVolumes: []
+  extraVolumeMounts: []
+  # Extra init containers (run after the operator's data initializer) and sidecars.
+  extraInitContainers: []
+  extraContainers: []
+
+# User authentication for a secured cluster (requires internalTLS.enabled). The
+# operator always keeps its own mutual-TLS access; the mode below only controls how
+# people log in. Set mode to SingleUser, LDAP, or OIDC and fill in the matching block.
+# adminIdentities are granted the full administrative policy set automatically.
+authentication:
+  mode: ""
+  adminIdentities: []
+    # - alice@example.com
+  singleUser:
+    # Secret with keys "username" and "password" (12+ characters).
+    credentialsSecretRef: {name: ""}
+  ldap:
+    url: ""                      # e.g. ldap://openldap.auth.svc:389
+    authenticationStrategy: SIMPLE   # SIMPLE | LDAPS | START_TLS
+    managerDN: ""
+    managerPasswordSecretRef: {name: "", key: password}
+    userSearchBase: ""
+    userSearchFilter: ""         # e.g. (uid={0})
+    identityStrategy: USE_USERNAME   # USE_USERNAME | USE_DN
+  oidc:
+    discoveryURL: ""             # .../.well-known/openid-configuration
+    clientID: ""
+    clientSecretRef: {name: "", key: password}
+    claim: email
+    additionalScopes: []
 
 deletionPolicy: Delete
 driftPolicy:

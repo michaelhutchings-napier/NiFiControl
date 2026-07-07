@@ -152,18 +152,31 @@ func (r *NiFiNodeGroupReconciler) resolveClusterTLS(ctx context.Context, cluster
 
 func (r *NiFiNodeGroupReconciler) reconcileNodeGroupStatefulSet(ctx context.Context, cluster *nifiv1alpha1.NiFiCluster, group *nifiv1alpha1.NiFiNodeGroup, tls *clusterTLSMaterials, replicas int32) (*appsv1.StatefulSet, error) {
 	name := nodeGroupStatefulSetName(cluster, group)
-	statefulSet := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: group.Namespace}}
 	checksum := ""
 	if tls != nil {
 		checksum = tls.checksum
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, statefulSet, func() error {
+	// The group's pods share the cluster's configuration overrides and authentication,
+	// so their pod template carries the same checksums and rolls when either changes.
+	resolvedOverrides, err := resolveConfigOverrides(ctx, r.Client, cluster)
+	if err != nil {
+		return nil, err
+	}
+	resolvedAuth, err := resolveClusterAuthentication(ctx, r.Client, cluster)
+	if err != nil {
+		return nil, err
+	}
+	if err := recreateOnClaimChange(ctx, r.Client, name, group.Namespace, desiredNodeGroupStatefulSetSpec(cluster, group, tls, replicas, checksum, resolvedOverrides.checksum, resolvedAuth).VolumeClaimTemplates); err != nil {
+		return nil, err
+	}
+	statefulSet := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: group.Namespace}}
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, statefulSet, func() error {
 		if statefulSet.ResourceVersion != "" && statefulSet.Annotations[nodeGroupAnnotation] != group.Name {
 			return fmt.Errorf("StatefulSet %s/%s already exists and is not managed by NiFiNodeGroup %s", statefulSet.Namespace, statefulSet.Name, group.Name)
 		}
 		statefulSet.Labels = nodeGroupPodLabels(cluster, group)
 		statefulSet.Annotations = map[string]string{nodeGroupAnnotation: group.Name}
-		desired := desiredNodeGroupStatefulSetSpec(cluster, group, tls, replicas, checksum)
+		desired := desiredNodeGroupStatefulSetSpec(cluster, group, tls, replicas, checksum, resolvedOverrides.checksum, resolvedAuth)
 		if statefulSet.ResourceVersion != "" {
 			desired.ServiceName = statefulSet.Spec.ServiceName
 			if statefulSet.Spec.Selector != nil {
@@ -204,7 +217,36 @@ func (r *NiFiNodeGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&nifiv1alpha1.NiFiNodeGroup{}).
 		Owns(&appsv1.StatefulSet{}).
 		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.nodeGroupsForCluster)).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.nodeGroupsForOverridesSecret)).
 		Complete(r)
+}
+
+// nodeGroupsForOverridesSecret re-enqueues node groups whose parent cluster sources
+// configuration overrides from the changed Secret, so the group's pods roll on the new
+// checksum like the primary pool.
+func (r *NiFiNodeGroupReconciler) nodeGroupsForOverridesSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	groups := &nifiv1alpha1.NiFiNodeGroupList{}
+	if err := r.List(ctx, groups, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	var requests []reconcile.Request
+	for i := range groups.Items {
+		group := &groups.Items[i]
+		cluster := &nifiv1alpha1.NiFiCluster{}
+		if err := r.Get(ctx, types.NamespacedName{Name: group.Spec.ClusterRef.Name, Namespace: group.Namespace}, cluster); err != nil {
+			continue
+		}
+		if cluster.Spec.ConfigOverrides == nil {
+			continue
+		}
+		for _, reference := range cluster.Spec.ConfigOverrides.NiFiPropertiesFrom {
+			if reference.Name == obj.GetName() {
+				requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: group.Name, Namespace: group.Namespace}})
+				break
+			}
+		}
+	}
+	return requests
 }
 
 // nodeGroupsForCluster re-enqueues node groups when their parent cluster changes (for example

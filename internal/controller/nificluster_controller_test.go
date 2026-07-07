@@ -281,7 +281,7 @@ func TestDesiredManagedClusterStatefulSetConfiguresPersistentCluster(t *testing.
 		},
 	}
 
-	spec := desiredManagedClusterStatefulSetSpec(cluster, nil)
+	spec := desiredManagedClusterStatefulSetSpec(cluster, nil, "", nil)
 
 	if len(spec.VolumeClaimTemplates) != 1 {
 		t.Fatalf("volume claim templates = %d, want 1", len(spec.VolumeClaimTemplates))

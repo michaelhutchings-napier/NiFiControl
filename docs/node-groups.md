@@ -40,6 +40,8 @@ spec:
 - Any field a group omits is inherited from the cluster (`image`, `resources`, `jvm`,
   `storage`, `scheduling`, `upgrade`, `scaleDown`). All nodes in a cluster must run the same
   NiFi version, so override `image` only to pin the same version from a different repository.
+- The cluster's `spec.configOverrides` applies to every pool — configuration must be
+  identical across cluster peers, so groups cannot override it.
 - Groups require an `Internal`, clustered cluster (`spec.coordination` set) in the **same
   namespace** — pods join the cluster's headless Service for cluster DNS, which is
   namespace-scoped.

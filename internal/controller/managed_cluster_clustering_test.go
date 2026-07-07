@@ -47,7 +47,7 @@ func TestReconcileSensitivePropsKeySecretIsStable(t *testing.T) {
 
 func TestClusteredEnvironmentInjectsSensitivePropsKey(t *testing.T) {
 	cluster := scaleDownCluster(3)
-	env := managedClusterEnvironment(cluster, nil)
+	env := managedClusterEnvironment(cluster, nil, nil)
 	var found *corev1.EnvVar
 	for i := range env {
 		if env[i].Name == "NIFI_SENSITIVE_PROPS_KEY" {
@@ -63,13 +63,19 @@ func TestClusteredEnvironmentInjectsSensitivePropsKey(t *testing.T) {
 		t.Fatalf("NIFI_SENSITIVE_PROPS_KEY source = %#v", found.ValueFrom)
 	}
 
-	// Single-node clusters keep the previous behaviour: no explicit key injected.
+	// Single-node clusters need the stable key too: when the property boots blank, NiFi
+	// generates its own into nifi.properties and the start script blanks it again on the
+	// next restart, stranding the persisted encrypted flow.
 	single := scaleDownCluster(1)
 	single.Spec.Coordination = nil
-	for _, e := range managedClusterEnvironment(single, nil) {
-		if e.Name == "NIFI_SENSITIVE_PROPS_KEY" {
-			t.Fatal("single-node clusters should not inject NIFI_SENSITIVE_PROPS_KEY")
+	singleHasKey := false
+	for _, e := range managedClusterEnvironment(single, nil, nil) {
+		if e.Name == "NIFI_SENSITIVE_PROPS_KEY" && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+			singleHasKey = true
 		}
+	}
+	if !singleHasKey {
+		t.Fatal("single-node clusters must inject NIFI_SENSITIVE_PROPS_KEY from the operator Secret")
 	}
 
 	// Both start commands apply the key.
@@ -86,11 +92,11 @@ func TestClusteredEnvironmentAdvertisesPodHost(t *testing.T) {
 	// when offloading on scale-down. A 0.0.0.0 web host would make every node indistinguishable.
 	cluster := scaleDownCluster(3)
 	wantHost := "$(POD_NAME).production-nifi-headless.$(POD_NAMESPACE).svc"
-	assertEnvironmentValue(t, managedClusterEnvironment(cluster, nil), "NIFI_WEB_HTTP_HOST", wantHost)
+	assertEnvironmentValue(t, managedClusterEnvironment(cluster, nil, nil), "NIFI_WEB_HTTP_HOST", wantHost)
 
 	single := scaleDownCluster(1)
 	single.Spec.Coordination = nil
-	assertEnvironmentValue(t, managedClusterEnvironment(single, nil), "NIFI_WEB_HTTP_HOST", "0.0.0.0")
+	assertEnvironmentValue(t, managedClusterEnvironment(single, nil, nil), "NIFI_WEB_HTTP_HOST", "0.0.0.0")
 
 	// The TLS start command honours the advertised host instead of hardcoding 0.0.0.0.
 	if !strings.Contains(managedNiFiStartCommandTLS, `"${NIFI_WEB_HTTPS_HOST:-0.0.0.0}"`) {

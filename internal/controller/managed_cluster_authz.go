@@ -63,6 +63,74 @@ func (r *NiFiClusterReconciler) ensureOperatorCanvasAccess(ctx context.Context, 
 	return nil
 }
 
+// managedAdminGlobalPolicies is the administrative policy set granted to each
+// spec.authentication.adminIdentities entry: view/operate the flow and controller,
+// manage tenants and policies, and read system diagnostics, counters, and provenance.
+// Root-process-group read/write is granted separately (the id is resolved at runtime).
+var managedAdminGlobalPolicies = []struct{ resource, action string }{
+	{"/flow", "read"},
+	{"/controller", "read"},
+	{"/controller", "write"},
+	{"/tenants", "read"},
+	{"/tenants", "write"},
+	{"/policies", "read"},
+	{"/policies", "write"},
+	{"/system", "read"},
+	{"/counters", "read"},
+	{"/provenance", "read"},
+	{"/restricted-components", "write"},
+}
+
+// ensureManagedAdminAccess creates a NiFi user for each spec.authentication
+// adminIdentities entry and grants it the administrative policy set, so the people
+// logging in through the configured provider can administer NiFi immediately. Idempotent
+// once the users and grants exist; a no-op on insecure and external clusters.
+func (r *NiFiClusterReconciler) ensureManagedAdminAccess(ctx context.Context, cluster *nifiv1alpha1.NiFiCluster, endpoint string) error {
+	if resolvedClusterMode(cluster) != nifiv1alpha1.ClusterModeInternal || !internalTLSEnabled(cluster) {
+		return nil
+	}
+	auth := cluster.Spec.Authentication
+	if auth == nil || len(auth.AdminIdentities) == 0 {
+		return nil
+	}
+	rootID, err := nifi.HTTPProcessGroupClient{}.RootProcessGroupID(ctx, endpoint)
+	if err != nil {
+		return fmt.Errorf("resolve root process group id: %w", err)
+	}
+	users := nifi.HTTPUserClient{}
+	policies := nifi.HTTPAccessPolicyClient{}
+	for _, identity := range auth.AdminIdentities {
+		userID, err := userTenantIDForIdentity(ctx, users, endpoint, identity)
+		if err != nil {
+			return fmt.Errorf("resolve admin tenant %q: %w", identity, err)
+		}
+		if userID == "" {
+			created, err := users.CreateUser(ctx, endpoint, nifi.UserEntity{
+				Revision:  nifi.Revision{Version: 0},
+				Component: nifi.UserComponent{Identity: identity},
+			})
+			if err != nil {
+				return fmt.Errorf("create admin user %q: %w", identity, err)
+			}
+			userID = nifi.UserEntityID(*created)
+		}
+		for _, policy := range managedAdminGlobalPolicies {
+			if err := ensureTenantGrantedPolicy(ctx, policies, endpoint, policy.action, policy.resource, userID); err != nil {
+				return fmt.Errorf("grant %s %s to %q: %w", policy.action, policy.resource, identity, err)
+			}
+		}
+		for _, resource := range operatorRootGroupPolicyResources {
+			resource = fmt.Sprintf(resource, rootID)
+			for _, action := range []string{"read", "write"} {
+				if err := ensureTenantGrantedPolicy(ctx, policies, endpoint, action, resource, userID); err != nil {
+					return fmt.Errorf("grant %s %s to %q: %w", action, resource, identity, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // userTenantIDForIdentity returns the NiFi tenant id of the user with the given identity, or an
 // empty string when no such user exists yet.
 func userTenantIDForIdentity(ctx context.Context, users nifi.UserClient, endpoint, identity string) (string, error) {

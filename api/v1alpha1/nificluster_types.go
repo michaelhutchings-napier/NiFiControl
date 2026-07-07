@@ -17,6 +17,9 @@ const (
 // +kubebuilder:validation:XValidation:rule="self.mode != 'External' || has(self.api)",message="api is required when mode is External"
 // +kubebuilder:validation:XValidation:rule="self.replicas <= 1 || has(self.coordination)",message="coordination is required when replicas is greater than one"
 // +kubebuilder:validation:XValidation:rule="!has(self.internalTLS) || !self.internalTLS.enabled || self.mode != 'External'",message="internalTLS only applies to operator-managed (Internal) clusters"
+// +kubebuilder:validation:XValidation:rule="!has(self.configOverrides) || self.mode != 'External'",message="configOverrides only applies to operator-managed (Internal) clusters"
+// +kubebuilder:validation:XValidation:rule="!has(self.pod) || self.mode != 'External'",message="pod only applies to operator-managed (Internal) clusters"
+// +kubebuilder:validation:XValidation:rule="!has(self.authentication) || (has(self.internalTLS) && self.internalTLS.enabled)",message="authentication requires internalTLS: NiFi only allows user authentication over HTTPS"
 type NiFiClusterSpec struct {
 	// +kubebuilder:validation:Enum=Internal;External
 	// +kubebuilder:default=Internal
@@ -53,6 +56,24 @@ type NiFiClusterSpec struct {
 	// Prometheus Operator ServiceMonitor pointing at NiFi's built-in metrics endpoint.
 	Metrics       *NiFiClusterMetricsSpec `json:"metrics,omitempty"`
 	AdditionalEnv []corev1.EnvVar         `json:"additionalEnv,omitempty"`
+	// ConfigOverrides merges raw configuration entries into the managed nodes' NiFi
+	// configuration files at startup, after the operator-managed settings, so an
+	// override wins over the shipped default. It applies to every node in the cluster,
+	// including NiFiNodeGroup pools. Only applies to Internal (operator-managed)
+	// clusters.
+	ConfigOverrides *NiFiClusterConfigOverrides `json:"configOverrides,omitempty"`
+	// Pod customizes the generated node pods beyond the fields the API models
+	// directly: extra metadata, image pull secrets, a ServiceAccount, sidecars, init
+	// containers, and additional volumes (for example NAR extension or JDBC driver
+	// libraries). It applies to every node in the cluster, including NiFiNodeGroup
+	// pools. Only applies to Internal (operator-managed) clusters.
+	Pod *NiFiClusterPodSpec `json:"pod,omitempty"`
+	// Authentication configures how people log in to a secured managed cluster:
+	// single-user credentials, LDAP, or OIDC. Requires internalTLS (NiFi only allows
+	// authentication over HTTPS); the operator keeps authorizing itself and other
+	// clients through mutual TLS regardless of the mode. Only applies to Internal
+	// (operator-managed) clusters.
+	Authentication *NiFiClusterAuthenticationSpec `json:"authentication,omitempty"`
 	// +kubebuilder:validation:Enum=Delete;Orphan
 	// +kubebuilder:default=Orphan
 	DeletionPolicy DeletionPolicy       `json:"deletionPolicy,omitempty"`
@@ -117,12 +138,43 @@ type NiFiClusterServiceSpec struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
+// +kubebuilder:validation:XValidation:rule="!has(self.repositories) || !has(self.enabled) || self.enabled",message="repositories requires persistent storage (storage.enabled)"
 type NiFiClusterStorageSpec struct {
 	// +kubebuilder:default=true
 	Enabled *bool `json:"enabled,omitempty"`
 	// +kubebuilder:default="10Gi"
 	Size resource.Quantity `json:"size,omitempty"`
 	// An empty value explicitly disables dynamic provisioning.
+	StorageClassName *string                             `json:"storageClassName,omitempty"`
+	AccessModes      []corev1.PersistentVolumeAccessMode `json:"accessModes,omitempty"`
+	// Repositories places individual NiFi repositories on dedicated PersistentVolumes —
+	// for example the content repository on bulk storage while the flowfile repository
+	// stays on fast disk. Repositories without an entry (and conf and local state)
+	// remain on the main data volume. Adding or removing an entry on an existing
+	// cluster recreates the StatefulSet (pods roll one at a time) and the affected
+	// repository starts empty on its new volume: drain queues first, or take a backup,
+	// because existing repository contents are not migrated.
+	Repositories *NiFiClusterRepositoryStorageSpec `json:"repositories,omitempty"`
+}
+
+// NiFiClusterRepositoryStorageSpec selects which NiFi repositories get dedicated volumes.
+type NiFiClusterRepositoryStorageSpec struct {
+	// +optional
+	FlowFile *NiFiClusterRepositoryVolumeSpec `json:"flowfile,omitempty"`
+	// +optional
+	Content *NiFiClusterRepositoryVolumeSpec `json:"content,omitempty"`
+	// +optional
+	Provenance *NiFiClusterRepositoryVolumeSpec `json:"provenance,omitempty"`
+	// +optional
+	Database *NiFiClusterRepositoryVolumeSpec `json:"database,omitempty"`
+}
+
+// NiFiClusterRepositoryVolumeSpec sizes one repository's dedicated PersistentVolume.
+type NiFiClusterRepositoryVolumeSpec struct {
+	// +kubebuilder:default="10Gi"
+	Size resource.Quantity `json:"size,omitempty"`
+	// An empty value explicitly disables dynamic provisioning; unset inherits the main
+	// data volume's storage class.
 	StorageClassName *string                             `json:"storageClassName,omitempty"`
 	AccessModes      []corev1.PersistentVolumeAccessMode `json:"accessModes,omitempty"`
 }
@@ -132,6 +184,178 @@ type NiFiClusterJVMSpec struct {
 	HeapInitial string `json:"heapInitial,omitempty"`
 	// +kubebuilder:default="1g"
 	HeapMax string `json:"heapMax,omitempty"`
+}
+
+// NiFiClusterConfigOverrides merges raw configuration entries into the files the managed
+// nodes boot with, for settings the API does not model directly (repository tuning,
+// timeouts, custom extension properties, extra JVM arguments). Entries are applied after
+// the operator-managed settings, so an override wins; removing an entry restores the
+// NiFi image's shipped default on the next rollout. Keys the operator itself manages —
+// the web listener, TLS keystores, the sensitive properties key, and cluster/ZooKeeper
+// wiring — are rejected at admission because they have dedicated spec fields whose
+// wiring an override would sever.
+type NiFiClusterConfigOverrides struct {
+	// NiFiProperties entries are merged into conf/nifi.properties on every node.
+	// +optional
+	// +kubebuilder:validation:MaxProperties=64
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k.matches('^[A-Za-z0-9][A-Za-z0-9._-]*$'))",message="property names must start with an alphanumeric and contain only alphanumerics, dots, underscores, and hyphens"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, !self[k].contains('\\n') && !self[k].contains('\\r'))",message="property values must not contain newlines"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, !(k in ['nifi.web.http.host','nifi.web.http.port','nifi.web.https.host','nifi.web.https.port','nifi.security.keystore','nifi.security.keystoreType','nifi.security.keystorePasswd','nifi.security.keyPasswd','nifi.security.truststore','nifi.security.truststoreType','nifi.security.truststorePasswd','nifi.security.needClientAuth','nifi.security.user.authorizer','nifi.security.user.login.identity.provider','nifi.security.allow.anonymous.authentication','nifi.sensitive.props.key','nifi.cluster.is.node','nifi.cluster.node.address','nifi.cluster.node.protocol.port','nifi.cluster.protocol.is.secure','nifi.zookeeper.connect.string','nifi.zookeeper.root.node','nifi.remote.input.secure']))",message="this property is managed by the operator; use the corresponding spec field (web listener, internalTLS, coordination, or replicas) instead"
+	NiFiProperties map[string]ConfigOverrideValue `json:"nifiProperties,omitempty"`
+	// NiFiPropertiesFrom merges nifi.properties entries from Secrets, for values that
+	// must not appear in the resource itself (an LDAP manager password, for example).
+	// Each Secret's data keys are property names and its values are the property
+	// values; Secrets are merged in list order, and inline nifiProperties entries win
+	// over Secret-sourced ones. The same property-name rules and operator-managed-key
+	// denylist apply, enforced when the cluster reconciles (the cluster reports
+	// ConfigOverridesInvalid instead of being rejected at admission).
+	// +optional
+	// +kubebuilder:validation:MaxItems=8
+	NiFiPropertiesFrom []corev1.LocalObjectReference `json:"nifiPropertiesFrom,omitempty"`
+	// BootstrapProperties entries are merged into conf/bootstrap.conf the same way, for
+	// example additional java.arg.N JVM arguments.
+	// +optional
+	// +kubebuilder:validation:MaxProperties=64
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k.matches('^[A-Za-z0-9][A-Za-z0-9._-]*$'))",message="property names must start with an alphanumeric and contain only alphanumerics, dots, underscores, and hyphens"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, !self[k].contains('\\n') && !self[k].contains('\\r'))",message="property values must not contain newlines"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, !(k in ['java.arg.2','java.arg.3']))",message="heap arguments are managed by the operator; set spec.jvm instead"
+	BootstrapProperties map[string]ConfigOverrideValue `json:"bootstrapProperties,omitempty"`
+	// LogbackXml replaces conf/logback.xml wholesale with the given document, for
+	// custom log levels, appenders, or retention. The content is not validated; a
+	// malformed document surfaces as a NiFi startup failure. Removing it restores the
+	// image's shipped logback.xml on the next rollout.
+	// +optional
+	// +kubebuilder:validation:MaxLength=65536
+	LogbackXml string `json:"logbackXml,omitempty"`
+}
+
+// ConfigOverrideValue is a single raw configuration value. The length bound keeps the
+// CRD's CEL validation rules within the API server's admission cost budget.
+// +kubebuilder:validation:MaxLength=2048
+type ConfigOverrideValue string
+
+// NiFiClusterAuthenticationSpec configures user authentication for a secured managed
+// cluster. NiFi authenticates client certificates before any login provider, so the
+// operator's mTLS access is unaffected by the mode. Identities that log in through the
+// provider are authorized by the operator-managed file-based authorizer: seed them with
+// adminIdentities, or manage them declaratively with NiFiUser / NiFiUserGroup /
+// NiFiPolicy resources.
+// +kubebuilder:validation:XValidation:rule="self.mode != 'SingleUser' || has(self.singleUser)",message="singleUser is required when mode is SingleUser"
+// +kubebuilder:validation:XValidation:rule="self.mode != 'LDAP' || has(self.ldap)",message="ldap is required when mode is LDAP"
+// +kubebuilder:validation:XValidation:rule="self.mode != 'OIDC' || has(self.oidc)",message="oidc is required when mode is OIDC"
+type NiFiClusterAuthenticationSpec struct {
+	// +kubebuilder:validation:Enum=SingleUser;LDAP;OIDC
+	Mode string `json:"mode"`
+	// +optional
+	SingleUser *NiFiClusterSingleUserAuthSpec `json:"singleUser,omitempty"`
+	// +optional
+	LDAP *NiFiClusterLDAPAuthSpec `json:"ldap,omitempty"`
+	// +optional
+	OIDC *NiFiClusterOIDCAuthSpec `json:"oidc,omitempty"`
+	// AdminIdentities are granted the full administrative policy set (flow, controller,
+	// tenants, policies, system, counters, provenance, and the root process group) once
+	// the cluster is reachable, so the listed people can administer NiFi from the UI
+	// immediately. Identities must match what the provider yields — the single-user
+	// username, the LDAP identity (per identityStrategy), or the OIDC claim value.
+	// +optional
+	// +kubebuilder:validation:MaxItems=16
+	AdminIdentities []string `json:"adminIdentities,omitempty"`
+}
+
+// NiFiClusterSingleUserAuthSpec enables NiFi's single-user login provider with
+// credentials from a Secret. Unlike stock NiFi, authorization still goes through the
+// managed file-based authorizer, so list the username in adminIdentities (or grant it
+// policies) for it to see anything.
+type NiFiClusterSingleUserAuthSpec struct {
+	// CredentialsSecretRef references a Secret with keys "username" and "password".
+	// NiFi requires the password to be at least 12 characters. Rotating the Secret's
+	// content rolls the nodes automatically.
+	CredentialsSecretRef corev1.LocalObjectReference `json:"credentialsSecretRef"`
+}
+
+// NiFiClusterLDAPAuthSpec enables NiFi's LDAP login provider.
+type NiFiClusterLDAPAuthSpec struct {
+	// URL of the directory server, for example ldap://openldap.auth.svc:389 or
+	// ldaps://ldap.corp.example.com:636.
+	// +kubebuilder:validation:Pattern=`^ldaps?://.+`
+	URL string `json:"url"`
+	// +kubebuilder:validation:Enum=SIMPLE;LDAPS;START_TLS
+	// +kubebuilder:default=SIMPLE
+	// AuthenticationStrategy for the directory connection. LDAPS and START_TLS trust
+	// the JDK trust store; private directory CAs are not yet supported.
+	AuthenticationStrategy string `json:"authenticationStrategy,omitempty"`
+	// ManagerDN binds for user lookups, for example cn=admin,dc=example,dc=org.
+	ManagerDN string `json:"managerDN"`
+	// ManagerPasswordSecretRef references the Secret key holding the manager password.
+	ManagerPasswordSecretRef SecretKeyRef `json:"managerPasswordSecretRef"`
+	// UserSearchBase, for example ou=people,dc=example,dc=org.
+	UserSearchBase string `json:"userSearchBase"`
+	// UserSearchFilter, for example (uid={0}) or (sAMAccountName={0}).
+	UserSearchFilter string `json:"userSearchFilter"`
+	// IdentityStrategy selects what becomes the NiFi identity: the full distinguished
+	// name (USE_DN) or the login username (USE_USERNAME).
+	// +kubebuilder:validation:Enum=USE_DN;USE_USERNAME
+	// +kubebuilder:default=USE_USERNAME
+	IdentityStrategy string `json:"identityStrategy,omitempty"`
+}
+
+// NiFiClusterOIDCAuthSpec enables NiFi's OpenID Connect login. The identity provider
+// must allow the cluster's callback URL (https://<host>/nifi-api/access/oidc/callback).
+type NiFiClusterOIDCAuthSpec struct {
+	// DiscoveryURL of the provider, ending in /.well-known/openid-configuration.
+	// +kubebuilder:validation:Pattern=`^https?://.+`
+	DiscoveryURL string `json:"discoveryURL"`
+	ClientID     string `json:"clientID"`
+	// ClientSecretRef references the Secret key holding the OIDC client secret.
+	ClientSecretRef SecretKeyRef `json:"clientSecretRef"`
+	// Claim that identifies the user, for example email or preferred_username.
+	// +kubebuilder:default=email
+	Claim string `json:"claim,omitempty"`
+	// +optional
+	AdditionalScopes []string `json:"additionalScopes,omitempty"`
+}
+
+// NiFiClusterPodSpec customizes the node pods the operator generates. Operator-managed
+// values always win: pod labels/annotations the operator sets (selector labels, config
+// checksums) cannot be overridden, and the reserved volume and container names are
+// rejected at admission.
+type NiFiClusterPodSpec struct {
+	// Labels are added to the node pods. Operator-managed labels take precedence.
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+	// Annotations are added to the node pods. Operator-managed annotations take
+	// precedence.
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
+	// ImagePullSecrets for pulling the NiFi image (and any sidecar images) from
+	// private registries.
+	// +optional
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+	// ServiceAccountName runs the node pods under a specific ServiceAccount.
+	// +optional
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
+	// ExtraVolumes are appended to the pod volumes, for mounting NAR extensions,
+	// driver libraries, or sidecar data.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:XValidation:rule="self.all(v, !(v.name in ['data','nificontrol-tls','nificontrol-config','nificontrol-overrides']))",message="volume names data, nificontrol-tls, nificontrol-config, and nificontrol-overrides are reserved for the operator"
+	ExtraVolumes []corev1.Volume `json:"extraVolumes,omitempty"`
+	// ExtraVolumeMounts are appended to the NiFi container's volume mounts, for
+	// example mounting an extraVolumes NAR library at
+	// /opt/nifi/nifi-current/nar_extensions.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	ExtraVolumeMounts []corev1.VolumeMount `json:"extraVolumeMounts,omitempty"`
+	// ExtraInitContainers run after the operator's data initializer.
+	// +optional
+	// +kubebuilder:validation:MaxItems=8
+	// +kubebuilder:validation:XValidation:rule="self.all(c, !(c.name in ['nifi','initialize-data']))",message="container names nifi and initialize-data are reserved for the operator"
+	ExtraInitContainers []corev1.Container `json:"extraInitContainers,omitempty"`
+	// ExtraContainers are appended as sidecars alongside the NiFi container.
+	// +optional
+	// +kubebuilder:validation:MaxItems=8
+	// +kubebuilder:validation:XValidation:rule="self.all(c, !(c.name in ['nifi','initialize-data']))",message="container names nifi and initialize-data are reserved for the operator"
+	ExtraContainers []corev1.Container `json:"extraContainers,omitempty"`
 }
 
 type NiFiClusterCoordinationSpec struct {

@@ -42,6 +42,10 @@ prop_replace 'java.arg.3' "-Xmx${NIFI_JVM_HEAP_MAX}" "${nifi_bootstrap_file}"
 uncomment 'nifi.python.command' "${nifi_props_file}"
 prop_replace 'nifi.python.extensions.source.directory.default' "${NIFI_HOME}/python_extensions"
 prop_replace 'nifi.nar.library.autoload.directory' "${NIFI_HOME}/nar_extensions"
+current_sensitive_key=$(grep '^nifi.sensitive.props.key=' "${nifi_props_file}" | head -1 | cut -d= -f2-)
+if [ -n "${NIFI_SENSITIVE_PROPS_KEY:-}" ] && [ -n "${current_sensitive_key}" ] && [ "${current_sensitive_key}" != "${NIFI_SENSITIVE_PROPS_KEY}" ] && [ -f "${NIFI_HOME}/conf/flow.json.gz" ]; then
+  "${NIFI_HOME}/bin/nifi.sh" set-sensitive-properties-key "${NIFI_SENSITIVE_PROPS_KEY}" >/dev/null
+fi
 prop_replace 'nifi.sensitive.props.key' "${NIFI_SENSITIVE_PROPS_KEY:-}"
 prop_replace 'nifi.web.http.host' "${NIFI_WEB_HTTP_HOST:-0.0.0.0}"
 prop_replace 'nifi.web.http.port' "${NIFI_WEB_HTTP_PORT:-8080}"
@@ -71,21 +75,29 @@ if [ -n "${NIFI_ZK_CONNECT_STRING:-}" ]; then
 fi
 prop_replace 'nifi.cluster.flow.election.max.wait.time' "${NIFI_ELECTION_MAX_WAIT:-5 mins}"
 prop_replace 'nifi.cluster.flow.election.max.candidates' "${NIFI_ELECTION_MAX_CANDIDATES:-}"
-exec "${NIFI_HOME}/bin/nifi.sh" run`
+` + applyConfigOverridesScript + `exec "${NIFI_HOME}/bin/nifi.sh" run`
 
 // managedNiFiStartCommandTLS configures NiFi 2.10 for HTTPS and certificate
 // authentication. The PKCS12 keystore/truststore are mounted from a cert-manager (or
 // externally supplied) Secret; the password is injected from a Secret, never a literal.
 // The operator-rendered authorizers.xml is copied over the seeded conf file so the
-// initial admin identity matches the operator client certificate. login-identity-
-// providers.xml is intentionally left untouched: pure certificate authentication needs
-// only the managed authorizer.
+// initial admin identity matches the operator client certificate. When
+// spec.authentication is set, the login provider is selected through
+// NIFI_LOGIN_IDENTITY_PROVIDER (single-user or LDAP; OIDC is properties-only), an
+// operator-rendered login-identity-providers.xml is copied in for LDAP, and single-user
+// credentials are applied with nifi.sh set-single-user-credentials so NiFi hashes the
+// password itself. Certificate authentication always runs first, so the operator's mTLS
+// access never depends on the login provider.
 const managedNiFiStartCommandTLS = `. /opt/nifi/scripts/common.sh
 prop_replace 'java.arg.2' "-Xms${NIFI_JVM_HEAP_INIT}" "${nifi_bootstrap_file}"
 prop_replace 'java.arg.3' "-Xmx${NIFI_JVM_HEAP_MAX}" "${nifi_bootstrap_file}"
 uncomment 'nifi.python.command' "${nifi_props_file}"
 prop_replace 'nifi.python.extensions.source.directory.default' "${NIFI_HOME}/python_extensions"
 prop_replace 'nifi.nar.library.autoload.directory' "${NIFI_HOME}/nar_extensions"
+current_sensitive_key=$(grep '^nifi.sensitive.props.key=' "${nifi_props_file}" | head -1 | cut -d= -f2-)
+if [ -n "${NIFI_SENSITIVE_PROPS_KEY:-}" ] && [ -n "${current_sensitive_key}" ] && [ "${current_sensitive_key}" != "${NIFI_SENSITIVE_PROPS_KEY}" ] && [ -f "${NIFI_HOME}/conf/flow.json.gz" ]; then
+  "${NIFI_HOME}/bin/nifi.sh" set-sensitive-properties-key "${NIFI_SENSITIVE_PROPS_KEY}" >/dev/null
+fi
 prop_replace 'nifi.sensitive.props.key' "${NIFI_SENSITIVE_PROPS_KEY:-}"
 prop_replace 'nifi.web.http.host' ''
 prop_replace 'nifi.web.http.port' ''
@@ -100,10 +112,21 @@ prop_replace 'nifi.security.keyPasswd' "${NIFI_KEYSTORE_PASSWORD}"
 prop_replace 'nifi.security.truststore' "${NIFI_SECURITY_DIR}/truststore.p12"
 prop_replace 'nifi.security.truststoreType' 'PKCS12'
 prop_replace 'nifi.security.truststorePasswd' "${NIFI_KEYSTORE_PASSWORD}"
-prop_replace 'nifi.security.needClientAuth' 'true'
+prop_replace 'nifi.security.needClientAuth' "${NIFI_NEED_CLIENT_AUTH:-true}"
 prop_replace 'nifi.security.allow.anonymous.authentication' 'false'
 prop_replace 'nifi.security.user.authorizer' 'managed-authorizer'
-prop_replace 'nifi.security.user.login.identity.provider' ''
+prop_replace 'nifi.security.user.login.identity.provider' "${NIFI_LOGIN_IDENTITY_PROVIDER:-}"
+prop_replace 'nifi.security.user.oidc.discovery.url' "${NIFI_OIDC_DISCOVERY_URL:-}"
+prop_replace 'nifi.security.user.oidc.client.id' "${NIFI_OIDC_CLIENT_ID:-}"
+prop_replace 'nifi.security.user.oidc.client.secret' "${NIFI_OIDC_CLIENT_SECRET:-}"
+prop_replace 'nifi.security.user.oidc.claim.identifying.user' "${NIFI_OIDC_CLAIM_IDENTIFYING_USER:-}"
+prop_replace 'nifi.security.user.oidc.additional.scopes' "${NIFI_OIDC_ADDITIONAL_SCOPES:-}"
+if [ -f "${NIFI_AUTH_DIR:-/opt/nifi/nificontrol-auth}/login-identity-providers.xml" ]; then
+  cp "${NIFI_AUTH_DIR:-/opt/nifi/nificontrol-auth}/login-identity-providers.xml" "${NIFI_HOME}/conf/login-identity-providers.xml"
+fi
+if [ -n "${NIFI_SINGLE_USER_USERNAME:-}" ]; then
+  "${NIFI_HOME}/bin/nifi.sh" set-single-user-credentials "${NIFI_SINGLE_USER_USERNAME}" "${NIFI_SINGLE_USER_PASSWORD}" >/dev/null 2>&1
+fi
 prop_replace 'nifi.remote.input.host' "${NIFI_REMOTE_INPUT_HOST:-${HOSTNAME}}"
 prop_replace 'nifi.remote.input.socket.port' "${NIFI_REMOTE_INPUT_SOCKET_PORT:-10000}"
 prop_replace 'nifi.remote.input.secure' 'true'
@@ -121,7 +144,7 @@ fi
 prop_replace 'nifi.cluster.flow.election.max.wait.time' "${NIFI_ELECTION_MAX_WAIT:-2 mins}"
 prop_replace 'nifi.cluster.flow.election.max.candidates' "${NIFI_ELECTION_MAX_CANDIDATES:-}"
 cp "${NIFI_CONFIG_DIR}/authorizers.xml" "${NIFI_HOME}/conf/authorizers.xml"
-exec "${NIFI_HOME}/bin/nifi.sh" run`
+` + applyConfigOverridesScript + `exec "${NIFI_HOME}/bin/nifi.sh" run`
 
 var managedDataDirectories = []string{
 	"conf",
@@ -171,10 +194,23 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 	if err := r.reconcileManagedClusterService(ctx, cluster, true); err != nil {
 		return r.managedClusterReconcileFailed(ctx, cluster, "ServiceReconcileFailed", err)
 	}
-	if replicas > 1 {
-		if err := r.reconcileSensitivePropsKeySecret(ctx, cluster); err != nil {
-			return r.managedClusterReconcileFailed(ctx, cluster, "SensitivePropsKeyReconcileFailed", err)
-		}
+	// Every managed node needs a stable sensitive properties key, including a single
+	// standalone node: NiFi self-generates one into nifi.properties when it is blank, and
+	// the start script re-blanks the property on the next restart, which loses the key
+	// and strands the persisted encrypted flow.
+	if err := r.reconcileSensitivePropsKeySecret(ctx, cluster); err != nil {
+		return r.managedClusterReconcileFailed(ctx, cluster, "SensitivePropsKeyReconcileFailed", err)
+	}
+	resolvedOverrides, err := r.reconcileManagedClusterConfigOverrides(ctx, cluster)
+	if err != nil {
+		return r.managedClusterReconcileFailed(ctx, cluster, "ConfigOverridesInvalid", err)
+	}
+	resolvedAuth, err := resolveClusterAuthentication(ctx, r.Client, cluster)
+	if err != nil {
+		return r.managedClusterReconcileFailed(ctx, cluster, "AuthenticationInvalid", err)
+	}
+	if err := r.reconcileManagedClusterAuthSecret(ctx, cluster, resolvedAuth); err != nil {
+		return r.managedClusterReconcileFailed(ctx, cluster, "AuthenticationInvalid", err)
 	}
 
 	// Metrics are best-effort and never block cluster readiness; the MetricsReady condition
@@ -200,9 +236,14 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 		return r.managedClusterReconcileFailed(ctx, cluster, "ScaleDownFailed", err)
 	}
 
-	statefulSet, err := r.reconcileManagedClusterStatefulSet(ctx, cluster, tlsMaterials, scaleDown.replicas)
+	statefulSet, err := r.reconcileManagedClusterStatefulSet(ctx, cluster, tlsMaterials, scaleDown.replicas, resolvedOverrides.checksum, resolvedAuth)
 	if err != nil {
 		return r.managedClusterReconcileFailed(ctx, cluster, "StatefulSetReconcileFailed", err)
+	}
+	// Only after the pod template has dropped its reference is a stale overrides
+	// ConfigMap safe to remove.
+	if err := r.cleanupManagedClusterConfigOverrides(ctx, cluster); err != nil {
+		return r.managedClusterReconcileFailed(ctx, cluster, "ConfigOverridesReconcileFailed", err)
 	}
 	if scaleDown.active {
 		message := fmt.Sprintf("Gracefully offloading NiFi nodes during scale-down to %d replicas.", replicas)
@@ -283,6 +324,17 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
+	// Seed the configured admin identities with the administrative policy set so people
+	// can log in and administer the cluster without a manual grant step.
+	if err := r.ensureManagedAdminAccess(ctx, cluster, endpoint); err != nil {
+		message := fmt.Sprintf("The managed NiFi is reachable, but granting the configured admin identities is not complete: %v", err)
+		if managedClusterStatusNeedsUpdate(cluster, false, endpoint, workload, "AuthorizationBootstrapPending") {
+			if statusErr := markManagedClusterNotReady(ctx, r.Client, cluster, "AuthorizationBootstrapPending", message, endpoint, workload); statusErr != nil {
+				return ctrl.Result{}, statusErr
+			}
+		}
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
 
 	if managedClusterStatusNeedsUpdate(cluster, true, endpoint, workload, "ClusterReachable") {
 		recordEvent(r.Recorder, cluster, corev1.EventTypeNormal, "Ready",
@@ -343,8 +395,11 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterService(ctx context.Conte
 	return err
 }
 
-func (r *NiFiClusterReconciler) reconcileManagedClusterStatefulSet(ctx context.Context, cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials, replicas int32) (*appsv1.StatefulSet, error) {
+func (r *NiFiClusterReconciler) reconcileManagedClusterStatefulSet(ctx context.Context, cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials, replicas int32, overridesChecksum string, auth *resolvedClusterAuth) (*appsv1.StatefulSet, error) {
 	name := managedClusterResourceName(cluster)
+	if err := r.recreateStatefulSetOnClaimChange(ctx, name, cluster.Namespace, desiredManagedClusterStatefulSetSpec(cluster, tls, overridesChecksum, auth).VolumeClaimTemplates); err != nil {
+		return nil, err
+	}
 	statefulSet := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cluster.Namespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, statefulSet, func() error {
 		if err := assertManagedClusterResource(statefulSet, cluster); err != nil {
@@ -352,7 +407,7 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterStatefulSet(ctx context.C
 		}
 		statefulSet.Labels = managedClusterLabels(cluster)
 		statefulSet.Annotations = managedClusterAnnotations(cluster)
-		desired := desiredManagedClusterStatefulSetSpec(cluster, tls)
+		desired := desiredManagedClusterStatefulSetSpec(cluster, tls, overridesChecksum, auth)
 		// The effective replica count steps down gradually during a graceful scale-down.
 		desired.Replicas = ptr.To(replicas)
 		if statefulSet.ResourceVersion != "" {
@@ -368,7 +423,7 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterStatefulSet(ctx context.C
 	return statefulSet, err
 }
 
-func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials) appsv1.StatefulSetSpec {
+func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials, overridesChecksum string, auth *resolvedClusterAuth) appsv1.StatefulSetSpec {
 	podLabels := managedClusterPodLabels(cluster)
 	webPort := defaultNiFiWebPort
 	startCommand := managedNiFiStartCommand
@@ -381,7 +436,7 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls
 		Image:           managedClusterImage(cluster),
 		ImagePullPolicy: managedClusterImagePullPolicy(cluster),
 		Command:         []string{"/bin/bash", "-ec", startCommand},
-		Env:             managedClusterEnvironment(cluster, tls),
+		Env:             managedClusterEnvironment(cluster, tls, auth),
 		Ports: []corev1.ContainerPort{
 			{Name: "web", ContainerPort: webPort, Protocol: corev1.ProtocolTCP},
 			{Name: "cluster", ContainerPort: defaultClusterPort, Protocol: corev1.ProtocolTCP},
@@ -390,7 +445,7 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls
 		StartupProbe:   managedClusterStartupProbe(tls),
 		LivenessProbe:  managedClusterLivenessProbe(tls),
 		ReadinessProbe: managedClusterReadinessProbe(tls),
-		VolumeMounts:   managedClusterVolumeMounts(tls),
+		VolumeMounts:   managedClusterVolumeMounts(cluster.Spec.Storage, tls, hasConfigOverrides(cluster), managedClusterAuthVolumeSource(cluster, auth) != ""),
 	}
 	podSpec := corev1.PodSpec{
 		SecurityContext: &corev1.PodSecurityContext{
@@ -399,12 +454,18 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls
 		},
 		InitContainers: []corev1.Container{managedClusterDataInitializer(cluster)},
 		Containers:     []corev1.Container{container},
-		Volumes:        managedClusterVolumes(cluster, tls),
+		Volumes:        managedClusterVolumes(cluster, tls, auth),
 	}
 	applyManagedClusterScheduling(&podSpec, cluster)
 	annotations := managedClusterAnnotations(cluster)
 	if tls != nil && tls.checksum != "" {
 		annotations[managedTLSChecksumAnnotation] = tls.checksum
+	}
+	if overridesChecksum != "" {
+		annotations[managedOverridesChecksumAnnotation] = overridesChecksum
+	}
+	if auth != nil && auth.checksum != "" {
+		annotations[managedAuthChecksumAnnotation] = auth.checksum
 	}
 	spec := appsv1.StatefulSetSpec{
 		ServiceName:          managedClusterHeadlessServiceName(cluster),
@@ -422,21 +483,23 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls
 			Spec: podSpec,
 		},
 	}
+	applyPodCustomization(cluster, &spec.Template)
 	if managedClusterStorageEnabled(cluster) {
-		spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{managedClusterVolumeClaim(cluster)}
+		spec.VolumeClaimTemplates = nodeVolumeClaims(cluster.Spec.Storage, managedClusterLabels(cluster), managedClusterAnnotations(cluster))
 	}
 	return spec
 }
 
 // managedClusterVolumes returns the pod volumes, adding read-only mounts for the TLS
 // Secret and operator-rendered config when internal TLS is enabled.
-func managedClusterVolumes(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials) []corev1.Volume {
-	return nodeVolumes(managedClusterStorageEnabled(cluster), tls)
+func managedClusterVolumes(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials, auth *resolvedClusterAuth) []corev1.Volume {
+	return nodeVolumes(managedClusterStorageEnabled(cluster), tls, managedClusterOverridesVolumeSource(cluster), managedClusterAuthVolumeSource(cluster, auth))
 }
 
 // nodeVolumes returns the pod volumes for a node pool. When persistent storage is disabled
-// the data directory is an emptyDir; the TLS Secret and config volumes are added when set.
-func nodeVolumes(storageEnabled bool, tls *clusterTLSMaterials) []corev1.Volume {
+// the data directory is an emptyDir; the TLS Secret, config, and configuration-overrides
+// volumes are added when set.
+func nodeVolumes(storageEnabled bool, tls *clusterTLSMaterials, overridesSecret, authSecret string) []corev1.Volume {
 	volumes := []corev1.Volume{}
 	if !storageEnabled {
 		volumes = append(volumes, corev1.Volume{
@@ -461,6 +524,24 @@ func nodeVolumes(storageEnabled bool, tls *clusterTLSMaterials) []corev1.Volume 
 				}},
 			},
 		)
+	}
+	if overridesSecret != "" {
+		volumes = append(volumes, corev1.Volume{
+			Name: managedOverridesVolume,
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName:  overridesSecret,
+				DefaultMode: ptr.To[int32](0o440),
+			}},
+		})
+	}
+	if authSecret != "" {
+		volumes = append(volumes, corev1.Volume{
+			Name: managedAuthVolume,
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName:  authSecret,
+				DefaultMode: ptr.To[int32](0o440),
+			}},
+		})
 	}
 	return volumes
 }
@@ -504,15 +585,31 @@ func nodeDataInitializer(image string, pullPolicy corev1.PullPolicy) corev1.Cont
 		Command: []string{
 			"/bin/bash",
 			"-ec",
-			"mkdir -p /mnt/data/{conf,database_repository,flowfile_repository,content_repository,provenance_repository,state}; if [ ! -f /mnt/data/conf/nifi.properties ]; then cp -a /opt/nifi/nifi-current/conf/. /mnt/data/conf/; fi",
+			// The image-default copies are refreshed on every start (the init container sees the
+			// image's pristine conf, unshadowed by the data mount) so removed configuration
+			// overrides can be restored to the running image's shipped values.
+			"mkdir -p /mnt/data/{conf,database_repository,flowfile_repository,content_repository,provenance_repository,state}; if [ ! -f /mnt/data/conf/nifi.properties ]; then cp -a /opt/nifi/nifi-current/conf/. /mnt/data/conf/; fi; cp /opt/nifi/nifi-current/conf/nifi.properties /mnt/data/conf/nifi.properties.image-default; cp /opt/nifi/nifi-current/conf/bootstrap.conf /mnt/data/conf/bootstrap.conf.image-default; cp /opt/nifi/nifi-current/conf/logback.xml /mnt/data/conf/logback.xml.image-default",
 		},
 		VolumeMounts: []corev1.VolumeMount{{Name: managedDataVolume, MountPath: "/mnt/data"}},
 	}
 }
 
-func managedClusterVolumeMounts(tls *clusterTLSMaterials) []corev1.VolumeMount {
-	mounts := make([]corev1.VolumeMount, 0, len(managedDataDirectories)+2)
+func managedClusterVolumeMounts(storage nifiv1alpha1.NiFiClusterStorageSpec, tls *clusterTLSMaterials, overrides, auth bool) []corev1.VolumeMount {
+	dedicated := map[string]string{}
+	for _, binding := range repositoryVolumeBindings(storage) {
+		dedicated[binding.directory] = binding.claimName
+	}
+	mounts := make([]corev1.VolumeMount, 0, len(managedDataDirectories)+len(dedicated)+3)
 	for _, directory := range managedDataDirectories {
+		if claim, ok := dedicated[directory]; ok {
+			// The repository lives on its own claim; the StatefulSet controller injects a
+			// pod volume named after the claim template.
+			mounts = append(mounts, corev1.VolumeMount{
+				Name:      claim,
+				MountPath: "/opt/nifi/nifi-current/" + directory,
+			})
+			continue
+		}
 		mounts = append(mounts, corev1.VolumeMount{
 			Name:      managedDataVolume,
 			MountPath: "/opt/nifi/nifi-current/" + directory,
@@ -524,6 +621,12 @@ func managedClusterVolumeMounts(tls *clusterTLSMaterials) []corev1.VolumeMount {
 			corev1.VolumeMount{Name: managedTLSVolume, MountPath: managedTLSSecurityDir, ReadOnly: true},
 			corev1.VolumeMount{Name: managedTLSConfigVol, MountPath: managedTLSConfigDir, ReadOnly: true},
 		)
+	}
+	if overrides {
+		mounts = append(mounts, corev1.VolumeMount{Name: managedOverridesVolume, MountPath: managedOverridesDir, ReadOnly: true})
+	}
+	if auth {
+		mounts = append(mounts, corev1.VolumeMount{Name: managedAuthVolume, MountPath: managedAuthDir, ReadOnly: true})
 	}
 	return mounts
 }
@@ -558,20 +661,31 @@ func nodeVolumeClaim(storage nifiv1alpha1.NiFiClusterStorageSpec, labels, annota
 	}
 }
 
-func managedClusterEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials) []corev1.EnvVar {
-	return nodeEnvironment(cluster, tls, managedClusterHeapInitial(cluster), managedClusterHeapMax(cluster), cluster.Spec.AdditionalEnv, managedClusterReplicas(cluster) > 1)
+func managedClusterEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials, auth *resolvedClusterAuth) []corev1.EnvVar {
+	return nodeEnvironment(cluster, tls, managedClusterHeapInitial(cluster), managedClusterHeapMax(cluster), cluster.Spec.AdditionalEnv, managedClusterReplicas(cluster) > 1, auth)
 }
 
 // nodeEnvironment builds the container environment shared by the cluster's primary pool and
 // any NiFiNodeGroup pool. Heap, additional env, and whether the node joins a cluster vary by
 // pool; ZooKeeper, the sensitive-properties key, proxy host, and the cluster address are
 // shared from the parent cluster so every pool's nodes are peers in one NiFi cluster.
-func nodeEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials, heapInitial, heapMax string, additionalEnv []corev1.EnvVar, clustered bool) []corev1.EnvVar {
+func nodeEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials, heapInitial, heapMax string, additionalEnv []corev1.EnvVar, clustered bool, auth *resolvedClusterAuth) []corev1.EnvVar {
 	environment := []corev1.EnvVar{
 		{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
 		{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
 		{Name: "NIFI_JVM_HEAP_INIT", Value: heapInitial},
 		{Name: "NIFI_JVM_HEAP_MAX", Value: heapMax},
+		// Where the start script looks for mounted configuration overrides; the mount only
+		// exists when spec.configOverrides has entries, and the script no-ops without it.
+		{Name: "NIFI_OVERRIDES_DIR", Value: managedOverridesDir},
+		// Every node — standalone included — boots with the operator-generated sensitive
+		// properties key (see reconcileSensitivePropsKeySecret): when the property is left
+		// blank NiFi generates its own into nifi.properties, and the start script would
+		// blank it again on the next restart, stranding the persisted encrypted flow.
+		{Name: "NIFI_SENSITIVE_PROPS_KEY", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: managedClusterSensitivePropsSecretName(cluster)},
+			Key:                  sensitivePropsKeyKey,
+		}}},
 	}
 	// In a cluster, NiFi advertises the node's web host as its API address in
 	// /controller/cluster, which the operator matches when offloading a node on scale-down.
@@ -598,6 +712,12 @@ func nodeEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials
 				Key:                  tls.passwordSecretKey,
 			}}},
 		)
+		// User authentication (single-user, LDAP, OIDC) only exists over HTTPS; the mode's
+		// login provider, credentials, and OIDC settings arrive through the environment.
+		if auth != nil {
+			environment = append(environment, corev1.EnvVar{Name: "NIFI_AUTH_DIR", Value: managedAuthDir})
+			environment = append(environment, auth.env...)
+		}
 	} else {
 		environment = append(environment,
 			corev1.EnvVar{Name: "NIFI_WEB_HTTP_HOST", Value: webHTTPHost},
@@ -612,14 +732,6 @@ func nodeEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials
 	if clustered && cluster.Spec.Coordination != nil {
 		coordination := cluster.Spec.Coordination
 		environment = append(environment,
-			// NiFi 2.x requires a shared, explicit sensitive properties key on every cluster
-			// node. The operator generates it once into a Secret (see
-			// reconcileSensitivePropsKeySecret) so it is stable across restarts and identical
-			// on all nodes.
-			corev1.EnvVar{Name: "NIFI_SENSITIVE_PROPS_KEY", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: managedClusterSensitivePropsSecretName(cluster)},
-				Key:                  sensitivePropsKeyKey,
-			}}},
 			corev1.EnvVar{Name: "NIFI_CLUSTER_IS_NODE", Value: "true"},
 			corev1.EnvVar{Name: "NIFI_CLUSTER_ADDRESS", Value: fmt.Sprintf("$(POD_NAME).%s.$(POD_NAMESPACE).svc", managedClusterHeadlessServiceName(cluster))},
 			corev1.EnvVar{Name: "NIFI_CLUSTER_NODE_PROTOCOL_PORT", Value: strconv.Itoa(int(defaultClusterPort))},

@@ -39,7 +39,7 @@ func TestDesiredManagedClusterStatefulSetSchedulingAndUpgrade(t *testing.T) {
 			Upgrade: &nifiv1alpha1.NiFiClusterUpgradeSpec{Strategy: "RollingUpdate", Partition: &partition, MinReadySeconds: 20},
 		},
 	}
-	spec := desiredManagedClusterStatefulSetSpec(cluster, nil)
+	spec := desiredManagedClusterStatefulSetSpec(cluster, nil, "", nil)
 	if spec.Template.Spec.NodeSelector["disktype"] != "ssd" {
 		t.Fatalf("nodeSelector = %#v", spec.Template.Spec.NodeSelector)
 	}
@@ -161,7 +161,7 @@ func TestManagedClusterIngressReconcileAndProxyHost(t *testing.T) {
 	}
 
 	// The ingress host is added to the allowed proxy hosts, and the HTTP start command sets it.
-	env := managedClusterEnvironment(cluster, nil)
+	env := managedClusterEnvironment(cluster, nil, nil)
 	assertEnvironmentValue(t, env, "NIFI_WEB_PROXY_HOST", "nifi.example.com")
 	if !strings.Contains(managedNiFiStartCommand, "nifi.web.proxy.host") {
 		t.Fatal("HTTP start command must configure nifi.web.proxy.host")

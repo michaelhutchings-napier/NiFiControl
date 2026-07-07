@@ -23,6 +23,8 @@ jobs:
       matrix:
         target:
           - integration-registry-kind
+          - integration-configoverrides-kind
+          - integration-secureauth-kind
           - integration-reportingtask-kind
           - integration-authz-kind
           - integration-bluegreen-kind

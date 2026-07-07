@@ -98,7 +98,7 @@ func nodeGroupEnv(cluster *nifiv1alpha1.NiFiCluster, group *nifiv1alpha1.NiFiNod
 // materials, so they are peers of the primary pool in one NiFi cluster. The pod construction
 // reuses the same shared builders as the primary pool; only replicas, resources, JVM,
 // storage, scheduling, and the update strategy vary per group.
-func desiredNodeGroupStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, group *nifiv1alpha1.NiFiNodeGroup, tls *clusterTLSMaterials, replicas int32, tlsChecksum string) appsv1.StatefulSetSpec {
+func desiredNodeGroupStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, group *nifiv1alpha1.NiFiNodeGroup, tls *clusterTLSMaterials, replicas int32, tlsChecksum, overridesChecksum string, auth *resolvedClusterAuth) appsv1.StatefulSetSpec {
 	podLabels := nodeGroupPodLabels(cluster, group)
 	webPort := defaultNiFiWebPort
 	startCommand := managedNiFiStartCommand
@@ -115,7 +115,7 @@ func desiredNodeGroupStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, group *n
 		ImagePullPolicy: managedClusterImagePullPolicy(cluster),
 		Command:         []string{"/bin/bash", "-ec", startCommand},
 		// A node group only exists in a clustered cluster, so its nodes always join the cluster.
-		Env: nodeEnvironment(cluster, tls, heapInitial, heapMax, nodeGroupEnv(cluster, group), true),
+		Env: nodeEnvironment(cluster, tls, heapInitial, heapMax, nodeGroupEnv(cluster, group), true, auth),
 		Ports: []corev1.ContainerPort{
 			{Name: "web", ContainerPort: webPort, Protocol: corev1.ProtocolTCP},
 			{Name: "cluster", ContainerPort: defaultClusterPort, Protocol: corev1.ProtocolTCP},
@@ -124,7 +124,7 @@ func desiredNodeGroupStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, group *n
 		StartupProbe:   managedClusterStartupProbe(tls),
 		LivenessProbe:  managedClusterLivenessProbe(tls),
 		ReadinessProbe: managedClusterReadinessProbe(tls),
-		VolumeMounts:   managedClusterVolumeMounts(tls),
+		VolumeMounts:   managedClusterVolumeMounts(storage, tls, hasConfigOverrides(cluster), managedClusterAuthVolumeSource(cluster, auth) != ""),
 	}
 	podSpec := corev1.PodSpec{
 		SecurityContext: &corev1.PodSecurityContext{
@@ -133,13 +133,19 @@ func desiredNodeGroupStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, group *n
 		},
 		InitContainers: []corev1.Container{nodeDataInitializer(nodeGroupImage(cluster, group), managedClusterImagePullPolicy(cluster))},
 		Containers:     []corev1.Container{container},
-		Volumes:        nodeVolumes(nodeGroupStorageEnabled(storage), tls),
+		Volumes:        nodeVolumes(nodeGroupStorageEnabled(storage), tls, managedClusterOverridesVolumeSource(cluster), managedClusterAuthVolumeSource(cluster, auth)),
 	}
 	applyNodeScheduling(&podSpec, nodeGroupScheduling(cluster, group))
 
 	annotations := map[string]string{nodeGroupAnnotation: group.Name}
 	if tlsChecksum != "" {
 		annotations[managedTLSChecksumAnnotation] = tlsChecksum
+	}
+	if overridesChecksum != "" {
+		annotations[managedOverridesChecksumAnnotation] = overridesChecksum
+	}
+	if auth != nil && auth.checksum != "" {
+		annotations[managedAuthChecksumAnnotation] = auth.checksum
 	}
 	upgrade := group.Spec.Upgrade
 	spec := appsv1.StatefulSetSpec{
@@ -155,8 +161,9 @@ func desiredNodeGroupStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, group *n
 			Spec:       podSpec,
 		},
 	}
+	applyPodCustomization(cluster, &spec.Template)
 	if nodeGroupStorageEnabled(storage) {
-		spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{nodeVolumeClaim(storage, podLabels, map[string]string{nodeGroupAnnotation: group.Name})}
+		spec.VolumeClaimTemplates = nodeVolumeClaims(storage, podLabels, map[string]string{nodeGroupAnnotation: group.Name})
 	}
 	return spec
 }

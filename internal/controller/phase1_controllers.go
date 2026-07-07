@@ -3908,6 +3908,15 @@ func (r *NiFiFlowDeploymentReconciler) requestsForCredentialSecret(ctx context.C
 }
 
 func clusterAPIReferencesSecret(cluster *nifiv1alpha1.NiFiCluster, secretName string) bool {
+	// Secret-sourced configuration overrides: a content change must re-render the
+	// overrides payload and roll the nodes through the checksum annotation.
+	if cluster.Spec.ConfigOverrides != nil {
+		for _, reference := range cluster.Spec.ConfigOverrides.NiFiPropertiesFrom {
+			if reference.Name == secretName {
+				return true
+			}
+		}
+	}
 	if cluster.Spec.API == nil {
 		return false
 	}

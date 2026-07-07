@@ -17,6 +17,20 @@ services, and high-level flow deployments.
   [docs/production-cluster.md](docs/production-cluster.md). Scaling a clustered
   cluster down gracefully offloads each removed node's data through the NiFi cluster
   API before its pod is deleted; see [docs/node-lifecycle.md](docs/node-lifecycle.md).
+- Settings the API does not model directly can be set raw via
+  `spec.configOverrides` (`nifiProperties` / `bootstrapProperties` / `logbackXml`),
+  applied on every node after the operator-managed settings so an override wins;
+  removing an entry restores the image default, and operator-managed keys are rejected
+  at admission. Sensitive values come from Secrets via `nifiPropertiesFrom`.
+  `spec.pod` customizes the generated pods (extra metadata, image pull
+  secrets, ServiceAccount, sidecars, init containers, and volumes — e.g. custom NAR
+  libraries), and `spec.storage.repositories` places individual NiFi repositories on
+  dedicated PersistentVolumes. See
+  [docs/production-cluster.md](docs/production-cluster.md).
+- Secured clusters support user login via single-user credentials, LDAP, or OIDC
+  (`spec.authentication`), with `adminIdentities` seeding the administrative policy
+  set automatically; the operator itself always authenticates with mutual TLS. See
+  [docs/user-authentication.md](docs/user-authentication.md).
 - Managed clusters expose a Kubernetes scale subresource, so they can be resized with
   `kubectl scale`, a HorizontalPodAutoscaler, or KEDA (driven by queue depth). `NiFiAutoscaler`
   is the native option: it renders a KEDA `ScaledObject` (Prometheus metrics) or a native HPA
