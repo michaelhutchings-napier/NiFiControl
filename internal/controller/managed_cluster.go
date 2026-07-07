@@ -373,6 +373,17 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
+	// Enforce cluster-wide controller settings (maxTimerDrivenThreadCount) through the NiFi
+	// API. A no-op unless configured; the cluster is not reported ready until it is applied.
+	if err := r.reconcileManagedClusterControllerConfig(ctx, cluster, endpoint); err != nil {
+		message := fmt.Sprintf("The managed NiFi is reachable, but applying the controller configuration is not complete: %v", err)
+		if managedClusterStatusNeedsUpdate(cluster, false, endpoint, workload, "ControllerConfigPending") {
+			if statusErr := markManagedClusterNotReady(ctx, r.Client, cluster, "ControllerConfigPending", message, endpoint, workload); statusErr != nil {
+				return ctrl.Result{}, statusErr
+			}
+		}
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
 
 	if managedClusterStatusNeedsUpdate(cluster, true, endpoint, workload, "ClusterReachable") {
 		recordEvent(r.Recorder, cluster, corev1.EventTypeNormal, "Ready",

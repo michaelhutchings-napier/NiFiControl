@@ -76,6 +76,16 @@ type NiFiClusterSpec struct {
 	// configured with a non-default DNS domain. Only applies to Internal clusters.
 	// +kubebuilder:validation:MaxLength=253
 	ClusterDomain string `json:"clusterDomain,omitempty"`
+	// MaxTimerDrivenThreadCount sets NiFi's controller-level maximum timer-driven thread
+	// count (nifi-api/controller/config), the thread pool that runs timer-driven
+	// processors. It is a flow-level setting applied through the NiFi API once the cluster
+	// is reachable, and enforced declaratively: the operator resets it if it drifts. Unset
+	// leaves NiFi's default. Requires the operator to reach the cluster API (a secured
+	// cluster uses the operator's mutual-TLS admin identity).
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1000
+	MaxTimerDrivenThreadCount *int32 `json:"maxTimerDrivenThreadCount,omitempty"`
 	// Upgrade controls how managed NiFi version changes roll out across the StatefulSet.
 	Upgrade *NiFiClusterUpgradeSpec `json:"upgrade,omitempty"`
 	// ScaleDown controls how managed NiFi nodes are gracefully removed when replicas is

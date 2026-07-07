@@ -8,6 +8,11 @@ image:
 
 replicas: 1
 
+# maxTimerDrivenThreadCount sets NiFi's controller-level maximum timer-driven thread count
+# (applied through the NiFi API once the cluster is reachable, and enforced declaratively).
+# Leave 0 to keep NiFi's default.
+maxTimerDrivenThreadCount: 0
+
 service:
   type: ClusterIP
   port: 8080

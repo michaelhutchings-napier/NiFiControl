@@ -118,6 +118,10 @@ integration-portsvc-kind:
 integration-clusterports-kind:
 	./hack/test-cluster-ports-kind.sh
 
+.PHONY: integration-controllerconfig-kind
+integration-controllerconfig-kind:
+	./hack/test-controller-config-kind.sh
+
 .PHONY: integration-remoteprocessgroup-kind
 integration-remoteprocessgroup-kind:
 	./hack/test-remoteprocessgroup-kind.sh

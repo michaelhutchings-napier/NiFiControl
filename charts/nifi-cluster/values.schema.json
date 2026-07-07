@@ -58,6 +58,11 @@
       "type": "integer",
       "minimum": 1
     },
+    "maxTimerDrivenThreadCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000
+    },
     "service": {
       "type": "object",
       "required": [

@@ -1649,6 +1649,11 @@ func (in *NiFiClusterSpec) DeepCopyInto(out *NiFiClusterSpec) {
 		*out = make([]ProxyHost, len(*in))
 		copy(*out, *in)
 	}
+	if in.MaxTimerDrivenThreadCount != nil {
+		in, out := &in.MaxTimerDrivenThreadCount, &out.MaxTimerDrivenThreadCount
+		*out = new(int32)
+		**out = **in
+	}
 	if in.Upgrade != nil {
 		in, out := &in.Upgrade, &out.Upgrade
 		*out = new(NiFiClusterUpgradeSpec)

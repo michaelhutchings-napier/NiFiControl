@@ -1067,6 +1067,18 @@ spec:
                     default: 1g
                     type: string
                 type: object
+              maxTimerDrivenThreadCount:
+                description: |-
+                  MaxTimerDrivenThreadCount sets NiFi's controller-level maximum timer-driven thread
+                  count (nifi-api/controller/config), the thread pool that runs timer-driven
+                  processors. It is a flow-level setting applied through the NiFi API once the cluster
+                  is reachable, and enforced declaratively: the operator resets it if it drifts. Unset
+                  leaves NiFi's default. Requires the operator to reach the cluster API (a secured
+                  cluster uses the operator's mutual-TLS admin identity).
+                format: int32
+                maximum: 1000
+                minimum: 1
+                type: integer
               metrics:
                 description: |-
                   Metrics configures Prometheus metrics for the managed cluster, including an optional

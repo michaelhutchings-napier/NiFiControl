@@ -10,6 +10,9 @@ spec:
   image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
   imagePullPolicy: {{ .Values.image.pullPolicy }}
   replicas: {{ .Values.replicas }}
+  {{- if gt (int .Values.maxTimerDrivenThreadCount) 0 }}
+  maxTimerDrivenThreadCount: {{ .Values.maxTimerDrivenThreadCount }}
+  {{- end }}
   service:
     type: {{ .Values.service.type }}
     port: {{ .Values.service.port }}

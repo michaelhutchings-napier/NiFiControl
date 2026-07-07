@@ -90,6 +90,8 @@ type NiFiClusterReconciler struct {
 	ReachabilityChecker nifi.ReachabilityChecker
 	// ClusterNodeClient drives the NiFi cluster API for graceful node offload on scale-down.
 	ClusterNodeClient nifi.ClusterNodeClient
+	// ControllerConfigClient applies cluster-wide controller settings (maxTimerDrivenThreadCount).
+	ControllerConfigClient nifi.ControllerConfigClient
 	// Recorder emits Kubernetes Events for notable lifecycle transitions. It is optional;
 	// reconcilers constructed without one (notably in unit tests) simply emit no Events.
 	Recorder record.EventRecorder

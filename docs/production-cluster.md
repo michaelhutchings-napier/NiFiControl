@@ -128,6 +128,25 @@ Intra-cluster clustering and mTLS use the short `<pod>.<svc>.<ns>.svc` names (re
 the pod's DNS search path), so they work regardless; `clusterDomain` matters when something
 reaches a node by its full `.svc.<domain>` FQDN.
 
+## Controller thread pool
+
+`spec.maxTimerDrivenThreadCount` sets NiFi's controller-level maximum timer-driven thread
+count — the pool that runs timer-driven processors. Unlike most settings, it is not a
+`nifi.properties` value: it lives in the flow and is applied through the NiFi API
+(`/nifi-api/controller/config`) once the cluster is reachable. The operator enforces it
+declaratively — it reads the live value on each reconcile and resets it if it has drifted
+(for example after a manual change in the UI), so the CR stays the source of truth.
+
+```yaml
+spec:
+  maxTimerDrivenThreadCount: 25
+```
+
+Leave it unset to keep NiFi's default. Applying it needs the operator to reach the cluster
+API; on a secured cluster that uses the operator's own mutual-TLS admin identity, and on an
+external cluster it uses `spec.api.auth`. The cluster is not reported `Ready` until the
+configured value has been applied.
+
 ## Safe version upgrades
 
 Change `spec.image` to upgrade NiFi. `spec.upgrade` controls the StatefulSet roll:
