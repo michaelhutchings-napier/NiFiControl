@@ -28,6 +28,7 @@ jobs:
           - integration-clusterports-kind
           - integration-controllerconfig-kind
           - integration-restrictedpsa-kind
+          - integration-graceterm-kind
           - integration-secureauth-kind
           - integration-oidc-kind
           - integration-oidc-tls-kind

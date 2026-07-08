@@ -126,6 +126,10 @@ integration-controllerconfig-kind:
 integration-restrictedpsa-kind:
 	./hack/test-restricted-psa-kind.sh
 
+.PHONY: integration-graceterm-kind
+integration-graceterm-kind:
+	./hack/test-termination-grace-kind.sh
+
 .PHONY: integration-remoteprocessgroup-kind
 integration-remoteprocessgroup-kind:
 	./hack/test-remoteprocessgroup-kind.sh

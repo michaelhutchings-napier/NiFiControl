@@ -508,10 +508,11 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls
 		VolumeMounts:    managedClusterVolumeMounts(cluster.Spec.Storage, tls, hasConfigOverrides(cluster), managedClusterAuthVolumeSource(cluster, auth) != ""),
 	}
 	podSpec := corev1.PodSpec{
-		SecurityContext: managedClusterPodSecurityContext(cluster),
-		InitContainers:  []corev1.Container{managedClusterDataInitializer(cluster)},
-		Containers:      []corev1.Container{container},
-		Volumes:         managedClusterVolumes(cluster, tls, auth),
+		SecurityContext:               managedClusterPodSecurityContext(cluster),
+		TerminationGracePeriodSeconds: managedClusterTerminationGracePeriodSeconds(cluster),
+		InitContainers:                []corev1.Container{managedClusterDataInitializer(cluster)},
+		Containers:                    []corev1.Container{container},
+		Volumes:                       managedClusterVolumes(cluster, tls, auth),
 	}
 	applyManagedClusterScheduling(&podSpec, cluster)
 	annotations := managedClusterAnnotations(cluster)
@@ -1107,6 +1108,22 @@ func managedClusterContainerSecurityContext(cluster *nifiv1alpha1.NiFiCluster) *
 		return nil
 	}
 	return cluster.Spec.Pod.ContainerSecurityContext
+}
+
+// defaultTerminationGracePeriodSeconds gives NiFi time to stop gracefully on SIGTERM (stop
+// processors, checkpoint the flowfile repository, flush the content/provenance repositories)
+// before Kubernetes force-kills the pod. It is comfortably above the NiFi bootstrap's
+// graceful.shutdown.seconds default (20) and double Kubernetes' own 30s default.
+const defaultTerminationGracePeriodSeconds int64 = 60
+
+// managedClusterTerminationGracePeriodSeconds returns the pod termination grace period,
+// honoring spec.pod.terminationGracePeriodSeconds (including an explicit 0) and otherwise
+// falling back to the NiFi-appropriate default.
+func managedClusterTerminationGracePeriodSeconds(cluster *nifiv1alpha1.NiFiCluster) *int64 {
+	if cluster.Spec.Pod != nil && cluster.Spec.Pod.TerminationGracePeriodSeconds != nil {
+		return cluster.Spec.Pod.TerminationGracePeriodSeconds
+	}
+	return ptr.To(defaultTerminationGracePeriodSeconds)
 }
 
 // managedClusterHTTPPort is the plaintext web port NiFi binds in non-TLS mode.

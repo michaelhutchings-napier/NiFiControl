@@ -128,10 +128,11 @@ func desiredNodeGroupStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, group *n
 		VolumeMounts:    managedClusterVolumeMounts(storage, tls, hasConfigOverrides(cluster), managedClusterAuthVolumeSource(cluster, auth) != ""),
 	}
 	podSpec := corev1.PodSpec{
-		SecurityContext: managedClusterPodSecurityContext(cluster),
-		InitContainers:  []corev1.Container{nodeDataInitializer(nodeGroupImage(cluster, group), managedClusterImagePullPolicy(cluster), managedClusterContainerSecurityContext(cluster))},
-		Containers:      []corev1.Container{container},
-		Volumes:         nodeVolumes(nodeGroupStorageEnabled(storage), tls, managedClusterOverridesVolumeSource(cluster), managedClusterAuthVolumeSource(cluster, auth)),
+		SecurityContext:               managedClusterPodSecurityContext(cluster),
+		TerminationGracePeriodSeconds: managedClusterTerminationGracePeriodSeconds(cluster),
+		InitContainers:                []corev1.Container{nodeDataInitializer(nodeGroupImage(cluster, group), managedClusterImagePullPolicy(cluster), managedClusterContainerSecurityContext(cluster))},
+		Containers:                    []corev1.Container{container},
+		Volumes:                       nodeVolumes(nodeGroupStorageEnabled(storage), tls, managedClusterOverridesVolumeSource(cluster), managedClusterAuthVolumeSource(cluster, auth)),
 	}
 	applyNodeScheduling(&podSpec, nodeGroupScheduling(cluster, group))
 

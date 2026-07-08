@@ -819,6 +819,10 @@
         "containerSecurityContext": {
           "type": "object"
         },
+        "terminationGracePeriodSeconds": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
         "extraVolumes": {
           "type": "array",
           "items": {

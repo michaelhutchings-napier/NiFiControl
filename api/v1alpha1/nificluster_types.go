@@ -474,6 +474,17 @@ type NiFiClusterPodSpec struct {
 	// extra init containers carry their own securityContext.
 	// +optional
 	ContainerSecurityContext *corev1.SecurityContext `json:"containerSecurityContext,omitempty"`
+	// TerminationGracePeriodSeconds is how long Kubernetes waits after sending SIGTERM
+	// before forcibly killing a node pod (SIGKILL). NiFi needs time to stop gracefully —
+	// stop processors, checkpoint the flowfile repository, and flush the content and
+	// provenance repositories — so the operator defaults this to 60 seconds (Kubernetes
+	// itself defaults to only 30). Keep it comfortably above the NiFi bootstrap's
+	// graceful.shutdown.seconds (20 by default); raise it for large repository backlogs or
+	// when relying on node offload during scale-down. 0 forces an immediate SIGKILL with no
+	// grace period (unsafe for a running flow).
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	TerminationGracePeriodSeconds *int64 `json:"terminationGracePeriodSeconds,omitempty"`
 	// ExtraVolumes are appended to the pod volumes, for mounting NAR extensions,
 	// driver libraries, or sidecar data.
 	// +optional

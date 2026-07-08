@@ -6656,6 +6656,19 @@ spec:
                     description: ServiceAccountName runs the node pods under a specific
                       ServiceAccount.
                     type: string
+                  terminationGracePeriodSeconds:
+                    description: |-
+                      TerminationGracePeriodSeconds is how long Kubernetes waits after sending SIGTERM
+                      before forcibly killing a node pod (SIGKILL). NiFi needs time to stop gracefully —
+                      stop processors, checkpoint the flowfile repository, and flush the content and
+                      provenance repositories — so the operator defaults this to 60 seconds (Kubernetes
+                      itself defaults to only 30). Keep it comfortably above the NiFi bootstrap's
+                      graceful.shutdown.seconds (20 by default); raise it for large repository backlogs or
+                      when relying on node offload during scale-down. 0 forces an immediate SIGKILL with no
+                      grace period (unsafe for a running flow).
+                    format: int64
+                    minimum: 0
+                    type: integer
                 type: object
               podDisruptionBudget:
                 description: |-

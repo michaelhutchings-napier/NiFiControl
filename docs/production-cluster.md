@@ -315,6 +315,21 @@ pair it with writable `emptyDir` mounts over those paths via `extraVolumes`/
 `extraVolumeMounts`. Sidecars and extra init containers you add carry their own
 `securityContext`.
 
+`spec.pod.terminationGracePeriodSeconds` controls how long Kubernetes waits after `SIGTERM`
+before force-killing a node pod. NiFi is stateful — on shutdown it stops processors,
+checkpoints the flowfile repository, and flushes the content and provenance repositories —
+so the operator defaults this to **60 seconds** (Kubernetes' own default is only 30). Keep
+it comfortably above the NiFi bootstrap's `graceful.shutdown.seconds` (20 by default, tunable
+via `configOverrides` on `bootstrap.conf`), and raise it for large repository backlogs or
+when you rely on node offload during scale-down. `0` forces an immediate `SIGKILL` with no
+grace period, which is unsafe for a running flow.
+
+```yaml
+spec:
+  pod:
+    terminationGracePeriodSeconds: 120
+```
+
 Like `configOverrides`, `spec.pod` applies to the primary pool and all NiFiNodeGroup pools.
 Operator-managed metadata wins on conflicts (selector labels and checksum annotations
 cannot be overridden), extra containers and volumes are appended after the operator's own,

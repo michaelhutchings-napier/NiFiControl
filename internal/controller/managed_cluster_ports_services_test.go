@@ -259,6 +259,29 @@ func TestManagedClusterContainerSecurityContext(t *testing.T) {
 	}
 }
 
+func TestManagedClusterTerminationGracePeriodSeconds(t *testing.T) {
+	// Default: NiFi-appropriate 60s (not Kubernetes' 30s) so the flow stops gracefully.
+	cluster := hardeningCluster()
+	spec := desiredManagedClusterStatefulSetSpec(cluster, nil, "", nil)
+	if got := spec.Template.Spec.TerminationGracePeriodSeconds; got == nil || *got != defaultTerminationGracePeriodSeconds {
+		t.Fatalf("default terminationGracePeriodSeconds = %v, want %d", got, defaultTerminationGracePeriodSeconds)
+	}
+
+	// A custom value is honored verbatim.
+	cluster.Spec.Pod = &nifiv1alpha1.NiFiClusterPodSpec{TerminationGracePeriodSeconds: ptr.To[int64](120)}
+	spec = desiredManagedClusterStatefulSetSpec(cluster, nil, "", nil)
+	if got := spec.Template.Spec.TerminationGracePeriodSeconds; got == nil || *got != 120 {
+		t.Fatalf("custom terminationGracePeriodSeconds = %v, want 120", got)
+	}
+
+	// An explicit 0 (immediate SIGKILL) is honored, not replaced by the default.
+	cluster.Spec.Pod.TerminationGracePeriodSeconds = ptr.To[int64](0)
+	spec = desiredManagedClusterStatefulSetSpec(cluster, nil, "", nil)
+	if got := spec.Template.Spec.TerminationGracePeriodSeconds; got == nil || *got != 0 {
+		t.Fatalf("explicit 0 terminationGracePeriodSeconds = %v, want 0", got)
+	}
+}
+
 func TestManagedClusterExternalServicesReconcileAndPrune(t *testing.T) {
 	scheme := managedClusterTestScheme()
 	cluster := hardeningCluster()
