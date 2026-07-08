@@ -135,6 +135,7 @@ func desiredNodeGroupStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, group *n
 		Volumes:                       nodeVolumes(nodeGroupStorageEnabled(storage), tls, managedClusterOverridesVolumeSource(cluster), managedClusterAuthVolumeSource(cluster, auth)),
 	}
 	applyNodeScheduling(&podSpec, nodeGroupScheduling(cluster, group))
+	applyManagedClusterPodNetworking(&podSpec, cluster)
 
 	annotations := map[string]string{nodeGroupAnnotation: group.Name}
 	if tlsChecksum != "" {

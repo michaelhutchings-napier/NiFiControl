@@ -254,6 +254,20 @@ pod:
     # readiness:
     #   periodSeconds: 15
     #   timeoutSeconds: 8
+  # Extra /etc/hosts entries for the node pods — e.g. an LDAP or OIDC endpoint not served by
+  # cluster DNS. Each entry: {ip: <addr>, hostnames: [<name>, ...]}.
+  hostAliases: []
+    # - ip: 10.9.8.7
+    #   hostnames: [ldap.internal.example.com, oidc.internal.example.com]
+  # Pod DNS policy: ClusterFirst (default), ClusterFirstWithHostNet, Default, or None.
+  # Use None together with dnsConfig for fully custom resolution.
+  dnsPolicy: null   # e.g. None
+  # Supplement (or, with dnsPolicy None, provide) the pod DNS settings for private DNS zones.
+  dnsConfig: {}
+    # nameservers: [10.9.8.53]
+    # searches: [internal.example.com]
+    # options:
+    #   - {name: ndots, value: "2"}
   # Appended to the pod volumes / NiFi container mounts — e.g. custom NAR extensions
   # or JDBC drivers at /opt/nifi/nifi-current/nar_extensions.
   extraVolumes: []

@@ -515,6 +515,7 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls
 		Volumes:                       managedClusterVolumes(cluster, tls, auth),
 	}
 	applyManagedClusterScheduling(&podSpec, cluster)
+	applyManagedClusterPodNetworking(&podSpec, cluster)
 	annotations := managedClusterAnnotations(cluster)
 	if tls != nil && tls.checksum != "" {
 		annotations[managedTLSChecksumAnnotation] = tls.checksum
@@ -637,6 +638,25 @@ func managedClusterReadinessProbe(cluster *nifiv1alpha1.NiFiCluster, tls *cluste
 	}
 	applyProbeTuning(p, managedClusterProbeTuning(cluster, func(s *nifiv1alpha1.NiFiClusterProbesSpec) *nifiv1alpha1.NiFiClusterProbeTuning { return s.Readiness }))
 	return p
+}
+
+// applyManagedClusterPodNetworking applies spec.pod hostAliases, dnsPolicy, and dnsConfig to
+// the pod spec, for resolving private hostnames (e.g. LDAP/OIDC endpoints) or private DNS
+// zones not served by cluster DNS. Each is a passthrough; unset fields leave the Kubernetes
+// default (ClusterFirst DNS, no extra hosts).
+func applyManagedClusterPodNetworking(podSpec *corev1.PodSpec, cluster *nifiv1alpha1.NiFiCluster) {
+	if cluster.Spec.Pod == nil {
+		return
+	}
+	if len(cluster.Spec.Pod.HostAliases) > 0 {
+		podSpec.HostAliases = cluster.Spec.Pod.HostAliases
+	}
+	if cluster.Spec.Pod.DNSPolicy != nil {
+		podSpec.DNSPolicy = *cluster.Spec.Pod.DNSPolicy
+	}
+	if cluster.Spec.Pod.DNSConfig != nil {
+		podSpec.DNSConfig = cluster.Spec.Pod.DNSConfig
+	}
 }
 
 // managedClusterProbeTuning returns the tuning for one probe (via the selector), or nil when

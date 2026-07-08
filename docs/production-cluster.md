@@ -357,6 +357,26 @@ Each block accepts `initialDelaySeconds`, `periodSeconds`, `timeoutSeconds`,
 `failureThreshold`, and `successThreshold`. Kubernetes requires `successThreshold: 1` for the
 liveness and startup probes.
 
+`spec.pod.hostAliases`, `spec.pod.dnsPolicy`, and `spec.pod.dnsConfig` control pod DNS and
+`/etc/hosts`, for reaching private hostnames — an LDAP or OIDC endpoint, an on-prem
+service — that are not served by cluster DNS. `hostAliases` adds static `/etc/hosts` entries;
+`dnsConfig` supplements the resolver with extra nameservers, search domains, and options; and
+`dnsPolicy` selects the base policy (`ClusterFirst` by default). Set `dnsPolicy: None` with a
+complete `dnsConfig` for fully custom resolution.
+
+```yaml
+spec:
+  pod:
+    hostAliases:
+      - ip: 10.9.8.7
+        hostnames: [ldap.internal.example.com, oidc.internal.example.com]
+    dnsConfig:
+      nameservers: [10.9.8.53]
+      searches: [internal.example.com]
+      options:
+        - {name: ndots, value: "2"}
+```
+
 Like `configOverrides`, `spec.pod` applies to the primary pool and all NiFiNodeGroup pools.
 Operator-managed metadata wins on conflicts (selector labels and checksum annotations
 cannot be overridden), extra containers and volumes are appended after the operator's own,

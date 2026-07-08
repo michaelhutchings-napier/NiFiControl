@@ -134,6 +134,10 @@ integration-graceterm-kind:
 integration-probetuning-kind:
 	./hack/test-probe-tuning-kind.sh
 
+.PHONY: integration-podnet-kind
+integration-podnet-kind:
+	./hack/test-pod-networking-kind.sh
+
 .PHONY: integration-remoteprocessgroup-kind
 integration-remoteprocessgroup-kind:
 	./hack/test-remoteprocessgroup-kind.sh

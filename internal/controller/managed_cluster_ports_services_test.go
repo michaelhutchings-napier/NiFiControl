@@ -332,6 +332,42 @@ func TestManagedClusterProbeTuning(t *testing.T) {
 	}
 }
 
+func TestManagedClusterPodNetworking(t *testing.T) {
+	// Default: no host aliases, no explicit DNS policy/config.
+	cluster := hardeningCluster()
+	spec := desiredManagedClusterStatefulSetSpec(cluster, nil, "", nil)
+	if len(spec.Template.Spec.HostAliases) != 0 || spec.Template.Spec.DNSPolicy != "" || spec.Template.Spec.DNSConfig != nil {
+		t.Fatalf("default pod networking not empty: hostAliases=%v dnsPolicy=%q dnsConfig=%v",
+			spec.Template.Spec.HostAliases, spec.Template.Spec.DNSPolicy, spec.Template.Spec.DNSConfig)
+	}
+
+	// Set: hostAliases, dnsPolicy, and dnsConfig all pass through to the pod spec.
+	cluster.Spec.Pod = &nifiv1alpha1.NiFiClusterPodSpec{
+		HostAliases: []corev1.HostAlias{{IP: "10.9.8.7", Hostnames: []string{"ldap.internal.example.com"}}},
+		DNSPolicy:   ptr.To(corev1.DNSClusterFirst),
+		DNSConfig:   &corev1.PodDNSConfig{Nameservers: []string{"10.9.8.53"}, Searches: []string{"internal.example.com"}},
+	}
+	spec = desiredManagedClusterStatefulSetSpec(cluster, nil, "", nil)
+	ps := spec.Template.Spec
+	if len(ps.HostAliases) != 1 || ps.HostAliases[0].IP != "10.9.8.7" || ps.HostAliases[0].Hostnames[0] != "ldap.internal.example.com" {
+		t.Fatalf("hostAliases not applied: %#v", ps.HostAliases)
+	}
+	if ps.DNSPolicy != corev1.DNSClusterFirst {
+		t.Fatalf("dnsPolicy not applied: %q", ps.DNSPolicy)
+	}
+	if ps.DNSConfig == nil || len(ps.DNSConfig.Searches) != 1 || ps.DNSConfig.Searches[0] != "internal.example.com" {
+		t.Fatalf("dnsConfig not applied: %#v", ps.DNSConfig)
+	}
+
+	// The same pod networking applies to NiFiNodeGroup pools.
+	group := &nifiv1alpha1.NiFiNodeGroup{Spec: nifiv1alpha1.NiFiNodeGroupSpec{Replicas: 1}}
+	ngSpec := desiredNodeGroupStatefulSetSpec(cluster, group, nil, 1, "", "", nil)
+	if len(ngSpec.Template.Spec.HostAliases) != 1 || ngSpec.Template.Spec.DNSConfig == nil {
+		t.Fatalf("node group pod networking not applied: hostAliases=%v dnsConfig=%v",
+			ngSpec.Template.Spec.HostAliases, ngSpec.Template.Spec.DNSConfig)
+	}
+}
+
 func TestManagedClusterExternalServicesReconcileAndPrune(t *testing.T) {
 	scheme := managedClusterTestScheme()
 	cluster := hardeningCluster()

@@ -1354,6 +1354,23 @@ func (in *NiFiClusterPodSpec) DeepCopyInto(out *NiFiClusterPodSpec) {
 		*out = new(NiFiClusterProbesSpec)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.HostAliases != nil {
+		in, out := &in.HostAliases, &out.HostAliases
+		*out = make([]corev1.HostAlias, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+	if in.DNSPolicy != nil {
+		in, out := &in.DNSPolicy, &out.DNSPolicy
+		*out = new(corev1.DNSPolicy)
+		**out = **in
+	}
+	if in.DNSConfig != nil {
+		in, out := &in.DNSConfig, &out.DNSConfig
+		*out = new(corev1.PodDNSConfig)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.ExtraVolumes != nil {
 		in, out := &in.ExtraVolumes, &out.ExtraVolumes
 		*out = make([]corev1.Volume, len(*in))

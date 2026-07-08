@@ -30,6 +30,7 @@ jobs:
           - integration-restrictedpsa-kind
           - integration-graceterm-kind
           - integration-probetuning-kind
+          - integration-podnet-kind
           - integration-secureauth-kind
           - integration-oidc-kind
           - integration-oidc-tls-kind

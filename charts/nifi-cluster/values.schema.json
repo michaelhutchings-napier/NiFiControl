@@ -862,6 +862,17 @@
             }
           }
         },
+        "hostAliases": {
+          "type": "array",
+          "items": { "type": "object" }
+        },
+        "dnsPolicy": {
+          "type": ["string", "null"],
+          "enum": ["ClusterFirst", "ClusterFirstWithHostNet", "Default", "None", null]
+        },
+        "dnsConfig": {
+          "type": "object"
+        },
         "extraVolumes": {
           "type": "array",
           "items": {

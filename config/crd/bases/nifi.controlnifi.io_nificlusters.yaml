@@ -1351,6 +1351,61 @@ spec:
                             type: string
                         type: object
                     type: object
+                  dnsConfig:
+                    description: |-
+                      DNSConfig supplements the pod's DNS settings (or, with dnsPolicy None, provides them):
+                      extra nameservers, search domains, and resolver options for reaching private DNS zones.
+                    properties:
+                      nameservers:
+                        description: |-
+                          A list of DNS name server IP addresses.
+                          This will be appended to the base nameservers generated from DNSPolicy.
+                          Duplicated nameservers will be removed.
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      options:
+                        description: |-
+                          A list of DNS resolver options.
+                          This will be merged with the base options generated from DNSPolicy.
+                          Duplicated entries will be removed. Resolution options given in Options
+                          will override those that appear in the base DNSPolicy.
+                        items:
+                          description: PodDNSConfigOption defines DNS resolver options
+                            of a pod.
+                          properties:
+                            name:
+                              description: |-
+                                Name is this DNS resolver option's name.
+                                Required.
+                              type: string
+                            value:
+                              description: Value is this DNS resolver option's value.
+                              type: string
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      searches:
+                        description: |-
+                          A list of DNS search domains for host-name lookup.
+                          This will be appended to the base search paths generated from DNSPolicy.
+                          Duplicated search paths will be removed.
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: atomic
+                    type: object
+                  dnsPolicy:
+                    description: |-
+                      DNSPolicy sets the pod DNS policy. Defaults to ClusterFirst. Use None together with
+                      dnsConfig for fully custom resolution (dnsConfig is required when this is None).
+                    enum:
+                    - ClusterFirst
+                    - ClusterFirstWithHostNet
+                    - Default
+                    - None
+                    type: string
                   extraContainers:
                     description: ExtraContainers are appended as sidecars alongside
                       the NiFi container.
@@ -6389,6 +6444,29 @@ spec:
                     - message: volume names data, nificontrol-tls, nificontrol-config,
                         and nificontrol-overrides are reserved for the operator
                       rule: self.all(v, !(v.name in ['data','nificontrol-tls','nificontrol-config','nificontrol-overrides']))
+                  hostAliases:
+                    description: |-
+                      HostAliases adds entries to the node pods' /etc/hosts, for resolving private hostnames
+                      (for example an LDAP or OIDC endpoint) that are not served by cluster DNS.
+                    items:
+                      description: |-
+                        HostAlias holds the mapping between IP and hostnames that will be injected as an entry in the
+                        pod's hosts file.
+                      properties:
+                        hostnames:
+                          description: Hostnames for the above IP address.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        ip:
+                          description: IP address of the host file entry.
+                          type: string
+                      required:
+                      - ip
+                      type: object
+                    maxItems: 32
+                    type: array
                   imagePullSecrets:
                     description: |-
                       ImagePullSecrets for pulling the NiFi image (and any sidecar images) from

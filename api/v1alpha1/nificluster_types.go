@@ -492,6 +492,20 @@ type NiFiClusterPodSpec struct {
 	// minutes to boot.
 	// +optional
 	Probes *NiFiClusterProbesSpec `json:"probes,omitempty"`
+	// HostAliases adds entries to the node pods' /etc/hosts, for resolving private hostnames
+	// (for example an LDAP or OIDC endpoint) that are not served by cluster DNS.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	HostAliases []corev1.HostAlias `json:"hostAliases,omitempty"`
+	// DNSPolicy sets the pod DNS policy. Defaults to ClusterFirst. Use None together with
+	// dnsConfig for fully custom resolution (dnsConfig is required when this is None).
+	// +optional
+	// +kubebuilder:validation:Enum=ClusterFirst;ClusterFirstWithHostNet;Default;None
+	DNSPolicy *corev1.DNSPolicy `json:"dnsPolicy,omitempty"`
+	// DNSConfig supplements the pod's DNS settings (or, with dnsPolicy None, provides them):
+	// extra nameservers, search domains, and resolver options for reaching private DNS zones.
+	// +optional
+	DNSConfig *corev1.PodDNSConfig `json:"dnsConfig,omitempty"`
 	// ExtraVolumes are appended to the pod volumes, for mounting NAR extensions,
 	// driver libraries, or sidecar data.
 	// +optional
