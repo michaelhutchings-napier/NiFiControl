@@ -500,11 +500,12 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls
 			{Name: "s2s", ContainerPort: managedClusterRemoteInputPort(cluster), Protocol: corev1.ProtocolTCP},
 			{Name: "load-balance", ContainerPort: managedClusterLoadBalancePort(cluster), Protocol: corev1.ProtocolTCP},
 		},
-		Resources:      cluster.Spec.Resources,
-		StartupProbe:   managedClusterStartupProbe(tls),
-		LivenessProbe:  managedClusterLivenessProbe(tls),
-		ReadinessProbe: managedClusterReadinessProbe(tls),
-		VolumeMounts:   managedClusterVolumeMounts(cluster.Spec.Storage, tls, hasConfigOverrides(cluster), managedClusterAuthVolumeSource(cluster, auth) != ""),
+		Resources:       cluster.Spec.Resources,
+		SecurityContext: managedClusterContainerSecurityContext(cluster),
+		StartupProbe:    managedClusterStartupProbe(tls),
+		LivenessProbe:   managedClusterLivenessProbe(tls),
+		ReadinessProbe:  managedClusterReadinessProbe(tls),
+		VolumeMounts:    managedClusterVolumeMounts(cluster.Spec.Storage, tls, hasConfigOverrides(cluster), managedClusterAuthVolumeSource(cluster, auth) != ""),
 	}
 	podSpec := corev1.PodSpec{
 		SecurityContext: managedClusterPodSecurityContext(cluster),
@@ -630,10 +631,10 @@ func tlsReadinessExecHandler() corev1.ProbeHandler {
 }
 
 func managedClusterDataInitializer(cluster *nifiv1alpha1.NiFiCluster) corev1.Container {
-	return nodeDataInitializer(managedClusterImage(cluster), managedClusterImagePullPolicy(cluster))
+	return nodeDataInitializer(managedClusterImage(cluster), managedClusterImagePullPolicy(cluster), managedClusterContainerSecurityContext(cluster))
 }
 
-func nodeDataInitializer(image string, pullPolicy corev1.PullPolicy) corev1.Container {
+func nodeDataInitializer(image string, pullPolicy corev1.PullPolicy, securityContext *corev1.SecurityContext) corev1.Container {
 	return corev1.Container{
 		Name:            "initialize-data",
 		Image:           image,
@@ -646,7 +647,8 @@ func nodeDataInitializer(image string, pullPolicy corev1.PullPolicy) corev1.Cont
 			// overrides can be restored to the running image's shipped values.
 			"mkdir -p /mnt/data/{conf,database_repository,flowfile_repository,content_repository,provenance_repository,state}; if [ ! -f /mnt/data/conf/nifi.properties ]; then cp -a /opt/nifi/nifi-current/conf/. /mnt/data/conf/; fi; cp /opt/nifi/nifi-current/conf/nifi.properties /mnt/data/conf/nifi.properties.image-default; cp /opt/nifi/nifi-current/conf/bootstrap.conf /mnt/data/conf/bootstrap.conf.image-default; cp /opt/nifi/nifi-current/conf/logback.xml /mnt/data/conf/logback.xml.image-default",
 		},
-		VolumeMounts: []corev1.VolumeMount{{Name: managedDataVolume, MountPath: "/mnt/data"}},
+		SecurityContext: securityContext,
+		VolumeMounts:    []corev1.VolumeMount{{Name: managedDataVolume, MountPath: "/mnt/data"}},
 	}
 }
 
@@ -1069,25 +1071,42 @@ func managedClusterServicePort(cluster *nifiv1alpha1.NiFiCluster) int32 {
 }
 
 // managedClusterPodSecurityContext returns the pod-level security context for the node
-// pods. It defaults to fsGroup 1000 (the apache/nifi image's uid/gid) so mounted volumes
-// are writable. A spec.pod.securityContext replaces the default, but fsGroup and its change
-// policy fall back to the operator defaults when the user leaves them unset, so volume
-// ownership stays correct even when only runAsUser/runAsGroup are customized.
+// pods. It encodes the apache/nifi image's uid:gid (1000:1000): fsGroup 1000 keeps mounted
+// volumes writable, and runAsUser/runAsGroup 1000 make the pod verifiably non-root. The
+// stock image declares a non-numeric USER "nifi", which the kubelet cannot verify against
+// runAsNonRoot: true on its own — so a numeric runAsUser is required for the pod to start in
+// a namespace enforcing the restricted Pod Security Admission profile. A spec.pod.security-
+// Context is honored, but any of fsGroup, fsGroupChangePolicy, runAsUser, and runAsGroup the
+// user leaves unset fall back to these defaults, so volume ownership and non-root identity
+// stay correct even when only some fields (e.g. runAsNonRoot, seccompProfile) are set.
 func managedClusterPodSecurityContext(cluster *nifiv1alpha1.NiFiCluster) *corev1.PodSecurityContext {
-	if cluster.Spec.Pod == nil || cluster.Spec.Pod.SecurityContext == nil {
-		return &corev1.PodSecurityContext{
-			FSGroup:             ptr.To[int64](1000),
-			FSGroupChangePolicy: ptr.To(corev1.FSGroupChangeOnRootMismatch),
-		}
+	sc := &corev1.PodSecurityContext{}
+	if cluster.Spec.Pod != nil && cluster.Spec.Pod.SecurityContext != nil {
+		sc = cluster.Spec.Pod.SecurityContext.DeepCopy()
 	}
-	sc := cluster.Spec.Pod.SecurityContext.DeepCopy()
 	if sc.FSGroup == nil {
 		sc.FSGroup = ptr.To[int64](1000)
 	}
 	if sc.FSGroupChangePolicy == nil {
 		sc.FSGroupChangePolicy = ptr.To(corev1.FSGroupChangeOnRootMismatch)
 	}
+	if sc.RunAsUser == nil {
+		sc.RunAsUser = ptr.To[int64](1000)
+	}
+	if sc.RunAsGroup == nil {
+		sc.RunAsGroup = ptr.To[int64](1000)
+	}
 	return sc
+}
+
+// managedClusterContainerSecurityContext returns the container-level security context for
+// the operator's own containers (nil unless spec.pod.containerSecurityContext is set). It
+// is a raw passthrough so users can meet a restricted Pod Security Admission policy.
+func managedClusterContainerSecurityContext(cluster *nifiv1alpha1.NiFiCluster) *corev1.SecurityContext {
+	if cluster.Spec.Pod == nil {
+		return nil
+	}
+	return cluster.Spec.Pod.ContainerSecurityContext
 }
 
 // managedClusterHTTPPort is the plaintext web port NiFi binds in non-TLS mode.

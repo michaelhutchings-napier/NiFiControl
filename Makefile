@@ -122,6 +122,10 @@ integration-clusterports-kind:
 integration-controllerconfig-kind:
 	./hack/test-controller-config-kind.sh
 
+.PHONY: integration-restrictedpsa-kind
+integration-restrictedpsa-kind:
+	./hack/test-restricted-psa-kind.sh
+
 .PHONY: integration-remoteprocessgroup-kind
 integration-remoteprocessgroup-kind:
 	./hack/test-remoteprocessgroup-kind.sh

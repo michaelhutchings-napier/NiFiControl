@@ -285,9 +285,35 @@ spec:
 ```
 
 `spec.pod.securityContext` sets the pod-level security context (for example `runAsUser`,
-`runAsGroup`, `runAsNonRoot`, `seccompProfile`). It replaces the operator default, except
-that `fsGroup` falls back to `1000` — the `apache/nifi` image's uid/gid — when you leave it
-unset, so mounted volumes stay writable even if you only override `runAsUser`.
+`runAsGroup`, `runAsNonRoot`, `seccompProfile`). Whatever you set is honored, but `fsGroup`,
+`runAsUser`, and `runAsGroup` each fall back to `1000` — the `apache/nifi` image's uid/gid —
+when you leave them unset. So mounted volumes stay writable, and the pod is verifiably
+non-root: the stock image declares a non-numeric `USER nifi`, which the kubelet cannot check
+against `runAsNonRoot: true` on its own, so the operator supplies the numeric `runAsUser`
+for you.
+
+`spec.pod.containerSecurityContext` sets the container-level security context on the
+operator's own containers (the NiFi container and the `initialize-data` init container) —
+for a namespace that enforces the **restricted** Pod Security Admission profile. Because the
+operator defaults the numeric `runAsUser`/`runAsGroup`, this minimal set works on the stock
+image — you only opt in to `runAsNonRoot`, `seccompProfile`, and the container controls:
+
+```yaml
+spec:
+  pod:
+    securityContext:            # pod-level, inherited by all containers
+      runAsNonRoot: true
+      seccompProfile: {type: RuntimeDefault}
+    containerSecurityContext:   # per-container (NiFi + initialize-data)
+      allowPrivilegeEscalation: false
+      capabilities: {drop: [ALL]}
+```
+
+`readOnlyRootFilesystem: true` is **not** safe on its own: NiFi writes under its install
+directory (`logs`, `work`, `run`, `nar_extensions`, and the operator's truststore dir), so
+pair it with writable `emptyDir` mounts over those paths via `extraVolumes`/
+`extraVolumeMounts`. Sidecars and extra init containers you add carry their own
+`securityContext`.
 
 Like `configOverrides`, `spec.pod` applies to the primary pool and all NiFiNodeGroup pools.
 Operator-managed metadata wins on conflicts (selector labels and checksum annotations

@@ -222,10 +222,18 @@ pod:
   # Pod-level security context. Replaces the operator default, except fsGroup falls back
   # to 1000 (the apache/nifi image's uid/gid) when unset so volumes stay writable.
   securityContext: {}
-    # runAsUser: 1000
-    # runAsGroup: 1000
-    # fsGroup: 1000
     # runAsNonRoot: true
+    # seccompProfile: {type: RuntimeDefault}
+    # fsGroup: 1000
+  # Container-level security context for the operator's own containers (NiFi + the
+  # initialize-data init container), for a restricted Pod Security Admission namespace.
+  # The set below works with the stock apache/nifi image. Do NOT add
+  # readOnlyRootFilesystem: true without also mounting writable emptyDir volumes over
+  # NiFi's writable paths (logs, work, run, nar_extensions, nificontrol-truststores) via
+  # extraVolumes/extraVolumeMounts — NiFi writes there and will crash otherwise.
+  containerSecurityContext: {}
+    # allowPrivilegeEscalation: false
+    # capabilities: {drop: [ALL]}
   # Appended to the pod volumes / NiFi container mounts — e.g. custom NAR extensions
   # or JDBC drivers at /opt/nifi/nifi-current/nar_extensions.
   extraVolumes: []

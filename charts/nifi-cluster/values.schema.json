@@ -816,6 +816,9 @@
         "securityContext": {
           "type": "object"
         },
+        "containerSecurityContext": {
+          "type": "object"
+        },
         "extraVolumes": {
           "type": "array",
           "items": {

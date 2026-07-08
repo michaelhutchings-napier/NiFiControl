@@ -120,15 +120,16 @@ func desiredNodeGroupStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, group *n
 			{Name: "web", ContainerPort: webPort, Protocol: corev1.ProtocolTCP},
 			{Name: "cluster", ContainerPort: defaultClusterPort, Protocol: corev1.ProtocolTCP},
 		},
-		Resources:      nodeGroupResources(cluster, group),
-		StartupProbe:   managedClusterStartupProbe(tls),
-		LivenessProbe:  managedClusterLivenessProbe(tls),
-		ReadinessProbe: managedClusterReadinessProbe(tls),
-		VolumeMounts:   managedClusterVolumeMounts(storage, tls, hasConfigOverrides(cluster), managedClusterAuthVolumeSource(cluster, auth) != ""),
+		Resources:       nodeGroupResources(cluster, group),
+		SecurityContext: managedClusterContainerSecurityContext(cluster),
+		StartupProbe:    managedClusterStartupProbe(tls),
+		LivenessProbe:   managedClusterLivenessProbe(tls),
+		ReadinessProbe:  managedClusterReadinessProbe(tls),
+		VolumeMounts:    managedClusterVolumeMounts(storage, tls, hasConfigOverrides(cluster), managedClusterAuthVolumeSource(cluster, auth) != ""),
 	}
 	podSpec := corev1.PodSpec{
 		SecurityContext: managedClusterPodSecurityContext(cluster),
-		InitContainers:  []corev1.Container{nodeDataInitializer(nodeGroupImage(cluster, group), managedClusterImagePullPolicy(cluster))},
+		InitContainers:  []corev1.Container{nodeDataInitializer(nodeGroupImage(cluster, group), managedClusterImagePullPolicy(cluster), managedClusterContainerSecurityContext(cluster))},
 		Containers:      []corev1.Container{container},
 		Volumes:         nodeVolumes(nodeGroupStorageEnabled(storage), tls, managedClusterOverridesVolumeSource(cluster), managedClusterAuthVolumeSource(cluster, auth)),
 	}

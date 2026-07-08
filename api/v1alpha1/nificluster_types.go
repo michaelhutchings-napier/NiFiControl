@@ -464,6 +464,16 @@ type NiFiClusterPodSpec struct {
 	// left unset, so volume ownership stays correct.
 	// +optional
 	SecurityContext *corev1.PodSecurityContext `json:"securityContext,omitempty"`
+	// ContainerSecurityContext sets the container-level security context on the operator's
+	// own containers (the NiFi container and the initialize-data init container), for
+	// restricted Pod Security Admission. allowPrivilegeEscalation: false, capabilities
+	// drop ALL, runAsNonRoot, and seccompProfile all work with the stock apache/nifi image.
+	// readOnlyRootFilesystem: true does NOT work on its own — NiFi writes under its install
+	// directory (logs, work, run, nar_extensions, truststores) — so pair it with writable
+	// emptyDir mounts over those paths via extraVolumes/extraVolumeMounts. Sidecars and
+	// extra init containers carry their own securityContext.
+	// +optional
+	ContainerSecurityContext *corev1.SecurityContext `json:"containerSecurityContext,omitempty"`
 	// ExtraVolumes are appended to the pod volumes, for mounting NAR extensions,
 	// driver libraries, or sidecar data.
 	// +optional

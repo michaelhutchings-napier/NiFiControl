@@ -27,6 +27,7 @@ jobs:
           - integration-portsvc-kind
           - integration-clusterports-kind
           - integration-controllerconfig-kind
+          - integration-restrictedpsa-kind
           - integration-secureauth-kind
           - integration-oidc-kind
           - integration-oidc-tls-kind

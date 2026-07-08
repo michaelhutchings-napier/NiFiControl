@@ -170,20 +170,47 @@ func TestManagedClusterDomainInSANsAndProxyHosts(t *testing.T) {
 }
 
 func TestManagedClusterPodSecurityContext(t *testing.T) {
-	// Default: fsGroup 1000, OnRootMismatch.
+	// Default: the apache/nifi image's uid:gid (1000:1000) is encoded here — fsGroup for
+	// volume writability plus a numeric runAsUser/runAsGroup so the pod is verifiably
+	// non-root (the image's non-numeric USER "nifi" cannot be verified against
+	// runAsNonRoot: true on its own).
 	cluster := hardeningCluster()
 	sc := managedClusterPodSecurityContext(cluster)
 	if sc.FSGroup == nil || *sc.FSGroup != 1000 || sc.FSGroupChangePolicy == nil || *sc.FSGroupChangePolicy != corev1.FSGroupChangeOnRootMismatch {
 		t.Fatalf("default security context = %#v", sc)
 	}
+	if sc.RunAsUser == nil || *sc.RunAsUser != 1000 || sc.RunAsGroup == nil || *sc.RunAsGroup != 1000 {
+		t.Fatalf("default runAsUser/runAsGroup not 1000: %#v", sc)
+	}
 
-	// Custom runAsUser without fsGroup keeps the operator's fsGroup default.
+	// Restricted-PSA scenario: the user opts in with runAsNonRoot + seccompProfile only.
+	// The operator must fill in the numeric runAsUser/runAsGroup so the kubelet can verify
+	// non-root against the stock image and the pod actually starts (regression: without a
+	// numeric runAsUser the container fails with CreateContainerConfigError).
 	cluster.Spec.Pod = &nifiv1alpha1.NiFiClusterPodSpec{
-		SecurityContext: &corev1.PodSecurityContext{RunAsUser: ptr.To[int64](2000), RunAsNonRoot: ptr.To(true)},
+		SecurityContext: &corev1.PodSecurityContext{
+			RunAsNonRoot:   ptr.To(true),
+			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+		},
 	}
 	sc = managedClusterPodSecurityContext(cluster)
-	if sc.RunAsUser == nil || *sc.RunAsUser != 2000 || sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
-		t.Fatalf("custom runAsUser not applied: %#v", sc)
+	if sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
+		t.Fatalf("runAsNonRoot not preserved: %#v", sc)
+	}
+	if sc.RunAsUser == nil || *sc.RunAsUser != 1000 || sc.RunAsGroup == nil || *sc.RunAsGroup != 1000 {
+		t.Fatalf("numeric runAsUser/runAsGroup not defaulted for restricted PSA: %#v", sc)
+	}
+	if sc.FSGroup == nil || *sc.FSGroup != 1000 {
+		t.Fatalf("fsGroup default not preserved when unset: %#v", sc)
+	}
+
+	// Custom runAsUser/runAsGroup win over the defaults; fsGroup default is still applied.
+	cluster.Spec.Pod.SecurityContext = &corev1.PodSecurityContext{
+		RunAsUser: ptr.To[int64](2000), RunAsGroup: ptr.To[int64](2000), RunAsNonRoot: ptr.To(true),
+	}
+	sc = managedClusterPodSecurityContext(cluster)
+	if sc.RunAsUser == nil || *sc.RunAsUser != 2000 || sc.RunAsGroup == nil || *sc.RunAsGroup != 2000 {
+		t.Fatalf("custom runAsUser/runAsGroup not honored: %#v", sc)
 	}
 	if sc.FSGroup == nil || *sc.FSGroup != 1000 {
 		t.Fatalf("fsGroup default not preserved when unset: %#v", sc)
@@ -200,6 +227,35 @@ func TestManagedClusterPodSecurityContext(t *testing.T) {
 	_ = managedClusterPodSecurityContext(cluster)
 	if cluster.Spec.Pod.SecurityContext.FSGroup != nil {
 		t.Fatal("resolver mutated the spec's securityContext")
+	}
+}
+
+func TestManagedClusterContainerSecurityContext(t *testing.T) {
+	cluster := hardeningCluster()
+	// Default: no container security context on either operator container.
+	spec := desiredManagedClusterStatefulSetSpec(cluster, nil, "", nil)
+	if spec.Template.Spec.Containers[0].SecurityContext != nil {
+		t.Fatalf("nifi container security context = %#v, want nil by default", spec.Template.Spec.Containers[0].SecurityContext)
+	}
+	if spec.Template.Spec.InitContainers[0].SecurityContext != nil {
+		t.Fatalf("init container security context = %#v, want nil by default", spec.Template.Spec.InitContainers[0].SecurityContext)
+	}
+
+	// Set: the restricted-PSA baseline lands on the NiFi container and the init container.
+	cluster.Spec.Pod = &nifiv1alpha1.NiFiClusterPodSpec{
+		ContainerSecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: ptr.To(false),
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		},
+	}
+	spec = desiredManagedClusterStatefulSetSpec(cluster, nil, "", nil)
+	for _, c := range []corev1.Container{spec.Template.Spec.Containers[0], spec.Template.Spec.InitContainers[0]} {
+		if c.SecurityContext == nil || c.SecurityContext.AllowPrivilegeEscalation == nil || *c.SecurityContext.AllowPrivilegeEscalation {
+			t.Fatalf("%s: allowPrivilegeEscalation not false: %#v", c.Name, c.SecurityContext)
+		}
+		if c.SecurityContext.Capabilities == nil || len(c.SecurityContext.Capabilities.Drop) != 1 || c.SecurityContext.Capabilities.Drop[0] != "ALL" {
+			t.Fatalf("%s: capabilities drop ALL missing: %#v", c.Name, c.SecurityContext)
+		}
 	}
 }
 
