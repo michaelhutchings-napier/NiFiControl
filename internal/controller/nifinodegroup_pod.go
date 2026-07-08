@@ -134,7 +134,7 @@ func desiredNodeGroupStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, group *n
 		Containers:                    []corev1.Container{container},
 		Volumes:                       nodeVolumes(nodeGroupStorageEnabled(storage), tls, managedClusterOverridesVolumeSource(cluster), managedClusterAuthVolumeSource(cluster, auth)),
 	}
-	applyNodeScheduling(&podSpec, nodeGroupScheduling(cluster, group))
+	applyNodeScheduling(&podSpec, nodeGroupScheduling(cluster, group), oneNiFiNodePerNodeSelector(cluster))
 	applyManagedClusterPodNetworking(&podSpec, cluster)
 
 	annotations := map[string]string{nodeGroupAnnotation: group.Name}

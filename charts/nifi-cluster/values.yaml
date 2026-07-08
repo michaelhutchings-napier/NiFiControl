@@ -89,6 +89,10 @@ scheduling:
   affinity: {}
   topologySpreadConstraints: []
   priorityClassName: ""
+  # Add a required pod anti-affinity so no two NiFi nodes of this cluster share a Kubernetes
+  # node (hardware isolation / higher availability). Needs at least as many schedulable nodes
+  # as replicas, or the excess pods stay Pending. Merges with any affinity set above.
+  oneNifiNodePerNode: false
 
 # Keep a minimum number of NiFi nodes available during voluntary disruptions.
 podDisruptionBudget:

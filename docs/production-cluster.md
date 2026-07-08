@@ -37,6 +37,15 @@ spec:
 `topologySpreadConstraints`, and `priorityClassName` onto the managed pods so NiFi nodes
 can be spread across failure domains and isolated onto dedicated capacity.
 
+`spec.scheduling.oneNifiNodePerNode: true` is a shorthand for the common HA placement: it
+adds a **required** pod anti-affinity keyed on `kubernetes.io/hostname` that keeps any two
+NiFi nodes of the cluster off the same Kubernetes node, so losing a node takes down at most
+one NiFi node. It merges with any `affinity` you set (a `nodeAffinity` that pins NiFi to a
+node pool still applies), so you rarely need to hand-write the anti-affinity yourself. Because
+the constraint is hard, the cluster needs at least as many schedulable nodes as it has NiFi
+replicas (across the primary pool and all NiFiNodeGroup pools) — otherwise the excess pods
+stay `Pending`.
+
 ## PodDisruptionBudget
 
 `spec.podDisruptionBudget.enabled` creates a `policy/v1` PodDisruptionBudget selecting the

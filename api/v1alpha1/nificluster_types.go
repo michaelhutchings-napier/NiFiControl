@@ -597,6 +597,13 @@ type NiFiClusterScheduling struct {
 	Affinity                  *corev1.Affinity                  `json:"affinity,omitempty"`
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
 	PriorityClassName         string                            `json:"priorityClassName,omitempty"`
+	// OneNiFiNodePerNode, when true, adds a required pod anti-affinity that keeps any two NiFi
+	// nodes of this cluster off the same Kubernetes node (topologyKey kubernetes.io/hostname),
+	// for hardware isolation and higher availability. The cluster then needs at least as many
+	// schedulable nodes as it has NiFi replicas, or the excess pods stay Pending. It merges
+	// with any affinity set above (both apply); set affinity directly for finer control.
+	// +optional
+	OneNiFiNodePerNode bool `json:"oneNifiNodePerNode,omitempty"`
 }
 
 // NiFiClusterPDBSpec configures a PodDisruptionBudget for the managed NiFi nodes. Exactly

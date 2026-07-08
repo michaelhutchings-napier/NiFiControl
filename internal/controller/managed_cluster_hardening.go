@@ -18,11 +18,13 @@ import (
 
 // applyManagedClusterScheduling threads pod placement controls onto the managed pod.
 func applyManagedClusterScheduling(podSpec *corev1.PodSpec, cluster *nifiv1alpha1.NiFiCluster) {
-	applyNodeScheduling(podSpec, cluster.Spec.Scheduling)
+	applyNodeScheduling(podSpec, cluster.Spec.Scheduling, oneNiFiNodePerNodeSelector(cluster))
 }
 
-// applyNodeScheduling threads pod placement controls onto any pool's pod.
-func applyNodeScheduling(podSpec *corev1.PodSpec, scheduling *nifiv1alpha1.NiFiClusterScheduling) {
+// applyNodeScheduling threads pod placement controls onto any pool's pod. When
+// oneNifiNodePerNode is set, a required host anti-affinity keyed on antiAffinityLabels is
+// merged in so no two NiFi pods of the cluster share a node.
+func applyNodeScheduling(podSpec *corev1.PodSpec, scheduling *nifiv1alpha1.NiFiClusterScheduling, antiAffinityLabels map[string]string) {
 	if scheduling == nil {
 		return
 	}
@@ -31,6 +33,38 @@ func applyNodeScheduling(podSpec *corev1.PodSpec, scheduling *nifiv1alpha1.NiFiC
 	podSpec.Affinity = scheduling.Affinity
 	podSpec.TopologySpreadConstraints = scheduling.TopologySpreadConstraints
 	podSpec.PriorityClassName = scheduling.PriorityClassName
+	if scheduling.OneNiFiNodePerNode {
+		podSpec.Affinity = withHostAntiAffinity(podSpec.Affinity, antiAffinityLabels)
+	}
+}
+
+// oneNiFiNodePerNodeSelector labels the NiFi pods of one cluster (both the primary pool and
+// all NiFiNodeGroup pools carry managedClusterLabel), so the anti-affinity spreads the whole
+// cluster.
+func oneNiFiNodePerNodeSelector(cluster *nifiv1alpha1.NiFiCluster) map[string]string {
+	return map[string]string{managedClusterLabel: managedClusterResourceName(cluster)}
+}
+
+// withHostAntiAffinity returns a copy of affinity with a required pod anti-affinity term added
+// that keeps pods matching selectorLabels off the same node. Any existing affinity
+// (nodeAffinity, podAffinity, other podAntiAffinity terms) is preserved, and the input is not
+// mutated so it is safe to call on the cached spec each reconcile.
+func withHostAntiAffinity(affinity *corev1.Affinity, selectorLabels map[string]string) *corev1.Affinity {
+	out := &corev1.Affinity{}
+	if affinity != nil {
+		out = affinity.DeepCopy()
+	}
+	if out.PodAntiAffinity == nil {
+		out.PodAntiAffinity = &corev1.PodAntiAffinity{}
+	}
+	out.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution = append(
+		out.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution,
+		corev1.PodAffinityTerm{
+			LabelSelector: &metav1.LabelSelector{MatchLabels: selectorLabels},
+			TopologyKey:   "kubernetes.io/hostname",
+		},
+	)
+	return out
 }
 
 // managedClusterUpdateStrategy resolves the StatefulSet update strategy from spec.upgrade.

@@ -368,6 +368,63 @@ func TestManagedClusterPodNetworking(t *testing.T) {
 	}
 }
 
+func TestManagedClusterOneNiFiNodePerNode(t *testing.T) {
+	// Off (default): no affinity synthesized.
+	cluster := hardeningCluster()
+	if aff := desiredManagedClusterStatefulSetSpec(cluster, nil, "", nil).Template.Spec.Affinity; aff != nil {
+		t.Fatalf("default affinity = %#v, want nil", aff)
+	}
+
+	// On: a required host anti-affinity term selecting this cluster's NiFi pods.
+	cluster.Spec.Scheduling = &nifiv1alpha1.NiFiClusterScheduling{OneNiFiNodePerNode: true}
+	spec := desiredManagedClusterStatefulSetSpec(cluster, nil, "", nil)
+	aff := spec.Template.Spec.Affinity
+	if aff == nil || aff.PodAntiAffinity == nil || len(aff.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution) != 1 {
+		t.Fatalf("one-node-per-node affinity = %#v", aff)
+	}
+	term := aff.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution[0]
+	if term.TopologyKey != "kubernetes.io/hostname" {
+		t.Fatalf("topologyKey = %q, want kubernetes.io/hostname", term.TopologyKey)
+	}
+	if term.LabelSelector == nil || term.LabelSelector.MatchLabels[managedClusterLabel] != managedClusterResourceName(cluster) {
+		t.Fatalf("anti-affinity selector = %#v", term.LabelSelector)
+	}
+
+	// Building the spec again must not accumulate terms (input spec is not mutated).
+	spec2 := desiredManagedClusterStatefulSetSpec(cluster, nil, "", nil)
+	if got := len(spec2.Template.Spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution); got != 1 {
+		t.Fatalf("anti-affinity terms accumulated across reconciles: %d", got)
+	}
+	if cluster.Spec.Scheduling.Affinity != nil {
+		t.Fatal("resolver mutated the spec's scheduling.affinity")
+	}
+
+	// Merges with a user-provided nodeAffinity: both survive.
+	cluster.Spec.Scheduling.Affinity = &corev1.Affinity{
+		NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+					MatchExpressions: []corev1.NodeSelectorRequirement{{Key: "disktype", Operator: corev1.NodeSelectorOpIn, Values: []string{"ssd"}}},
+				}},
+			},
+		},
+	}
+	merged := desiredManagedClusterStatefulSetSpec(cluster, nil, "", nil).Template.Spec.Affinity
+	if merged.NodeAffinity == nil {
+		t.Fatal("user nodeAffinity dropped when merging one-node-per-node")
+	}
+	if merged.PodAntiAffinity == nil || len(merged.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution) != 1 {
+		t.Fatalf("host anti-affinity not merged in: %#v", merged.PodAntiAffinity)
+	}
+
+	// Applies to NiFiNodeGroup pools too.
+	group := &nifiv1alpha1.NiFiNodeGroup{Spec: nifiv1alpha1.NiFiNodeGroupSpec{Replicas: 1}}
+	ng := desiredNodeGroupStatefulSetSpec(cluster, group, nil, 1, "", "", nil).Template.Spec.Affinity
+	if ng == nil || ng.PodAntiAffinity == nil || len(ng.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution) != 1 {
+		t.Fatalf("node group host anti-affinity missing: %#v", ng)
+	}
+}
+
 func TestManagedClusterExternalServicesReconcileAndPrune(t *testing.T) {
 	scheme := managedClusterTestScheme()
 	cluster := hardeningCluster()

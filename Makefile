@@ -138,6 +138,10 @@ integration-probetuning-kind:
 integration-podnet-kind:
 	./hack/test-pod-networking-kind.sh
 
+.PHONY: integration-onepernode-kind
+integration-onepernode-kind:
+	./hack/test-one-node-per-node-kind.sh
+
 .PHONY: integration-remoteprocessgroup-kind
 integration-remoteprocessgroup-kind:
 	./hack/test-remoteprocessgroup-kind.sh
