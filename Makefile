@@ -130,6 +130,10 @@ integration-restrictedpsa-kind:
 integration-graceterm-kind:
 	./hack/test-termination-grace-kind.sh
 
+.PHONY: integration-probetuning-kind
+integration-probetuning-kind:
+	./hack/test-probe-tuning-kind.sh
+
 .PHONY: integration-remoteprocessgroup-kind
 integration-remoteprocessgroup-kind:
 	./hack/test-remoteprocessgroup-kind.sh

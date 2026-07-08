@@ -282,6 +282,56 @@ func TestManagedClusterTerminationGracePeriodSeconds(t *testing.T) {
 	}
 }
 
+func TestManagedClusterProbeTuning(t *testing.T) {
+	// Defaults (no spec.pod.probes): the operator's hardcoded schedule and actions.
+	cluster := hardeningCluster()
+	spec := desiredManagedClusterStatefulSetSpec(cluster, nil, "", nil)
+	c := spec.Template.Spec.Containers[0]
+	if c.StartupProbe.PeriodSeconds != 10 || c.StartupProbe.FailureThreshold != 60 {
+		t.Fatalf("default startup probe = %#v", c.StartupProbe)
+	}
+	if c.LivenessProbe.PeriodSeconds != 20 || c.LivenessProbe.FailureThreshold != 3 {
+		t.Fatalf("default liveness probe = %#v", c.LivenessProbe)
+	}
+	if c.ReadinessProbe.PeriodSeconds != 10 || c.ReadinessProbe.FailureThreshold != 3 {
+		t.Fatalf("default readiness probe = %#v", c.ReadinessProbe)
+	}
+	// The non-TLS action is an httpGet against the NiFi about endpoint.
+	if c.StartupProbe.HTTPGet == nil || c.StartupProbe.HTTPGet.Path != "/nifi-api/flow/about" {
+		t.Fatalf("default startup probe action changed: %#v", c.StartupProbe.ProbeHandler)
+	}
+
+	// Tuning: widen the startup boot window, slow the liveness cadence, lengthen the
+	// readiness timeout. Unset fields keep their defaults; the action stays operator-managed.
+	cluster.Spec.Pod = &nifiv1alpha1.NiFiClusterPodSpec{
+		Probes: &nifiv1alpha1.NiFiClusterProbesSpec{
+			Startup:   &nifiv1alpha1.NiFiClusterProbeTuning{PeriodSeconds: ptr.To[int32](15), FailureThreshold: ptr.To[int32](120)},
+			Liveness:  &nifiv1alpha1.NiFiClusterProbeTuning{PeriodSeconds: ptr.To[int32](30), FailureThreshold: ptr.To[int32](5)},
+			Readiness: &nifiv1alpha1.NiFiClusterProbeTuning{TimeoutSeconds: ptr.To[int32](8), InitialDelaySeconds: ptr.To[int32](12)},
+		},
+	}
+	spec = desiredManagedClusterStatefulSetSpec(cluster, nil, "", nil)
+	c = spec.Template.Spec.Containers[0]
+	if c.StartupProbe.PeriodSeconds != 15 || c.StartupProbe.FailureThreshold != 120 {
+		t.Fatalf("tuned startup probe = %#v", c.StartupProbe)
+	}
+	if c.StartupProbe.TimeoutSeconds != 3 { // unset -> default preserved
+		t.Fatalf("tuned startup probe clobbered timeout: %#v", c.StartupProbe)
+	}
+	if c.StartupProbe.HTTPGet == nil || c.StartupProbe.HTTPGet.Path != "/nifi-api/flow/about" {
+		t.Fatalf("tuning must not change the probe action: %#v", c.StartupProbe.ProbeHandler)
+	}
+	if c.LivenessProbe.PeriodSeconds != 30 || c.LivenessProbe.FailureThreshold != 5 {
+		t.Fatalf("tuned liveness probe = %#v", c.LivenessProbe)
+	}
+	if c.ReadinessProbe.TimeoutSeconds != 8 || c.ReadinessProbe.InitialDelaySeconds != 12 {
+		t.Fatalf("tuned readiness probe = %#v", c.ReadinessProbe)
+	}
+	if c.ReadinessProbe.PeriodSeconds != 10 { // unset -> default preserved
+		t.Fatalf("tuned readiness probe clobbered period: %#v", c.ReadinessProbe)
+	}
+}
+
 func TestManagedClusterExternalServicesReconcileAndPrune(t *testing.T) {
 	scheme := managedClusterTestScheme()
 	cluster := hardeningCluster()

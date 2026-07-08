@@ -485,6 +485,13 @@ type NiFiClusterPodSpec struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	TerminationGracePeriodSeconds *int64 `json:"terminationGracePeriodSeconds,omitempty"`
+	// Probes tunes the timing and thresholds of the operator's startup, liveness, and
+	// readiness probes for the NiFi container. The probe actions stay operator-managed (which
+	// NiFi endpoint is checked, and how TLS is handled); only the scheduling fields — periods,
+	// timeouts, and thresholds — are adjustable. Widen the startup probe for flows that take
+	// minutes to boot.
+	// +optional
+	Probes *NiFiClusterProbesSpec `json:"probes,omitempty"`
 	// ExtraVolumes are appended to the pod volumes, for mounting NAR extensions,
 	// driver libraries, or sidecar data.
 	// +optional
@@ -507,6 +514,56 @@ type NiFiClusterPodSpec struct {
 	// +kubebuilder:validation:MaxItems=8
 	// +kubebuilder:validation:XValidation:rule="self.all(c, !(c.name in ['nifi','initialize-data']))",message="container names nifi and initialize-data are reserved for the operator"
 	ExtraContainers []corev1.Container `json:"extraContainers,omitempty"`
+}
+
+// NiFiClusterProbesSpec tunes the operator's startup, liveness, and readiness probes for the
+// NiFi container. NiFi can take minutes to boot with large flows; widen the startup probe's
+// failureThreshold/periodSeconds for slow starts, and the liveness/readiness probes for
+// loaded or high-latency environments. Each probe's action is fixed by the operator; only
+// the fields below are adjustable, and any left unset keep the operator default.
+type NiFiClusterProbesSpec struct {
+	// Startup tunes the startup probe, which gates the boot window before liveness and
+	// readiness take over. Defaults: periodSeconds 10, timeoutSeconds 3 (5 for TLS),
+	// failureThreshold 60 (a ~10-minute boot window).
+	// +optional
+	Startup *NiFiClusterProbeTuning `json:"startup,omitempty"`
+	// Liveness tunes the liveness probe. Defaults: periodSeconds 20, timeoutSeconds 3,
+	// failureThreshold 3.
+	// +optional
+	Liveness *NiFiClusterProbeTuning `json:"liveness,omitempty"`
+	// Readiness tunes the readiness probe. Defaults: periodSeconds 10, timeoutSeconds 3
+	// (5 for TLS), failureThreshold 3.
+	// +optional
+	Readiness *NiFiClusterProbeTuning `json:"readiness,omitempty"`
+}
+
+// NiFiClusterProbeTuning overrides the scheduling fields of one probe. Only fields that are
+// set are applied; the rest keep the operator default. The probe action (httpGet/exec/
+// tcpSocket against the correct NiFi endpoint) is not adjustable.
+type NiFiClusterProbeTuning struct {
+	// InitialDelaySeconds delays the first probe after the container starts. Usually left at
+	// 0 for the startup probe, which already gates the boot window.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	InitialDelaySeconds *int32 `json:"initialDelaySeconds,omitempty"`
+	// PeriodSeconds is how often the probe runs.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	PeriodSeconds *int32 `json:"periodSeconds,omitempty"`
+	// TimeoutSeconds is how long each probe attempt may take before it is counted a failure.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	TimeoutSeconds *int32 `json:"timeoutSeconds,omitempty"`
+	// FailureThreshold is the number of consecutive failures before the probe is considered
+	// failed. For the startup probe the boot window is periodSeconds * failureThreshold.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	FailureThreshold *int32 `json:"failureThreshold,omitempty"`
+	// SuccessThreshold is the number of consecutive successes before the probe is considered
+	// passed. Kubernetes requires this to be 1 for the liveness and startup probes.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	SuccessThreshold *int32 `json:"successThreshold,omitempty"`
 }
 
 type NiFiClusterCoordinationSpec struct {

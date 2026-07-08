@@ -330,6 +330,33 @@ spec:
     terminationGracePeriodSeconds: 120
 ```
 
+`spec.pod.probes` tunes the operator's startup, liveness, and readiness probes for the NiFi
+container. The operator owns the probe **action** (which NiFi endpoint is checked, and how
+TLS is handled — an `httpGet` against `/nifi-api/flow/about`, or an mTLS-aware exec/TCP check
+for a secured cluster); you adjust only the **scheduling** fields. The most common need is a
+wider startup window: NiFi can take minutes to boot a large flow, and the startup probe's
+boot window is `periodSeconds × failureThreshold`. Defaults are startup `period 10s,
+failureThreshold 60` (≈10-minute boot window), liveness `period 20s, failureThreshold 3`, and
+readiness `period 10s, failureThreshold 3`. Any field left unset keeps its default.
+
+```yaml
+spec:
+  pod:
+    probes:
+      startup:
+        periodSeconds: 15
+        failureThreshold: 120   # ≈ 30-minute boot window for very large flows
+      liveness:
+        periodSeconds: 30
+        failureThreshold: 5
+      readiness:
+        timeoutSeconds: 8
+```
+
+Each block accepts `initialDelaySeconds`, `periodSeconds`, `timeoutSeconds`,
+`failureThreshold`, and `successThreshold`. Kubernetes requires `successThreshold: 1` for the
+liveness and startup probes.
+
 Like `configOverrides`, `spec.pod` applies to the primary pool and all NiFiNodeGroup pools.
 Operator-managed metadata wins on conflicts (selector labels and checksum annotations
 cannot be overridden), extra containers and volumes are appended after the operator's own,

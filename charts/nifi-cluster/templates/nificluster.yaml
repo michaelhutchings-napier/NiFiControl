@@ -232,7 +232,7 @@ spec:
     logbackXml: {{ . | quote }}
     {{- end }}
   {{- end }}
-  {{- if or .Values.pod.labels .Values.pod.annotations .Values.pod.imagePullSecrets .Values.pod.serviceAccountName .Values.pod.securityContext .Values.pod.containerSecurityContext (not (kindIs "invalid" .Values.pod.terminationGracePeriodSeconds)) .Values.pod.extraVolumes .Values.pod.extraVolumeMounts .Values.pod.extraInitContainers .Values.pod.extraContainers }}
+  {{- if or .Values.pod.labels .Values.pod.annotations .Values.pod.imagePullSecrets .Values.pod.serviceAccountName .Values.pod.securityContext .Values.pod.containerSecurityContext (not (kindIs "invalid" .Values.pod.terminationGracePeriodSeconds)) .Values.pod.probes .Values.pod.extraVolumes .Values.pod.extraVolumeMounts .Values.pod.extraInitContainers .Values.pod.extraContainers }}
   pod:
     {{- with .Values.pod.labels }}
     labels:
@@ -259,6 +259,10 @@ spec:
     {{- end }}
     {{- if not (kindIs "invalid" .Values.pod.terminationGracePeriodSeconds) }}
     terminationGracePeriodSeconds: {{ .Values.pod.terminationGracePeriodSeconds }}
+    {{- end }}
+    {{- with .Values.pod.probes }}
+    probes:
+      {{- toYaml . | nindent 6 }}
     {{- end }}
     {{- with .Values.pod.extraVolumes }}
     extraVolumes:

@@ -29,6 +29,7 @@ jobs:
           - integration-controllerconfig-kind
           - integration-restrictedpsa-kind
           - integration-graceterm-kind
+          - integration-probetuning-kind
           - integration-secureauth-kind
           - integration-oidc-kind
           - integration-oidc-tls-kind

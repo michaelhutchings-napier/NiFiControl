@@ -502,9 +502,9 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls
 		},
 		Resources:       cluster.Spec.Resources,
 		SecurityContext: managedClusterContainerSecurityContext(cluster),
-		StartupProbe:    managedClusterStartupProbe(tls),
-		LivenessProbe:   managedClusterLivenessProbe(tls),
-		ReadinessProbe:  managedClusterReadinessProbe(tls),
+		StartupProbe:    managedClusterStartupProbe(cluster, tls),
+		LivenessProbe:   managedClusterLivenessProbe(cluster, tls),
+		ReadinessProbe:  managedClusterReadinessProbe(cluster, tls),
 		VolumeMounts:    managedClusterVolumeMounts(cluster.Spec.Storage, tls, hasConfigOverrides(cluster), managedClusterAuthVolumeSource(cluster, auth) != ""),
 	}
 	podSpec := corev1.PodSpec{
@@ -604,27 +604,71 @@ func nodeVolumes(storageEnabled bool, tls *clusterTLSMaterials, overridesSecret,
 	return volumes
 }
 
-func managedClusterStartupProbe(tls *clusterTLSMaterials) *corev1.Probe {
+func managedClusterStartupProbe(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials) *corev1.Probe {
+	var p *corev1.Probe
 	if tls != nil {
-		return &corev1.Probe{ProbeHandler: tlsReadinessExecHandler(), PeriodSeconds: 10, TimeoutSeconds: 5, FailureThreshold: 60}
+		p = &corev1.Probe{ProbeHandler: tlsReadinessExecHandler(), PeriodSeconds: 10, TimeoutSeconds: 5, FailureThreshold: 60}
+	} else {
+		p = &corev1.Probe{ProbeHandler: httpProbeHandler("/nifi-api/flow/about", "web"), PeriodSeconds: 10, TimeoutSeconds: 3, FailureThreshold: 60}
 	}
-	return &corev1.Probe{ProbeHandler: httpProbeHandler("/nifi-api/flow/about", "web"), PeriodSeconds: 10, TimeoutSeconds: 3, FailureThreshold: 60}
+	applyProbeTuning(p, managedClusterProbeTuning(cluster, func(s *nifiv1alpha1.NiFiClusterProbesSpec) *nifiv1alpha1.NiFiClusterProbeTuning { return s.Startup }))
+	return p
 }
 
-func managedClusterLivenessProbe(tls *clusterTLSMaterials) *corev1.Probe {
+func managedClusterLivenessProbe(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials) *corev1.Probe {
+	var p *corev1.Probe
 	if tls != nil {
 		// Liveness only needs the secured port to be accepting connections; an httpGet
 		// probe cannot present a client certificate under needClientAuth.
-		return &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstrFromString("web")}}, PeriodSeconds: 20, TimeoutSeconds: 3, FailureThreshold: 3}
+		p = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstrFromString("web")}}, PeriodSeconds: 20, TimeoutSeconds: 3, FailureThreshold: 3}
+	} else {
+		p = &corev1.Probe{ProbeHandler: httpProbeHandler("/nifi-api/flow/about", "web"), PeriodSeconds: 20, TimeoutSeconds: 3, FailureThreshold: 3}
 	}
-	return &corev1.Probe{ProbeHandler: httpProbeHandler("/nifi-api/flow/about", "web"), PeriodSeconds: 20, TimeoutSeconds: 3, FailureThreshold: 3}
+	applyProbeTuning(p, managedClusterProbeTuning(cluster, func(s *nifiv1alpha1.NiFiClusterProbesSpec) *nifiv1alpha1.NiFiClusterProbeTuning { return s.Liveness }))
+	return p
 }
 
-func managedClusterReadinessProbe(tls *clusterTLSMaterials) *corev1.Probe {
+func managedClusterReadinessProbe(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials) *corev1.Probe {
+	var p *corev1.Probe
 	if tls != nil {
-		return &corev1.Probe{ProbeHandler: tlsReadinessExecHandler(), PeriodSeconds: 10, TimeoutSeconds: 5, FailureThreshold: 3}
+		p = &corev1.Probe{ProbeHandler: tlsReadinessExecHandler(), PeriodSeconds: 10, TimeoutSeconds: 5, FailureThreshold: 3}
+	} else {
+		p = &corev1.Probe{ProbeHandler: httpProbeHandler("/nifi-api/flow/about", "web"), PeriodSeconds: 10, TimeoutSeconds: 3, FailureThreshold: 3}
 	}
-	return &corev1.Probe{ProbeHandler: httpProbeHandler("/nifi-api/flow/about", "web"), PeriodSeconds: 10, TimeoutSeconds: 3, FailureThreshold: 3}
+	applyProbeTuning(p, managedClusterProbeTuning(cluster, func(s *nifiv1alpha1.NiFiClusterProbesSpec) *nifiv1alpha1.NiFiClusterProbeTuning { return s.Readiness }))
+	return p
+}
+
+// managedClusterProbeTuning returns the tuning for one probe (via the selector), or nil when
+// spec.pod.probes is unset.
+func managedClusterProbeTuning(cluster *nifiv1alpha1.NiFiCluster, sel func(*nifiv1alpha1.NiFiClusterProbesSpec) *nifiv1alpha1.NiFiClusterProbeTuning) *nifiv1alpha1.NiFiClusterProbeTuning {
+	if cluster.Spec.Pod == nil || cluster.Spec.Pod.Probes == nil {
+		return nil
+	}
+	return sel(cluster.Spec.Pod.Probes)
+}
+
+// applyProbeTuning overrides a probe's scheduling fields with any set in the tuning spec,
+// leaving the probe action and any unset fields at the operator default.
+func applyProbeTuning(p *corev1.Probe, t *nifiv1alpha1.NiFiClusterProbeTuning) {
+	if t == nil {
+		return
+	}
+	if t.InitialDelaySeconds != nil {
+		p.InitialDelaySeconds = *t.InitialDelaySeconds
+	}
+	if t.PeriodSeconds != nil {
+		p.PeriodSeconds = *t.PeriodSeconds
+	}
+	if t.TimeoutSeconds != nil {
+		p.TimeoutSeconds = *t.TimeoutSeconds
+	}
+	if t.FailureThreshold != nil {
+		p.FailureThreshold = *t.FailureThreshold
+	}
+	if t.SuccessThreshold != nil {
+		p.SuccessThreshold = *t.SuccessThreshold
+	}
 }
 
 func tlsReadinessExecHandler() corev1.ProbeHandler {

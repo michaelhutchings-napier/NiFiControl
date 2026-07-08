@@ -6416,6 +6416,130 @@ spec:
                     description: Labels are added to the node pods. Operator-managed
                       labels take precedence.
                     type: object
+                  probes:
+                    description: |-
+                      Probes tunes the timing and thresholds of the operator's startup, liveness, and
+                      readiness probes for the NiFi container. The probe actions stay operator-managed (which
+                      NiFi endpoint is checked, and how TLS is handled); only the scheduling fields — periods,
+                      timeouts, and thresholds — are adjustable. Widen the startup probe for flows that take
+                      minutes to boot.
+                    properties:
+                      liveness:
+                        description: |-
+                          Liveness tunes the liveness probe. Defaults: periodSeconds 20, timeoutSeconds 3,
+                          failureThreshold 3.
+                        properties:
+                          failureThreshold:
+                            description: |-
+                              FailureThreshold is the number of consecutive failures before the probe is considered
+                              failed. For the startup probe the boot window is periodSeconds * failureThreshold.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          initialDelaySeconds:
+                            description: |-
+                              InitialDelaySeconds delays the first probe after the container starts. Usually left at
+                              0 for the startup probe, which already gates the boot window.
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          periodSeconds:
+                            description: PeriodSeconds is how often the probe runs.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          successThreshold:
+                            description: |-
+                              SuccessThreshold is the number of consecutive successes before the probe is considered
+                              passed. Kubernetes requires this to be 1 for the liveness and startup probes.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          timeoutSeconds:
+                            description: TimeoutSeconds is how long each probe attempt
+                              may take before it is counted a failure.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                        type: object
+                      readiness:
+                        description: |-
+                          Readiness tunes the readiness probe. Defaults: periodSeconds 10, timeoutSeconds 3
+                          (5 for TLS), failureThreshold 3.
+                        properties:
+                          failureThreshold:
+                            description: |-
+                              FailureThreshold is the number of consecutive failures before the probe is considered
+                              failed. For the startup probe the boot window is periodSeconds * failureThreshold.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          initialDelaySeconds:
+                            description: |-
+                              InitialDelaySeconds delays the first probe after the container starts. Usually left at
+                              0 for the startup probe, which already gates the boot window.
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          periodSeconds:
+                            description: PeriodSeconds is how often the probe runs.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          successThreshold:
+                            description: |-
+                              SuccessThreshold is the number of consecutive successes before the probe is considered
+                              passed. Kubernetes requires this to be 1 for the liveness and startup probes.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          timeoutSeconds:
+                            description: TimeoutSeconds is how long each probe attempt
+                              may take before it is counted a failure.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                        type: object
+                      startup:
+                        description: |-
+                          Startup tunes the startup probe, which gates the boot window before liveness and
+                          readiness take over. Defaults: periodSeconds 10, timeoutSeconds 3 (5 for TLS),
+                          failureThreshold 60 (a ~10-minute boot window).
+                        properties:
+                          failureThreshold:
+                            description: |-
+                              FailureThreshold is the number of consecutive failures before the probe is considered
+                              failed. For the startup probe the boot window is periodSeconds * failureThreshold.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          initialDelaySeconds:
+                            description: |-
+                              InitialDelaySeconds delays the first probe after the container starts. Usually left at
+                              0 for the startup probe, which already gates the boot window.
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          periodSeconds:
+                            description: PeriodSeconds is how often the probe runs.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          successThreshold:
+                            description: |-
+                              SuccessThreshold is the number of consecutive successes before the probe is considered
+                              passed. Kubernetes requires this to be 1 for the liveness and startup probes.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          timeoutSeconds:
+                            description: TimeoutSeconds is how long each probe attempt
+                              may take before it is counted a failure.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                        type: object
+                    type: object
                   securityContext:
                     description: |-
                       SecurityContext sets the pod-level security context for the node pods (for example
