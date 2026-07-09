@@ -330,55 +330,171 @@ deletionPolicy: Delete
 driftPolicy:
   mode: Reconcile
 
-# ---------------------------------------------------------------------------------------------
-# Optional resources stamped out alongside this cluster, so one `helm install` brings up the
-# cluster together with its parameter contexts, users, flows, and so on. Each entry is
-# {name, spec, [annotations], [labels]}; `spec` is the CR spec verbatim (see the CRD or
-# config/samples for fields). For every kind except flowBundles and autoscalers, `clusterRef`
-# is filled in with THIS cluster when you omit it, so you set it once.
+# =============================================================================================
+# Optional resources stamped out alongside this cluster, so ONE `helm install` brings up the
+# cluster together with its parameter contexts, users, flows, and so on — instead of applying
+# each as a separate CR. Every list defaults to [] (cluster-only); uncomment the examples to
+# add resources.
 #
-# Example:
-#   parameterContexts:
-#     - name: payments-prod
-#       spec:
-#         parameters:
-#           - {name: kafka.bootstrap.servers, value: kafka:9092}
-#           - name: db.password
-#             sensitiveValueFrom: {secretKeyRef: {name: payments-db, key: password}}
-#   flowDeployments:
-#     - name: payments-prod
-#       spec:
-#         source: {bundleRef: {name: payments}, version: 1.0.0}
-#         target: {parentProcessGroupRef: {root: true}, processGroupName: payments-release}
-#         parameterContextRef: {name: payments-prod}
+#   * Each entry is {name, spec, [annotations], [labels]}, where `spec` is the CR spec verbatim
+#     (see the matching config/samples/nifi_v1alpha1_*.yaml or the CRD for all fields).
+#   * `clusterRef` is filled in with THIS cluster automatically, so you never repeat it — except
+#     for flowBundles (cluster-agnostic content) and autoscalers (explicit target).
+#   * The operator reconciles asynchronously, so ordering does not matter: a flowDeployment that
+#     references a flowBundle / parameterContext defined below just waits until they exist.
+#
+# The examples below form one coherent "payments" app that references itself across kinds.
+# ---------------------------------------------------------------------------------------------
 
-# Security / access
-users: []
-userGroups: []
-policies: []
-
-# Registry, parameters, controller services, reporting
-registryClients: []
+# --- Parameters -----------------------------------------------------------------------------
 parameterContexts: []
+  # - name: payments-prod
+  #   spec:
+  #     description: Payments production parameters
+  #     parameters:
+  #       - {name: kafka.bootstrap.servers, value: kafka:9092}
+  #       # Sensitive values come from a Secret, never inline:
+  #       - name: db.password
+  #         sensitiveValueFrom: {secretKeyRef: {name: payments-db, key: password}}
+
+# --- Controller services --------------------------------------------------------------------
 controllerServices: []
-reportingTasks: []
+  # - name: payments-dbcp
+  #   spec:
+  #     parentProcessGroupRef: {root: true}
+  #     type: org.apache.nifi.dbcp.DBCPConnectionPool
+  #     properties:
+  #       Database Connection URL: jdbc:postgresql://postgres/payments
+  #     sensitiveProperties:
+  #       Password: {secretKeyRef: {name: payments-db, key: password}}
+  #     state: Enabled
 
-# Flows
-flowBundles: []          # NiFiFlowBundle — cluster-agnostic flow content (no clusterRef)
+# --- Flow registry --------------------------------------------------------------------------
+registryClients: []
+  # - name: shared-registry
+  #   spec:
+  #     type: NiFiRegistry              # or GitHub
+  #     uri: https://registry.example.com/nifi-registry
+  #     description: Shared flow registry
+
+# --- Flows: a versioned bundle deployed into the cluster ------------------------------------
+flowBundles: []          # NiFiFlowBundle — cluster-agnostic flow content, so NO clusterRef
+  # - name: payments
+  #   spec:
+  #     version: "1.0.0"
+  #     source:
+  #       snapshot:
+  #         flowContents:
+  #           identifier: payments-flow
+  #           name: payments
+  #           processors: []            # see config/samples/nifi_v1alpha1_nififlowbundle.yaml
+  #           connections: []           # for a full inline flow, or pull a signed OCI artifact
+  #     # Alternatively pull a cosign-signed OCI artifact instead of an inline snapshot:
+  #     # source:
+  #     #   oci:
+  #     #     image: registry.example.com/flows/payments:v1
+  #     #     path: flow.json
+  #     #     verify: {cosignPublicKeySecretRef: {name: cosign-key, key: cosign.pub}}
+
 flowDeployments: []
-processGroups: []
-remoteProcessGroups: []
+  # - name: payments-prod
+  #   spec:
+  #     source: {bundleRef: {name: payments}, version: "1.0.0"}
+  #     target: {parentProcessGroupRef: {root: true}, processGroupName: payments-release}
+  #     parameterContextRef: {name: payments-prod}
+  #     rollout:
+  #       strategy: StopAllThenApply
+  #       readiness: {requireValidComponents: true, requireEnabledControllerServices: true, timeoutSeconds: 300}
+  #     rollback: {enabled: true, onFailure: PreviousSuccessful, historyLimit: 5}
+  #     ownership: {mode: Managed, prune: true}
+  #     driftPolicy: {mode: Warn}
 
-# Individual flow components (usually managed via a flowBundle instead)
+# A directly-managed process group, as an alternative to a versioned flowDeployment:
+processGroups: []
+  # - name: payments
+  #   spec:
+  #     displayName: Payments
+  #     parameterContextRef: {name: payments-prod}
+
+# --- Users, groups, and access policies -----------------------------------------------------
+users: []
+  # - name: alice
+  #   spec:
+  #     identity: alice@example.com     # OIDC identity or client-certificate DN
+  #     # Optionally have the operator issue a client certificate into a Secret:
+  #     # certificate: {create: true, secretName: alice-nifi-client}
+
+userGroups: []
+  # - name: operators
+  #   spec:
+  #     identity: operators
+  #     users:
+  #       - userRef: {name: alice}
+
+policies: []
+  # - name: operators-write-payments
+  #   spec:
+  #     resource: /flow                 # e.g. /flow, /controller, /proxy, /data/process-groups/{id}
+  #     action: write                   # read | write
+  #     userGroupRefs:
+  #       - name: operators
+  #     # or grant individual users:
+  #     # userRefs: [{name: alice}]
+
+# --- Reporting tasks ------------------------------------------------------------------------
+reportingTasks: []
+  # - name: s2s-status
+  #   spec:
+  #     type: org.apache.nifi.reporting.SiteToSiteStatusReportingTask
+  #     scheduling: {strategy: TIMER_DRIVEN, period: 1 min}
+  #     properties: {Destination URL: "https://nifi.example.com:8443", Input Port Name: status-in, Platform: nifi}
+  #     state: Enabled
+
+# --- Extra node pools and autoscaling -------------------------------------------------------
+nodeGroups: []
+  # - name: workers
+  #   spec:
+  #     replicas: 2                     # a second tier joining this cluster; unset fields inherit
+  #     jvm: {heapInitial: 4g, heapMax: 6g}
+  #     resources: {requests: {cpu: "2", memory: 8Gi}}
+  #     scheduling: {nodeSelector: {workload: nifi-workers}}
+
+autoscalers: []          # NiFiAutoscaler — references its target explicitly, so NO clusterRef
+  # - name: payments
+  #   spec:
+  #     target: {kind: NiFiCluster, name: payments}   # name must match this cluster / a nodeGroup
+  #     minReplicas: 3
+  #     maxReplicas: 9
+  #     metrics:
+  #       - type: Prometheus
+  #         prometheus:
+  #           serverAddress: http://prometheus.monitoring.svc:9090
+  #           query: sum(nifi_amount_items_queued)
+  #           threshold: "10000"
+
+# --- Site-to-site (remote process groups) ---------------------------------------------------
+remoteProcessGroups: []
+  # - name: to-central
+  #   spec:
+  #     targetUris: [https://central-nifi.example.com:8443/nifi]
+  #     transportProtocol: HTTP         # HTTP | RAW
+  #     parentProcessGroupRef: {root: true}
+
+# --- Backup / restore of the flow -----------------------------------------------------------
+backups: []
+  # - name: nightly
+  #   spec:
+  #     processGroupId: ""              # empty = the whole flow (root process group)
+  #     storage: {type: ConfigMap}      # ConfigMap | Secret
+restores: []
+  # See config/samples/nifi_v1alpha1_nifirestore.yaml for the spec.
+
+# --- Individual flow components ---------------------------------------------------------------
+# These are first-class CRs too, but you normally author them inside a flowBundle's flowContents
+# rather than one-by-one here. Uncomment and populate from config/samples/ if you do need them.
 processors: []
 connections: []
 funnels: []
 inputPorts: []
 outputPorts: []
 labels: []
-
-# Topology and operations
-nodeGroups: []
-autoscalers: []          # NiFiAutoscaler — references its target explicitly (no clusterRef)
-backups: []
-restores: []
