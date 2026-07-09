@@ -135,6 +135,8 @@ prop_replace 'nifi.security.truststore' "${NIFI_SECURITY_DIR}/truststore.p12"
 prop_replace 'nifi.security.truststoreType' 'PKCS12'
 prop_replace 'nifi.security.truststorePasswd' "${NIFI_KEYSTORE_PASSWORD}"
 prop_replace 'nifi.security.needClientAuth' "${NIFI_NEED_CLIENT_AUTH:-true}"
+prop_replace 'nifi.security.autoreload.enabled' "${NIFI_TLS_AUTORELOAD_ENABLED:-false}"
+prop_replace 'nifi.security.autoreload.interval' "${NIFI_TLS_AUTORELOAD_INTERVAL:-10 secs}"
 prop_replace 'nifi.security.allow.anonymous.authentication' 'false'
 prop_replace 'nifi.security.user.authorizer' 'managed-authorizer'
 prop_replace 'nifi.security.user.login.identity.provider' "${NIFI_LOGIN_IDENTITY_PROVIDER:-}"
@@ -853,6 +855,14 @@ func nodeEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials
 				Key:                  tls.passwordSecretKey,
 			}}},
 		)
+		// SSL-context auto-reload: NiFi rescans the mounted keystore/truststore and reloads
+		// them in place, so a rotated certificate is picked up without a pod restart.
+		if managedClusterTLSAutoReloadEnabled(cluster) {
+			environment = append(environment,
+				corev1.EnvVar{Name: "NIFI_TLS_AUTORELOAD_ENABLED", Value: "true"},
+				corev1.EnvVar{Name: "NIFI_TLS_AUTORELOAD_INTERVAL", Value: managedClusterTLSAutoReloadInterval(cluster)},
+			)
+		}
 		// User authentication (single-user, LDAP, OIDC) only exists over HTTPS; the mode's
 		// login provider, credentials, and OIDC settings arrive through the environment.
 		if auth != nil {

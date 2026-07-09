@@ -196,6 +196,13 @@ spec:
       nodeCommonName: {{ . | quote }}
       {{- end }}
     {{- end }}
+    {{- if .Values.internalTLS.autoReload.enabled }}
+    autoReload:
+      enabled: true
+      {{- with .Values.internalTLS.autoReload.interval }}
+      interval: {{ . | quote }}
+      {{- end }}
+    {{- end }}
   {{- end }}
   {{- if .Values.metrics.enabled }}
   metrics:

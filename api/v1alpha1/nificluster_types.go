@@ -864,6 +864,24 @@ type NiFiClusterInternalTLSSpec struct {
 	External *NiFiExternalTLSSpec `json:"external,omitempty"`
 	// Certificate tunes the operator-generated leaf certificates. Ignored in external mode.
 	Certificate *NiFiTLSCertificateSpec `json:"certificate,omitempty"`
+	// AutoReload enables NiFi's SSL-context auto-reload (nifi.security.autoreload), so a
+	// rotated server certificate is picked up in place instead of restarting the node pods.
+	// When enabled, leaf-certificate rotation no longer rolls the StatefulSet — NiFi reloads
+	// the mounted keystore/truststore within the configured interval — while a CA change (a
+	// trust-anchor rotation) still rolls the pods. Opt-in; leave it unset to keep rolling the
+	// nodes on every certificate change.
+	AutoReload *NiFiClusterTLSAutoReload `json:"autoReload,omitempty"`
+}
+
+// NiFiClusterTLSAutoReload configures NiFi's SSL-context auto-reload.
+type NiFiClusterTLSAutoReload struct {
+	// Enabled turns on nifi.security.autoreload.
+	Enabled bool `json:"enabled"`
+	// Interval is how often NiFi rescans the keystore and truststore for changes, expressed
+	// as a NiFi duration ("10 secs", "500 ms", "5 mins"). Defaults to "10 secs".
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[1-9][0-9]*\s+(millis|milliseconds?|ms|secs?|seconds?|mins?|minutes?|hours?|days?)$`
+	Interval string `json:"interval,omitempty"`
 }
 
 // CertManagerIssuerRef references a cert-manager Issuer or ClusterIssuer.

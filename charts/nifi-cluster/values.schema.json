@@ -588,7 +588,8 @@
         "selfSigned",
         "issuerRef",
         "external",
-        "certificate"
+        "certificate",
+        "autoReload"
       ],
       "properties": {
         "enabled": {
@@ -704,6 +705,21 @@
             },
             "nodeCommonName": {
               "type": "string"
+            }
+          }
+        },
+        "autoReload": {
+          "type": "object",
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "interval": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*\\s+(millis|milliseconds?|ms|secs?|seconds?|mins?|minutes?|hours?|days?)$"
             }
           }
         }

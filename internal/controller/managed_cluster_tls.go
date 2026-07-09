@@ -69,6 +69,23 @@ func managedClusterHTTPSPort(cluster *nifiv1alpha1.NiFiCluster) int32 {
 	return defaultHTTPSPort
 }
 
+const defaultTLSAutoReloadInterval = "10 secs"
+
+// managedClusterTLSAutoReloadEnabled reports whether NiFi's SSL-context auto-reload is on,
+// which lets a rotated leaf certificate be reloaded in place rather than rolling the pods.
+func managedClusterTLSAutoReloadEnabled(cluster *nifiv1alpha1.NiFiCluster) bool {
+	return internalTLSEnabled(cluster) && cluster.Spec.InternalTLS.AutoReload != nil && cluster.Spec.InternalTLS.AutoReload.Enabled
+}
+
+// managedClusterTLSAutoReloadInterval returns the keystore/truststore rescan interval as a
+// NiFi duration, defaulting to "10 secs".
+func managedClusterTLSAutoReloadInterval(cluster *nifiv1alpha1.NiFiCluster) string {
+	if managedClusterTLSAutoReloadEnabled(cluster) && cluster.Spec.InternalTLS.AutoReload.Interval != "" {
+		return cluster.Spec.InternalTLS.AutoReload.Interval
+	}
+	return defaultTLSAutoReloadInterval
+}
+
 // reconcileManagedClusterTLS provisions cert-manager resources and the operator-rendered
 // config for an Internal cluster with internalTLS enabled. It returns the resolved
 // materials once the PKCS12 and PEM certificate material are available. A nil
@@ -140,7 +157,7 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterTLS(ctx context.Context, 
 	}
 
 	materials := plan.materials()
-	materials.checksum = tlsChecksum(serverData, r.tlsConfigChecksumInput(plan))
+	materials.checksum = tlsChecksum(serverData, r.tlsConfigChecksumInput(plan), managedClusterTLSAutoReloadEnabled(cluster))
 	if err := r.markManagedClusterTLSReady(ctx, cluster, plan); err != nil {
 		return nil, false, err
 	}
@@ -173,7 +190,7 @@ func (r *NiFiClusterReconciler) reconcileExternalTLS(ctx context.Context, cluste
 			tlsMissingMessage("Externally supplied TLS Secrets are incomplete.", plan, serverMissing, clientMissing))
 	}
 	materials := plan.materials()
-	materials.checksum = tlsChecksum(serverData, r.tlsConfigChecksumInput(plan))
+	materials.checksum = tlsChecksum(serverData, r.tlsConfigChecksumInput(plan), managedClusterTLSAutoReloadEnabled(cluster))
 	if err := r.markManagedClusterTLSReady(ctx, cluster, plan); err != nil {
 		return nil, false, err
 	}
@@ -637,16 +654,29 @@ func generatePassword() (string, error) {
 	return hex.EncodeToString(buffer), nil
 }
 
-func tlsChecksum(serverData map[string][]byte, configInput string) string {
+// tlsChecksum drives the StatefulSet's tls-checksum annotation: when it changes, the pods
+// roll. With auto-reload enabled the rotating leaf material (keystore, truststore, and the
+// leaf PEM/key) is excluded so leaf rotation no longer rolls the nodes — NiFi reloads the
+// mounted files in place. The CA certificate (ca.crt, a deterministic PEM unlike the
+// non-deterministic PKCS12 stores) stays in the checksum, so a trust-anchor rotation still
+// rolls the pods. With auto-reload off, every certificate change rolls the nodes.
+func tlsChecksum(serverData map[string][]byte, configInput string, autoReload bool) string {
+	hashed := serverData
+	if autoReload {
+		hashed = map[string][]byte{}
+		if ca := serverData[tlsCAKey]; len(ca) > 0 {
+			hashed[tlsCAKey] = ca
+		}
+	}
 	hasher := sha256.New()
-	keys := make([]string, 0, len(serverData))
-	for key := range serverData {
+	keys := make([]string, 0, len(hashed))
+	for key := range hashed {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
 		hasher.Write([]byte(key))
-		hasher.Write(serverData[key])
+		hasher.Write(hashed[key])
 	}
 	hasher.Write([]byte(configInput))
 	return hex.EncodeToString(hasher.Sum(nil))[:32]

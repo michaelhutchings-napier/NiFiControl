@@ -165,7 +165,9 @@ cert-manager must be installed separately; if its CRDs are absent the cluster re
 issues a server/node certificate (`serverAuth`+`clientAuth`, wildcard headless SANs) and
 an operator client certificate (`clientAuth`), consumes the cert-manager PKCS12 keystores
 directly, derives the NiFi initial admin and node identities from predictable common
-names, and rolls pods on certificate rotation. See
+names, and rolls pods on certificate rotation. Optionally, `internalTLS.autoReload` turns on
+NiFi's SSL-context auto-reload so a rotated leaf certificate is picked up in place without
+restarting the nodes (a CA change still rolls them). See
 [docs/internal-tls.md](docs/internal-tls.md) for the trust model, ownership, rotation
 behaviour, the shared node-identity limitation, and migration from development HTTP.
 `insecureSkipVerify` is never used for managed clusters. Because NiFi does not seed the initial

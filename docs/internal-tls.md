@@ -194,6 +194,35 @@ certificate, the checksum changes and the StatefulSet performs a normal rolling 
 each NiFi pod restarts with the new keystore. The operator also rebuilds its registered
 mTLS REST client from the rotated client Secret.
 
+### Zero-downtime rotation with auto-reload
+
+The keystore and truststore are mounted into each pod directly from the cert-manager Secret,
+so the kubelet updates the files in place when the Secret rotates. Setting
+`internalTLS.autoReload.enabled` turns on NiFi's SSL-context auto-reload
+(`nifi.security.autoreload`), so NiFi rescans those files on the configured `interval`
+(default `10 secs`) and reloads the SSL context **without restarting** — the rotated
+certificate is served in place:
+
+```yaml
+spec:
+  internalTLS:
+    enabled: true
+    autoReload:
+      enabled: true
+      interval: "10 secs"
+```
+
+With auto-reload on, the operator stops folding the rotating leaf material into the pod-template
+checksum, so **leaf-certificate rotation no longer rolls the StatefulSet** — the nodes keep
+running and pick up the new keystore in place. A **CA rotation** is a trust-anchor change and is
+detected through `ca.crt` (a deterministic PEM, unlike the non-deterministic PKCS12 stores), so
+it still rolls the pods to guarantee every node converges on the new trust anchor cleanly. Leave
+`autoReload` unset (the default) to keep rolling the nodes on every certificate change.
+
+Auto-reload is opt-in per cluster. It is the recommended setting for clusters whose main
+rotation concern is the web/API server certificate; a rolling restart (the default) is the more
+conservative choice if you would rather every certificate change be a full, observable roll.
+
 ### Failure and recovery behaviour
 
 - **cert-manager not installed / issuer broken**: `TLSReady=False` (`CertManagerMissing`

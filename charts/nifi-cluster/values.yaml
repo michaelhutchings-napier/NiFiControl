@@ -181,6 +181,13 @@ internalTLS:
     additionalServerSANs: []
     operatorCommonName: ""
     nodeCommonName: ""
+  # SSL-context auto-reload: when enabled, NiFi rescans the mounted keystore/truststore and
+  # reloads them in place, so a rotated leaf certificate is picked up WITHOUT restarting the
+  # nodes (the operator stops rolling the StatefulSet on leaf rotation). A CA change still
+  # rolls the pods. Leave disabled to roll the nodes on every certificate change.
+  autoReload:
+    enabled: false
+    interval: "10 secs"   # NiFi duration: e.g. "10 secs", "500 ms", "5 mins"
 
 # Prometheus metrics. NiFi 2.x always serves Prometheus-format metrics from its REST API
 # at /nifi-api/flow/metrics/prometheus on the web port, so enabling metrics only controls

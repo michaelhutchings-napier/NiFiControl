@@ -931,6 +931,27 @@ spec:
                   selected: an existing cert-manager issuerRef, an operator-managed self-signed CA
                   chain, or externally supplied PKCS12 Secrets.
                 properties:
+                  autoReload:
+                    description: |-
+                      AutoReload enables NiFi's SSL-context auto-reload (nifi.security.autoreload), so a
+                      rotated server certificate is picked up in place instead of restarting the node pods.
+                      When enabled, leaf-certificate rotation no longer rolls the StatefulSet — NiFi reloads
+                      the mounted keystore/truststore within the configured interval — while a CA change (a
+                      trust-anchor rotation) still rolls the pods. Opt-in; leave it unset to keep rolling the
+                      nodes on every certificate change.
+                    properties:
+                      enabled:
+                        description: Enabled turns on nifi.security.autoreload.
+                        type: boolean
+                      interval:
+                        description: |-
+                          Interval is how often NiFi rescans the keystore and truststore for changes, expressed
+                          as a NiFi duration ("10 secs", "500 ms", "5 mins"). Defaults to "10 secs".
+                        pattern: ^[1-9][0-9]*\s+(millis|milliseconds?|ms|secs?|seconds?|mins?|minutes?|hours?|days?)$
+                        type: string
+                    required:
+                    - enabled
+                    type: object
                   certificate:
                     description: Certificate tunes the operator-generated leaf certificates.
                       Ignored in external mode.
