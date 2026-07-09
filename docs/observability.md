@@ -101,6 +101,33 @@ noisy:
 | NiFiBackup | Normal / Warning | `BackupComplete` / `<reason>` | a flow backup succeeded or failed |
 | NiFiRestore | Normal / Warning | `RestoreComplete` / `<reason>` | a flow restore succeeded or failed |
 
+## Node start / stop / failure alerting
+
+NiFi 1.x could email or POST an alert when a node started, stopped, or died, via **bootstrap
+notification services** configured in `bootstrap-notification-services.xml` and the
+`nifi.start|stop|dead.notification.services` properties in `bootstrap.conf`. That subsystem was
+**removed in NiFi 2.0** along with the rest of the old `RunNiFi` bootstrap, which was replaced
+by the in-process runtime management server. This is not a NiFiControl limitation and there is
+nothing for the operator to model: the `apache/nifi:2.x` distribution ships **no** notifier
+classes (no `EmailNotificationService` / `HttpNotificationService`), **no** `notification.*`
+properties in `bootstrap.conf`, and **no** `bootstrap-notification-services.xml` — so any such
+configuration would be silently ignored. (Verified by inspecting the `apache/nifi:2.10.0`
+image directly.)
+
+On Kubernetes the equivalent is platform-native and stronger, because a NiFi node's lifecycle
+_is_ its pod's lifecycle. Alert on it two ways, both already wired up above:
+
+- **Prometheus Alertmanager** on pod and NiFi health. Pair the ServiceMonitor from
+  [NiFi cluster metrics](#nifi-cluster-metrics) with `kube-state-metrics` and alert on, for
+  example, `up{service="<cluster>-nifi"} == 0` (a node stopped answering), a rising
+  `kube_pod_container_status_restarts_total` (a node is crash-looping — the NiFi 1.x "died"
+  signal), or `kube_pod_status_phase{phase="Pending"}` that never clears (a node cannot
+  schedule). This covers start, stop, and death uniformly, and routes to email/Slack/PagerDuty
+  through Alertmanager's receivers — the same destinations the old bootstrap notifiers targeted.
+- **Kubernetes Events** from the operator (see the table above) — `Ready`, `ScalingDown`,
+  `OffloadingNode`/`NodeOffloaded`, and the `Warning` reasons — surface operator-driven
+  transitions. Route them with an events exporter or an Event-based alerting rule.
+
 ## Feeding the autoscaler
 
 With NiFi metrics in Prometheus, a KEDA `ScaledObject` (or any HPA backed by a metrics adapter)
