@@ -24,6 +24,8 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.additionalProxyHosts) || self.mode != 'External'",message="additionalProxyHosts only applies to operator-managed (Internal) clusters"
 // +kubebuilder:validation:XValidation:rule="!has(self.clusterDomain) || self.mode != 'External'",message="clusterDomain only applies to operator-managed (Internal) clusters"
 // +kubebuilder:validation:XValidation:rule="!has(self.authentication) || (has(self.internalTLS) && self.internalTLS.enabled)",message="authentication requires internalTLS: NiFi only allows user authentication over HTTPS"
+// +kubebuilder:validation:XValidation:rule="!has(self.logging) || self.mode != 'External'",message="logging only applies to operator-managed (Internal) clusters"
+// +kubebuilder:validation:XValidation:rule="!(has(self.logging) && has(self.configOverrides) && has(self.configOverrides.logbackXml))",message="set either spec.logging or spec.configOverrides.logbackXml, not both: both render conf/logback.xml"
 type NiFiClusterSpec struct {
 	// +kubebuilder:validation:Enum=Internal;External
 	// +kubebuilder:default=Internal
@@ -102,6 +104,16 @@ type NiFiClusterSpec struct {
 	// including NiFiNodeGroup pools. Only applies to Internal (operator-managed)
 	// clusters.
 	ConfigOverrides *NiFiClusterConfigOverrides `json:"configOverrides,omitempty"`
+	// Logging tunes node logging (conf/logback.xml) for the common cases — the root log
+	// level, individual logger levels, mirroring the application log to stdout, and the
+	// nifi-app.log retention — without hand-writing logback XML. The operator overlays
+	// these settings onto the NiFi 2.x logback baseline it ships, so all of NiFi's default
+	// noise suppression is preserved. It applies to every node in the cluster, including
+	// NiFiNodeGroup pools. For anything beyond these knobs (custom appenders, syslog, the
+	// sifting or request loggers) use spec.configOverrides.logbackXml instead; the two are
+	// mutually exclusive because both render conf/logback.xml. Only applies to Internal
+	// (operator-managed) clusters.
+	Logging *NiFiClusterLoggingSpec `json:"logging,omitempty"`
 	// Pod customizes the generated node pods beyond the fields the API models
 	// directly: extra metadata, image pull secrets, a ServiceAccount, sidecars, init
 	// containers, and additional volumes (for example NAR extension or JDBC driver
@@ -345,6 +357,58 @@ type NiFiClusterConfigOverrides struct {
 // CRD's CEL validation rules within the API server's admission cost budget.
 // +kubebuilder:validation:MaxLength=2048
 type ConfigOverrideValue string
+
+// NiFiClusterLoggingSpec configures node logging as a convenience over
+// configOverrides.logbackXml. The operator renders conf/logback.xml by overlaying these
+// settings onto the NiFi 2.x logback baseline it ships — so NiFi's default appenders and
+// noise suppression (ZooKeeper, Spring, Jetty, the deprecation log, the user-vs-app log
+// separation) survive, and raising the level to DEBUG stays useful rather than unleashing a
+// firehose from those libraries. Removing the section restores the image's shipped
+// logback.xml on the next rollout.
+type NiFiClusterLoggingSpec struct {
+	// Level is the root logger level — the default verbosity for nifi-app.log.
+	// +optional
+	// +kubebuilder:validation:Enum=TRACE;DEBUG;INFO;WARN;ERROR;OFF
+	// +kubebuilder:default=INFO
+	Level string `json:"level,omitempty"`
+	// Loggers sets levels for individual named loggers, for targeted troubleshooting without
+	// raising the whole-application level — for example {"org.apache.nifi.web.security":
+	// "DEBUG"}. An entry for a logger NiFi already configures changes its level in place; a
+	// new name adds a logger. Keys are dotted Java package or class names.
+	// +optional
+	// +kubebuilder:validation:MaxProperties=64
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k.matches('^[A-Za-z0-9_.$]+$'))",message="logger names must be dotted Java package or class names (alphanumerics, dots, underscores, and dollar signs)"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, self[k] in ['TRACE','DEBUG','INFO','WARN','ERROR','OFF'])",message="logger levels must be one of TRACE, DEBUG, INFO, WARN, ERROR, OFF"
+	Loggers map[string]string `json:"loggers,omitempty"`
+	// Console, when true, adds a stdout appender to the root logger so nifi-app.log lines
+	// also surface in `kubectl logs` for the node — convenient for container log collection.
+	// NiFi's bootstrap, stdout, and stderr already reach the console regardless.
+	// +optional
+	Console *bool `json:"console,omitempty"`
+	// Retention tunes the rolling policy of nifi-app.log, the main application log. Other log
+	// files keep the image defaults.
+	// +optional
+	Retention *NiFiClusterLogRetentionSpec `json:"retention,omitempty"`
+}
+
+// NiFiClusterLogRetentionSpec bounds nifi-app.log growth on disk. Unset fields keep the NiFi
+// image defaults (100MB per file, 30 archives, 3GB total).
+type NiFiClusterLogRetentionSpec struct {
+	// MaxFileSize is the size at which the active log rolls over, for example "100MB" or
+	// "1GB". A bare number is bytes.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[0-9]+(|KB|MB|GB)$`
+	MaxFileSize string `json:"maxFileSize,omitempty"`
+	// MaxHistory is the number of rolled archives to keep before the oldest are deleted.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	MaxHistory *int32 `json:"maxHistory,omitempty"`
+	// TotalSizeCap bounds the combined size of all archives, for example "3GB"; the oldest
+	// are deleted once it is exceeded. A bare number is bytes.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[0-9]+(|KB|MB|GB)$`
+	TotalSizeCap string `json:"totalSizeCap,omitempty"`
+}
 
 // NiFiClusterAuthenticationSpec configures user authentication for a secured managed
 // cluster. NiFi authenticates client certificates before any login provider, so the

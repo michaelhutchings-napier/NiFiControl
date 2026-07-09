@@ -272,10 +272,12 @@ host header" error. To *add* an external load balancer hostname without replacin
 allow-list, prefer the additive `spec.additionalProxyHosts` (see "Ingress and proxy host"
 above).
 
-`configOverrides.logbackXml` replaces `conf/logback.xml` wholesale for custom log levels,
-appenders, or retention. The content is not validated — a malformed document surfaces as a
-NiFi startup failure — and removing it restores the image's shipped `logback.xml` on the
-next roll.
+`configOverrides.logbackXml` replaces `conf/logback.xml` wholesale for custom appenders,
+syslog, or the sifting/request loggers. The content is not validated — a malformed document
+surfaces as a NiFi startup failure — and removing it restores the image's shipped
+`logback.xml` on the next roll. For the common cases (log levels, retention, console), prefer
+the dedicated `spec.logging` section below; the two are mutually exclusive because both render
+`conf/logback.xml`.
 
 Values that must not appear in the NiFiCluster resource itself — an LDAP manager
 password, a proxy credential — come from Secrets via `configOverrides.nifiPropertiesFrom`:
@@ -293,6 +295,43 @@ same property-name rules and operator-managed denylist apply, but because admiss
 cannot read Secret contents they are enforced at reconcile time: a violation puts the
 cluster `Ready=False` with reason `ConfigOverridesInvalid` instead of rejecting the
 update. Changing a referenced Secret's content rolls the nodes automatically.
+
+## Logging
+
+`spec.logging` tunes node logging (`conf/logback.xml`) for the common cases without
+hand-writing logback XML:
+
+```yaml
+spec:
+  logging:
+    level: INFO                       # root logger: TRACE|DEBUG|INFO|WARN|ERROR|OFF
+    loggers:                          # per-logger levels for targeted troubleshooting
+      org.apache.nifi.web.security: DEBUG
+      org.apache.nifi.controller.repository: WARN
+    console: true                     # also send nifi-app.log to stdout (kubectl logs)
+    retention:                        # bound nifi-app.log on disk
+      maxFileSize: 100MB
+      maxHistory: 30
+      totalSizeCap: 3GB
+```
+
+Rather than synthesize a document from scratch, the operator overlays these settings onto
+the `logback.xml` baseline that NiFi 2.x ships, so all of NiFi's carefully tuned defaults
+survive — the deprecation log, the user-vs-app log separation, and the noise suppression for
+ZooKeeper, Spring, Jetty, and friends. Raising `level` to `DEBUG` therefore stays useful for
+your own components instead of unleashing a firehose from those libraries. `loggers` entries
+change a logger NiFi already declares in place, or add a new one; `retention` is scoped to
+`nifi-app.log` (the other log files keep their defaults); and `console` mirrors the
+application log to the container's stdout so it shows in `kubectl logs`.
+
+The rendered `logback.xml` flows through the same mechanism as `configOverrides.logbackXml`
+(a per-cluster overrides Secret; a checksum annotation rolls the nodes when a setting
+changes), and it applies to the primary pool and all NiFiNodeGroup pools. Removing
+`spec.logging` restores the image's shipped `logback.xml` on the next roll. Use
+`configOverrides.logbackXml` instead when you need custom appenders or the sifting/request
+loggers; setting both is rejected because both render `conf/logback.xml`. The baseline
+tracks the NiFi 2.x default, so an image whose shipped `logback.xml` differs will lag it —
+the `configOverrides.logbackXml` escape hatch always reflects exactly what you write.
 
 ## Pod customization
 

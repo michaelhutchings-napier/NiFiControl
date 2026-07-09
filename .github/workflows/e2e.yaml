@@ -24,6 +24,7 @@ jobs:
         target:
           - integration-registry-kind
           - integration-configoverrides-kind
+          - integration-logging-kind
           - integration-portsvc-kind
           - integration-clusterports-kind
           - integration-controllerconfig-kind

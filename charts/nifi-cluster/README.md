@@ -57,8 +57,11 @@ are merged into the node configuration after the operator-managed settings, so a
 override wins and removing it restores the image default. Keys the operator
 manages (web listener, TLS keystores, sensitive properties key, cluster/ZooKeeper
 wiring, heap arguments) are rejected — use the dedicated fields instead.
-`configOverrides.logbackXml` replaces the logging configuration wholesale, and the
-`pod` block adds pod metadata, image pull secrets, a ServiceAccount, sidecars,
+The `logging` block tunes `conf/logback.xml` for the common cases (root and per-logger
+levels, `nifi-app.log` retention, mirroring the app log to stdout) by overlaying onto
+NiFi's default logback so its noise suppression is kept; `configOverrides.logbackXml`
+remains the wholesale escape hatch for custom appenders (the two are mutually exclusive).
+The `pod` block adds pod metadata, image pull secrets, a ServiceAccount, sidecars,
 init containers, and extra volumes/mounts (for example custom NAR libraries):
 
 ```bash

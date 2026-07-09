@@ -39,6 +39,7 @@ helm-template: helm-crds-check
 	$(HELM) template metrics $(HELM_CLUSTER_CHART) --namespace dataflows --set replicas=3 --set coordination.zookeeperConnectString=zookeeper.dataflows.svc:2181 --set metrics.enabled=true --set metrics.serviceMonitor.enabled=true >/dev/null
 	$(HELM) template operator-sm $(HELM_CHART) --namespace nificontrol-system --set metrics.serviceMonitor.enabled=true >/dev/null
 	$(HELM) template allinone $(HELM_CLUSTER_CHART) --namespace dataflows --set-json 'parameterContexts=[{"name":"pc","spec":{"parameters":[{"name":"k","value":"v"}]}}]' --set-json 'users=[{"name":"u","spec":{"identity":"CN=u"}}]' --set-json 'flowBundles=[{"name":"fb","spec":{"version":"1.0.0"}}]' >/dev/null
+	$(HELM) template logging $(HELM_CLUSTER_CHART) --namespace dataflows --set-json 'logging={"level":"DEBUG","console":true,"loggers":{"org.apache.nifi.web.security":"TRACE"},"retention":{"maxFileSize":"250MB","maxHistory":7,"totalSizeCap":"10GB"}}' >/dev/null
 
 .PHONY: helm-verify
 helm-verify: helm-lint helm-template
@@ -98,6 +99,10 @@ integration-registry-kind:
 .PHONY: integration-configoverrides-kind
 integration-configoverrides-kind:
 	./hack/test-config-overrides-kind.sh
+
+.PHONY: integration-logging-kind
+integration-logging-kind:
+	./hack/test-logging-kind.sh
 
 .PHONY: integration-secureauth-kind
 integration-secureauth-kind:

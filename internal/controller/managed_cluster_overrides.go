@@ -100,6 +100,10 @@ fi
 `
 
 func hasConfigOverrides(cluster *nifiv1alpha1.NiFiCluster) bool {
+	if cluster.Spec.Logging != nil {
+		// spec.logging renders conf/logback.xml through the same override payload.
+		return true
+	}
 	overrides := cluster.Spec.ConfigOverrides
 	if overrides == nil {
 		return false
@@ -135,40 +139,45 @@ func (o resolvedConfigOverrides) empty() bool { return len(o.data) == 0 }
 // validated here — property-name shape, no newlines, and the operator-managed denylist —
 // because admission cannot see Secret contents.
 func resolveConfigOverrides(ctx context.Context, c client.Client, cluster *nifiv1alpha1.NiFiCluster) (resolvedConfigOverrides, error) {
-	overrides := cluster.Spec.ConfigOverrides
-	if overrides == nil {
-		return resolvedConfigOverrides{}, nil
-	}
-	properties := map[string]string{}
-	for _, reference := range overrides.NiFiPropertiesFrom {
-		secret := &corev1.Secret{}
-		if err := c.Get(ctx, types.NamespacedName{Name: reference.Name, Namespace: cluster.Namespace}, secret); err != nil {
-			return resolvedConfigOverrides{}, fmt.Errorf("configOverrides.nifiPropertiesFrom Secret %q: %w", reference.Name, err)
-		}
-		for key, value := range secret.Data {
-			if err := validateOverrideProperty(key, string(value)); err != nil {
-				return resolvedConfigOverrides{}, fmt.Errorf("configOverrides.nifiPropertiesFrom Secret %q key %q: %w", reference.Name, key, err)
+	data := map[string]string{}
+	if overrides := cluster.Spec.ConfigOverrides; overrides != nil {
+		properties := map[string]string{}
+		for _, reference := range overrides.NiFiPropertiesFrom {
+			secret := &corev1.Secret{}
+			if err := c.Get(ctx, types.NamespacedName{Name: reference.Name, Namespace: cluster.Namespace}, secret); err != nil {
+				return resolvedConfigOverrides{}, fmt.Errorf("configOverrides.nifiPropertiesFrom Secret %q: %w", reference.Name, err)
 			}
+			for key, value := range secret.Data {
+				if err := validateOverrideProperty(key, string(value)); err != nil {
+					return resolvedConfigOverrides{}, fmt.Errorf("configOverrides.nifiPropertiesFrom Secret %q key %q: %w", reference.Name, key, err)
+				}
+				properties[key] = string(value)
+			}
+		}
+		for key, value := range overrides.NiFiProperties {
 			properties[key] = string(value)
 		}
+		bootstrap := make(map[string]string, len(overrides.BootstrapProperties))
+		for key, value := range overrides.BootstrapProperties {
+			bootstrap[key] = string(value)
+		}
+		if body := renderPropertiesFileLines(properties); body != "" {
+			data[overridesNiFiPropertiesKey] = body
+		}
+		if body := renderPropertiesFileLines(bootstrap); body != "" {
+			data[overridesBootstrapKey] = body
+		}
+		if overrides.LogbackXml != "" {
+			data[overridesLogbackKey] = overrides.LogbackXml
+		}
 	}
-	for key, value := range overrides.NiFiProperties {
-		properties[key] = string(value)
+	// spec.logging renders conf/logback.xml too; the CRD makes it mutually exclusive with
+	// configOverrides.logbackXml, so this is the only writer of the logback key when set.
+	if cluster.Spec.Logging != nil {
+		data[overridesLogbackKey] = renderManagedClusterLogback(cluster.Spec.Logging)
 	}
-	bootstrap := make(map[string]string, len(overrides.BootstrapProperties))
-	for key, value := range overrides.BootstrapProperties {
-		bootstrap[key] = string(value)
-	}
-
-	data := map[string]string{}
-	if body := renderPropertiesFileLines(properties); body != "" {
-		data[overridesNiFiPropertiesKey] = body
-	}
-	if body := renderPropertiesFileLines(bootstrap); body != "" {
-		data[overridesBootstrapKey] = body
-	}
-	if overrides.LogbackXml != "" {
-		data[overridesLogbackKey] = overrides.LogbackXml
+	if len(data) == 0 {
+		return resolvedConfigOverrides{}, nil
 	}
 	return resolvedConfigOverrides{data: data, checksum: overridesChecksumOf(data)}, nil
 }

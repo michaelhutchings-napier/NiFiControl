@@ -220,8 +220,30 @@ configOverrides:
   bootstrapProperties: {}
     # java.arg.debug: -XX:+PrintFlagsFinal
   # Replaces conf/logback.xml wholesale (custom log levels, appenders, retention).
-  # Removing it restores the image's shipped logback.xml on the next rollout.
+  # Removing it restores the image's shipped logback.xml on the next rollout. For the
+  # common cases, prefer the dedicated `logging:` section below (mutually exclusive with
+  # this) — it overlays your settings onto NiFi's default logback so its noise suppression
+  # is kept. Use this escape hatch for custom appenders, syslog, and the like.
   logbackXml: ""
+
+# Node logging (conf/logback.xml) for the common cases, without hand-writing logback XML.
+# The operator overlays these onto NiFi's default logback, so the deprecation log, the
+# user-vs-app log split, and the ZooKeeper/Spring/Jetty noise suppression are preserved —
+# raising the level to DEBUG stays useful instead of unleashing a firehose. Omit the whole
+# block (leave it commented) to keep the image default. Mutually exclusive with
+# configOverrides.logbackXml.
+logging: {}
+  # level: INFO            # root level: TRACE | DEBUG | INFO | WARN | ERROR | OFF
+  # # Per-logger levels for targeted troubleshooting without raising the whole app.
+  # loggers:
+  #   org.apache.nifi.web.security: DEBUG
+  #   org.apache.nifi.controller.repository: WARN
+  # console: false         # also send nifi-app.log to stdout so `kubectl logs` shows it
+  # # Bound nifi-app.log on disk (other log files keep the image defaults).
+  # retention:
+  #   maxFileSize: 100MB
+  #   maxHistory: 30       # rolled archives kept
+  #   totalSizeCap: 3GB
 
 # Customize the generated NiFi node pods beyond the dedicated fields above. Operator-
 # managed metadata wins on conflicts; the volume names data / nificontrol-* and the

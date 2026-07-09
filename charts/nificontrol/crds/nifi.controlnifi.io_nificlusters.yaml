@@ -1084,6 +1084,78 @@ spec:
                     default: 1g
                     type: string
                 type: object
+              logging:
+                description: |-
+                  Logging tunes node logging (conf/logback.xml) for the common cases — the root log
+                  level, individual logger levels, mirroring the application log to stdout, and the
+                  nifi-app.log retention — without hand-writing logback XML. The operator overlays
+                  these settings onto the NiFi 2.x logback baseline it ships, so all of NiFi's default
+                  noise suppression is preserved. It applies to every node in the cluster, including
+                  NiFiNodeGroup pools. For anything beyond these knobs (custom appenders, syslog, the
+                  sifting or request loggers) use spec.configOverrides.logbackXml instead; the two are
+                  mutually exclusive because both render conf/logback.xml. Only applies to Internal
+                  (operator-managed) clusters.
+                properties:
+                  console:
+                    description: |-
+                      Console, when true, adds a stdout appender to the root logger so nifi-app.log lines
+                      also surface in `kubectl logs` for the node — convenient for container log collection.
+                      NiFi's bootstrap, stdout, and stderr already reach the console regardless.
+                    type: boolean
+                  level:
+                    default: INFO
+                    description: Level is the root logger level — the default verbosity
+                      for nifi-app.log.
+                    enum:
+                    - TRACE
+                    - DEBUG
+                    - INFO
+                    - WARN
+                    - ERROR
+                    - "OFF"
+                    type: string
+                  loggers:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Loggers sets levels for individual named loggers, for targeted troubleshooting without
+                      raising the whole-application level — for example {"org.apache.nifi.web.security":
+                      "DEBUG"}. An entry for a logger NiFi already configures changes its level in place; a
+                      new name adds a logger. Keys are dotted Java package or class names.
+                    maxProperties: 64
+                    type: object
+                    x-kubernetes-validations:
+                    - message: logger names must be dotted Java package or class names
+                        (alphanumerics, dots, underscores, and dollar signs)
+                      rule: self.all(k, k.matches('^[A-Za-z0-9_.$]+$'))
+                    - message: logger levels must be one of TRACE, DEBUG, INFO, WARN,
+                        ERROR, OFF
+                      rule: self.all(k, self[k] in ['TRACE','DEBUG','INFO','WARN','ERROR','OFF'])
+                  retention:
+                    description: |-
+                      Retention tunes the rolling policy of nifi-app.log, the main application log. Other log
+                      files keep the image defaults.
+                    properties:
+                      maxFileSize:
+                        description: |-
+                          MaxFileSize is the size at which the active log rolls over, for example "100MB" or
+                          "1GB". A bare number is bytes.
+                        pattern: ^[0-9]+(|KB|MB|GB)$
+                        type: string
+                      maxHistory:
+                        description: MaxHistory is the number of rolled archives to
+                          keep before the oldest are deleted.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      totalSizeCap:
+                        description: |-
+                          TotalSizeCap bounds the combined size of all archives, for example "3GB"; the oldest
+                          are deleted once it is exceeded. A bare number is bytes.
+                        pattern: ^[0-9]+(|KB|MB|GB)$
+                        type: string
+                    type: object
+                type: object
               maxTimerDrivenThreadCount:
                 description: |-
                   MaxTimerDrivenThreadCount sets NiFi's controller-level maximum timer-driven thread
@@ -8414,6 +8486,11 @@ spec:
             - message: 'authentication requires internalTLS: NiFi only allows user
                 authentication over HTTPS'
               rule: '!has(self.authentication) || (has(self.internalTLS) && self.internalTLS.enabled)'
+            - message: logging only applies to operator-managed (Internal) clusters
+              rule: '!has(self.logging) || self.mode != ''External'''
+            - message: 'set either spec.logging or spec.configOverrides.logbackXml,
+                not both: both render conf/logback.xml'
+              rule: '!(has(self.logging) && has(self.configOverrides) && has(self.configOverrides.logbackXml))'
           status:
             properties:
               conditions:

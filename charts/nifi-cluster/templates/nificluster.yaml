@@ -243,6 +243,10 @@ spec:
     logbackXml: {{ . | quote }}
     {{- end }}
   {{- end }}
+  {{- with .Values.logging }}
+  logging:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- if or .Values.pod.labels .Values.pod.annotations .Values.pod.imagePullSecrets .Values.pod.serviceAccountName .Values.pod.securityContext .Values.pod.containerSecurityContext .Values.pod.openShiftSCC (not (kindIs "invalid" .Values.pod.terminationGracePeriodSeconds)) .Values.pod.probes .Values.pod.hostAliases .Values.pod.dnsPolicy .Values.pod.dnsConfig .Values.pod.extraVolumes .Values.pod.extraVolumeMounts .Values.pod.extraInitContainers .Values.pod.extraContainers }}
   pod:
     {{- with .Values.pod.labels }}

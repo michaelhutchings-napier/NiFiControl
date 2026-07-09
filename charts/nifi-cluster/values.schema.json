@@ -798,6 +798,49 @@
       },
       "additionalProperties": false
     },
+    "logging": {
+      "type": "object",
+      "description": "Node logging (conf/logback.xml) for the common cases, overlaid onto NiFi's default logback. Mutually exclusive with configOverrides.logbackXml.",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "OFF"],
+          "description": "Root logger level (default verbosity for nifi-app.log)."
+        },
+        "loggers": {
+          "type": "object",
+          "description": "Per-logger levels keyed by dotted Java package or class name.",
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "OFF"]
+          }
+        },
+        "console": {
+          "type": "boolean",
+          "description": "Also send nifi-app.log to stdout so `kubectl logs` shows it."
+        },
+        "retention": {
+          "type": "object",
+          "description": "Rolling policy for nifi-app.log; other log files keep the image defaults.",
+          "properties": {
+            "maxFileSize": {
+              "type": "string",
+              "pattern": "^[0-9]+(|KB|MB|GB)$"
+            },
+            "maxHistory": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "totalSizeCap": {
+              "type": "string",
+              "pattern": "^[0-9]+(|KB|MB|GB)$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "pod": {
       "type": "object",
       "description": "Customize the generated NiFi node pods: extra metadata, image pull secrets, ServiceAccount, sidecars, init containers, and additional volumes/mounts.",
