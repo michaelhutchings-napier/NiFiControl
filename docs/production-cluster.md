@@ -137,6 +137,39 @@ Intra-cluster clustering and mTLS use the short `<pod>.<svc>.<ns>.svc` names (re
 the pod's DNS search path), so they work regardless; `clusterDomain` matters when something
 reaches a node by its full `.svc.<domain>` FQDN.
 
+## Cluster coordination (ZooKeeper or Kubernetes)
+
+A clustered NiFi (`replicas > 1`) needs leader election (which node is the Cluster Coordinator
+and Primary Node) and a place to store cluster-wide component state. `spec.coordination.mode`
+picks how:
+
+- **`ZooKeeper`** (default) — an external ZooKeeper ensemble, via
+  `spec.coordination.zookeeperConnectString`. This is required for `replicas > 1` in this mode.
+- **`Kubernetes`** — NiFi 2.x's native primitives: **Lease-based leader election**
+  (`coordination.k8s.io` Leases) and a **ConfigMap state provider**. No ZooKeeper to run,
+  scale, or secure. `zookeeperConnectString` is not needed and is ignored.
+
+```yaml
+spec:
+  mode: Internal
+  replicas: 3
+  coordination:
+    mode: Kubernetes
+    # leasePrefix: my-cluster   # defaults to the cluster's resource name
+```
+
+In Kubernetes mode the operator provisions a ServiceAccount for the node pods plus a Role and
+RoleBinding granting the `leases` and `configmaps` access the leader-election manager and state
+provider require, and runs the pods under that ServiceAccount. (If you set
+`spec.pod.serviceAccountName`, the operator binds the Role to your ServiceAccount instead of
+creating its own.) The Leases and state ConfigMaps are named with `leasePrefix` — defaulting to
+the cluster's resource name — so several clusters can share a namespace without colliding.
+Switching a cluster back to `ZooKeeper` mode prunes the operator-created RBAC.
+
+Use Kubernetes mode to drop the ZooKeeper dependency entirely; keep ZooKeeper mode if you
+already operate an ensemble or need NiFi nodes to coordinate with non-Kubernetes NiFi
+instances through the same ZooKeeper.
+
 ## Controller thread pool
 
 `spec.maxTimerDrivenThreadCount` sets NiFi's controller-level maximum timer-driven thread

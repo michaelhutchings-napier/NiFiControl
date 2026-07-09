@@ -10,7 +10,23 @@ rules:
       - ""
     resources:
       - persistentvolumeclaims
+      - serviceaccounts
       - services
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  # Kubernetes coordination mode: the operator provisions the NiFi pods' Role/RoleBinding
+  # granting Lease + ConfigMap access (it already holds those below, so it can grant them).
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - rolebindings
+      - roles
     verbs:
       - create
       - delete

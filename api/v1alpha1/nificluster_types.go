@@ -580,14 +580,37 @@ type NiFiClusterProbeTuning struct {
 	SuccessThreshold *int32 `json:"successThreshold,omitempty"`
 }
 
+const (
+	// CoordinationModeZooKeeper coordinates the cluster through an external ZooKeeper ensemble.
+	CoordinationModeZooKeeper = "ZooKeeper"
+	// CoordinationModeKubernetes coordinates the cluster through native Kubernetes Leases and
+	// a ConfigMap state provider, with no ZooKeeper.
+	CoordinationModeKubernetes = "Kubernetes"
+)
+
 type NiFiClusterCoordinationSpec struct {
-	// Required when replicas is greater than one.
-	// +kubebuilder:validation:MinLength=1
-	ZooKeeperConnectString string `json:"zookeeperConnectString"`
+	// Mode selects how a clustered NiFi coordinates. "ZooKeeper" (default) uses an external
+	// ZooKeeper ensemble for leader election and cluster state. "Kubernetes" uses NiFi 2.x's
+	// native primitives — Lease-based leader election and a ConfigMap state provider — so no
+	// ZooKeeper is required; the operator provisions the Lease/ConfigMap RBAC for the node
+	// pods. zookeeperConnectString is ignored in Kubernetes mode.
+	// +kubebuilder:validation:Enum=ZooKeeper;Kubernetes
+	// +kubebuilder:default=ZooKeeper
+	// +optional
+	Mode string `json:"mode,omitempty"`
+	// ZooKeeperConnectString is the ensemble connect string (host:port,host:port). Required
+	// when mode is ZooKeeper and replicas is greater than one; ignored in Kubernetes mode.
+	// +optional
+	ZooKeeperConnectString string `json:"zookeeperConnectString,omitempty"`
 	// +kubebuilder:default="/nifi"
 	ZooKeeperRootNode string `json:"zookeeperRootNode,omitempty"`
 	// +kubebuilder:default="2 mins"
 	ElectionMaxWait string `json:"electionMaxWait,omitempty"`
+	// LeasePrefix namespaces the Kubernetes Leases and state ConfigMaps for this cluster
+	// (Kubernetes mode only), so multiple clusters can share a namespace without colliding.
+	// Defaults to the cluster's resource name when unset.
+	// +optional
+	LeasePrefix string `json:"leasePrefix,omitempty"`
 }
 
 // NiFiClusterScheduling configures pod placement for the managed NiFi StatefulSet.

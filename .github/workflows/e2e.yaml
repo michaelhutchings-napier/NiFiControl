@@ -27,6 +27,7 @@ jobs:
           - integration-portsvc-kind
           - integration-clusterports-kind
           - integration-controllerconfig-kind
+          - integration-k8scoord-kind
           - integration-restrictedpsa-kind
           - integration-graceterm-kind
           - integration-probetuning-kind

@@ -73,15 +73,31 @@ prop_replace 'nifi.cluster.node.address' "${NIFI_CLUSTER_ADDRESS:-${HOSTNAME}}"
 prop_replace 'nifi.cluster.node.protocol.port' "${NIFI_CLUSTER_NODE_PROTOCOL_PORT:-}"
 prop_replace 'nifi.cluster.load.balance.host' "${NIFI_CLUSTER_LOAD_BALANCE_HOST:-}"
 prop_replace 'nifi.cluster.load.balance.port' "${NIFI_CLUSTER_LOAD_BALANCE_PORT:-6342}"
-prop_replace 'nifi.zookeeper.connect.string' "${NIFI_ZK_CONNECT_STRING:-}"
+` + coordinationScript + `prop_replace 'nifi.cluster.flow.election.max.wait.time' "${NIFI_ELECTION_MAX_WAIT:-5 mins}"
+prop_replace 'nifi.cluster.flow.election.max.candidates' "${NIFI_ELECTION_MAX_CANDIDATES:-}"
+` + applyConfigOverridesScript + `exec "${NIFI_HOME}/bin/nifi.sh" run`
+
+// coordinationScript configures cluster coordination in nifi.properties and
+// state-management.xml. It is shared by the plaintext and TLS start commands. Both the
+// ZooKeeper provider (Connect String / Root Node) and the Kubernetes ConfigMap provider
+// (ConfigMap Name Prefix) blocks ship in the image's state-management.xml; the operator only
+// selects one via nifi.state.management.provider.cluster and the leader-election
+// implementation, driven by env vars. The defaults reproduce the ZooKeeper behavior, so a
+// standalone or ZooKeeper-mode node is unchanged; Kubernetes mode leaves NIFI_ZK_CONNECT_STRING
+// empty and sets the provider/implementation/lease-prefix env vars.
+const coordinationScript = `prop_replace 'nifi.zookeeper.connect.string' "${NIFI_ZK_CONNECT_STRING:-}"
 prop_replace 'nifi.zookeeper.root.node' "${NIFI_ZK_ROOT_NODE:-/nifi}"
 if [ -n "${NIFI_ZK_CONNECT_STRING:-}" ]; then
   sed -i "s|<property name=\"Connect String\">[^<]*</property>|<property name=\"Connect String\">${NIFI_ZK_CONNECT_STRING}</property>|" "${NIFI_HOME}/conf/state-management.xml"
   sed -i "s|<property name=\"Root Node\">[^<]*</property>|<property name=\"Root Node\">${NIFI_ZK_ROOT_NODE:-/nifi}</property>|" "${NIFI_HOME}/conf/state-management.xml"
 fi
-prop_replace 'nifi.cluster.flow.election.max.wait.time' "${NIFI_ELECTION_MAX_WAIT:-5 mins}"
-prop_replace 'nifi.cluster.flow.election.max.candidates' "${NIFI_ELECTION_MAX_CANDIDATES:-}"
-` + applyConfigOverridesScript + `exec "${NIFI_HOME}/bin/nifi.sh" run`
+prop_replace 'nifi.state.management.provider.cluster' "${NIFI_CLUSTER_STATE_PROVIDER:-zk-provider}"
+prop_replace 'nifi.cluster.leader.election.implementation' "${NIFI_LEADER_ELECTION_IMPL:-CuratorLeaderElectionManager}"
+prop_replace 'nifi.cluster.leader.election.kubernetes.lease.prefix' "${NIFI_K8S_LEASE_PREFIX:-}"
+if [ -n "${NIFI_K8S_LEASE_PREFIX:-}" ]; then
+  sed -i "s|<property name=\"ConfigMap Name Prefix\">[^<]*</property>|<property name=\"ConfigMap Name Prefix\">${NIFI_K8S_LEASE_PREFIX}</property>|" "${NIFI_HOME}/conf/state-management.xml"
+fi
+`
 
 // managedNiFiStartCommandTLS configures NiFi 2.10 for HTTPS and certificate
 // authentication. The PKCS12 keystore/truststore are mounted from a cert-manager (or
@@ -170,13 +186,7 @@ prop_replace 'nifi.cluster.node.address' "${NIFI_CLUSTER_ADDRESS:-${HOSTNAME}}"
 prop_replace 'nifi.cluster.node.protocol.port' "${NIFI_CLUSTER_NODE_PROTOCOL_PORT:-}"
 prop_replace 'nifi.cluster.load.balance.host' "${NIFI_CLUSTER_LOAD_BALANCE_HOST:-}"
 prop_replace 'nifi.cluster.load.balance.port' "${NIFI_CLUSTER_LOAD_BALANCE_PORT:-6342}"
-prop_replace 'nifi.zookeeper.connect.string' "${NIFI_ZK_CONNECT_STRING:-}"
-prop_replace 'nifi.zookeeper.root.node' "${NIFI_ZK_ROOT_NODE:-/nifi}"
-if [ -n "${NIFI_ZK_CONNECT_STRING:-}" ]; then
-  sed -i "s|<property name=\"Connect String\">[^<]*</property>|<property name=\"Connect String\">${NIFI_ZK_CONNECT_STRING}</property>|" "${NIFI_HOME}/conf/state-management.xml"
-  sed -i "s|<property name=\"Root Node\">[^<]*</property>|<property name=\"Root Node\">${NIFI_ZK_ROOT_NODE:-/nifi}</property>|" "${NIFI_HOME}/conf/state-management.xml"
-fi
-prop_replace 'nifi.cluster.flow.election.max.wait.time' "${NIFI_ELECTION_MAX_WAIT:-2 mins}"
+` + coordinationScript + `prop_replace 'nifi.cluster.flow.election.max.wait.time' "${NIFI_ELECTION_MAX_WAIT:-2 mins}"
 prop_replace 'nifi.cluster.flow.election.max.candidates' "${NIFI_ELECTION_MAX_CANDIDATES:-}"
 cp "${NIFI_CONFIG_DIR}/authorizers.xml" "${NIFI_HOME}/conf/authorizers.xml"
 ` + applyConfigOverridesScript + `exec "${NIFI_HOME}/bin/nifi.sh" run`
@@ -202,12 +212,13 @@ func resolvedClusterMode(cluster *nifiv1alpha1.NiFiCluster) nifiv1alpha1.Cluster
 
 func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, cluster *nifiv1alpha1.NiFiCluster) (ctrl.Result, error) {
 	replicas := managedClusterReplicas(cluster)
-	if replicas > 1 && (cluster.Spec.Coordination == nil || cluster.Spec.Coordination.ZooKeeperConnectString == "") {
-		message := "spec.coordination.zookeeperConnectString is required when replicas is greater than one."
-		if managedClusterStatusNeedsUpdate(cluster, false, managedClusterEndpoint(cluster), nil, "ConfigurationInvalid") {
-			return ctrl.Result{}, markManagedClusterNotReady(ctx, r.Client, cluster, "ConfigurationInvalid", message, managedClusterEndpoint(cluster), nil)
+	if replicas > 1 {
+		if message := managedClusterCoordinationConfigError(cluster); message != "" {
+			if managedClusterStatusNeedsUpdate(cluster, false, managedClusterEndpoint(cluster), nil, "ConfigurationInvalid") {
+				return ctrl.Result{}, markManagedClusterNotReady(ctx, r.Client, cluster, "ConfigurationInvalid", message, managedClusterEndpoint(cluster), nil)
+			}
+			return ctrl.Result{}, nil
 		}
-		return ctrl.Result{}, nil
 	}
 
 	var tlsMaterials *clusterTLSMaterials
@@ -223,6 +234,12 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 		tlsMaterials = materials
 	}
 
+	// Kubernetes coordination mode needs the node pods' ServiceAccount and Lease/ConfigMap
+	// RBAC in place before the StatefulSet pods start; this also prunes the RBAC when the
+	// cluster is in (or reverts to) ZooKeeper mode.
+	if err := r.reconcileManagedClusterCoordinationRBAC(ctx, cluster); err != nil {
+		return r.managedClusterReconcileFailed(ctx, cluster, "CoordinationRBACReconcileFailed", err)
+	}
 	if err := r.reconcileManagedClusterService(ctx, cluster, false); err != nil {
 		return r.managedClusterReconcileFailed(ctx, cluster, "ServiceReconcileFailed", err)
 	}
@@ -508,6 +525,7 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls
 		VolumeMounts:    managedClusterVolumeMounts(cluster.Spec.Storage, tls, hasConfigOverrides(cluster), managedClusterAuthVolumeSource(cluster, auth) != ""),
 	}
 	podSpec := corev1.PodSpec{
+		ServiceAccountName:            managedClusterPodServiceAccountName(cluster),
 		SecurityContext:               managedClusterPodSecurityContext(cluster),
 		TerminationGracePeriodSeconds: managedClusterTerminationGracePeriodSeconds(cluster),
 		InitContainers:                []corev1.Container{managedClusterDataInitializer(cluster)},
@@ -863,11 +881,24 @@ func nodeEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials
 			corev1.EnvVar{Name: "NIFI_CLUSTER_IS_NODE", Value: "true"},
 			corev1.EnvVar{Name: "NIFI_CLUSTER_ADDRESS", Value: fmt.Sprintf("$(POD_NAME).%s.$(POD_NAMESPACE).svc", managedClusterHeadlessServiceName(cluster))},
 			corev1.EnvVar{Name: "NIFI_CLUSTER_NODE_PROTOCOL_PORT", Value: strconv.Itoa(int(managedClusterClusterProtocolPort(cluster)))},
-			corev1.EnvVar{Name: "NIFI_ZK_CONNECT_STRING", Value: coordination.ZooKeeperConnectString},
-			corev1.EnvVar{Name: "NIFI_ZK_ROOT_NODE", Value: managedClusterZooKeeperRootNode(cluster)},
 			corev1.EnvVar{Name: "NIFI_ELECTION_MAX_WAIT", Value: managedClusterElectionMaxWait(cluster)},
 			corev1.EnvVar{Name: "NIFI_ELECTION_MAX_CANDIDATES", Value: strconv.Itoa(int(managedClusterReplicas(cluster)))},
 		)
+		if managedClusterCoordinationMode(cluster) == nifiv1alpha1.CoordinationModeKubernetes {
+			// Native Kubernetes coordination: Lease-based leader election + the ConfigMap
+			// state provider. NIFI_ZK_CONNECT_STRING is left unset so the start script blanks
+			// the ZooKeeper connect string and skips the ZooKeeper provider entirely.
+			environment = append(environment,
+				corev1.EnvVar{Name: "NIFI_CLUSTER_STATE_PROVIDER", Value: "kubernetes-provider"},
+				corev1.EnvVar{Name: "NIFI_LEADER_ELECTION_IMPL", Value: "KubernetesLeaderElectionManager"},
+				corev1.EnvVar{Name: "NIFI_K8S_LEASE_PREFIX", Value: managedClusterLeasePrefix(cluster)},
+			)
+		} else {
+			environment = append(environment,
+				corev1.EnvVar{Name: "NIFI_ZK_CONNECT_STRING", Value: coordination.ZooKeeperConnectString},
+				corev1.EnvVar{Name: "NIFI_ZK_ROOT_NODE", Value: managedClusterZooKeeperRootNode(cluster)},
+			)
+		}
 	} else {
 		environment = append(environment, corev1.EnvVar{Name: "NIFI_CLUSTER_IS_NODE", Value: "false"})
 	}
@@ -1273,6 +1304,39 @@ func managedClusterElectionMaxWait(cluster *nifiv1alpha1.NiFiCluster) string {
 		return cluster.Spec.Coordination.ElectionMaxWait
 	}
 	return "2 mins"
+}
+
+// managedClusterCoordinationConfigError returns a non-empty message when a clustered NiFi's
+// coordination configuration is invalid. It is only meaningful for replicas > 1: a clustered
+// NiFi always needs spec.coordination (to pick a mode and address peers), and ZooKeeper mode
+// additionally needs a connect string. Kubernetes mode needs neither.
+func managedClusterCoordinationConfigError(cluster *nifiv1alpha1.NiFiCluster) string {
+	if cluster.Spec.Coordination == nil {
+		return "spec.coordination is required when replicas is greater than one."
+	}
+	if managedClusterCoordinationMode(cluster) == nifiv1alpha1.CoordinationModeZooKeeper && cluster.Spec.Coordination.ZooKeeperConnectString == "" {
+		return "spec.coordination.zookeeperConnectString is required when replicas is greater than one in ZooKeeper mode."
+	}
+	return ""
+}
+
+// managedClusterCoordinationMode returns the cluster coordination mode, defaulting to
+// ZooKeeper when unset.
+func managedClusterCoordinationMode(cluster *nifiv1alpha1.NiFiCluster) string {
+	if cluster.Spec.Coordination != nil && cluster.Spec.Coordination.Mode == nifiv1alpha1.CoordinationModeKubernetes {
+		return nifiv1alpha1.CoordinationModeKubernetes
+	}
+	return nifiv1alpha1.CoordinationModeZooKeeper
+}
+
+// managedClusterLeasePrefix namespaces the Kubernetes Leases and state ConfigMaps for a
+// cluster in Kubernetes coordination mode, defaulting to the cluster's resource name so
+// multiple clusters can share a namespace without colliding on Lease names.
+func managedClusterLeasePrefix(cluster *nifiv1alpha1.NiFiCluster) string {
+	if cluster.Spec.Coordination != nil && cluster.Spec.Coordination.LeasePrefix != "" {
+		return cluster.Spec.Coordination.LeasePrefix
+	}
+	return managedClusterResourceName(cluster)
 }
 
 func httpProbeHandler(path string, portName string) corev1.ProbeHandler {

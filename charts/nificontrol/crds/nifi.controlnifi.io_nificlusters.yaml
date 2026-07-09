@@ -712,15 +712,32 @@ spec:
                   electionMaxWait:
                     default: 2 mins
                     type: string
+                  leasePrefix:
+                    description: |-
+                      LeasePrefix namespaces the Kubernetes Leases and state ConfigMaps for this cluster
+                      (Kubernetes mode only), so multiple clusters can share a namespace without colliding.
+                      Defaults to the cluster's resource name when unset.
+                    type: string
+                  mode:
+                    default: ZooKeeper
+                    description: |-
+                      Mode selects how a clustered NiFi coordinates. "ZooKeeper" (default) uses an external
+                      ZooKeeper ensemble for leader election and cluster state. "Kubernetes" uses NiFi 2.x's
+                      native primitives — Lease-based leader election and a ConfigMap state provider — so no
+                      ZooKeeper is required; the operator provisions the Lease/ConfigMap RBAC for the node
+                      pods. zookeeperConnectString is ignored in Kubernetes mode.
+                    enum:
+                    - ZooKeeper
+                    - Kubernetes
+                    type: string
                   zookeeperConnectString:
-                    description: Required when replicas is greater than one.
-                    minLength: 1
+                    description: |-
+                      ZooKeeperConnectString is the ensemble connect string (host:port,host:port). Required
+                      when mode is ZooKeeper and replicas is greater than one; ignored in Kubernetes mode.
                     type: string
                   zookeeperRootNode:
                     default: /nifi
                     type: string
-                required:
-                - zookeeperConnectString
                 type: object
               deletionPolicy:
                 default: Orphan

@@ -128,6 +128,7 @@ func desiredNodeGroupStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, group *n
 		VolumeMounts:    managedClusterVolumeMounts(storage, tls, hasConfigOverrides(cluster), managedClusterAuthVolumeSource(cluster, auth) != ""),
 	}
 	podSpec := corev1.PodSpec{
+		ServiceAccountName:            managedClusterPodServiceAccountName(cluster),
 		SecurityContext:               managedClusterPodSecurityContext(cluster),
 		TerminationGracePeriodSeconds: managedClusterTerminationGracePeriodSeconds(cluster),
 		InitContainers:                []corev1.Container{nodeDataInitializer(nodeGroupImage(cluster, group), managedClusterImagePullPolicy(cluster), managedClusterContainerSecurityContext(cluster))},

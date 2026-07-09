@@ -547,6 +547,10 @@
         "electionMaxWait"
       ],
       "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["ZooKeeper", "Kubernetes"]
+        },
         "zookeeperConnectString": {
           "type": "string"
         },
@@ -554,6 +558,9 @@
           "type": "string"
         },
         "electionMaxWait": {
+          "type": "string"
+        },
+        "leasePrefix": {
           "type": "string"
         }
       }

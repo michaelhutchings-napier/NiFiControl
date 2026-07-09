@@ -135,11 +135,19 @@ spec:
     offloadData: {{ .Values.scaleDown.offloadData }}
     timeoutSeconds: {{ .Values.scaleDown.timeoutSeconds }}
     onTimeout: {{ .Values.scaleDown.onTimeout }}
-  {{- with .Values.coordination.zookeeperConnectString }}
+  {{- if or .Values.coordination.zookeeperConnectString (eq .Values.coordination.mode "Kubernetes") }}
   coordination:
+    {{- with .Values.coordination.mode }}
+    mode: {{ . }}
+    {{- end }}
+    {{- with .Values.coordination.zookeeperConnectString }}
     zookeeperConnectString: {{ . | quote }}
-    zookeeperRootNode: {{ $.Values.coordination.zookeeperRootNode | quote }}
-    electionMaxWait: {{ $.Values.coordination.electionMaxWait | quote }}
+    {{- end }}
+    zookeeperRootNode: {{ .Values.coordination.zookeeperRootNode | quote }}
+    electionMaxWait: {{ .Values.coordination.electionMaxWait | quote }}
+    {{- with .Values.coordination.leasePrefix }}
+    leasePrefix: {{ . | quote }}
+    {{- end }}
   {{- end }}
   {{- with .Values.api.uri }}
   api:

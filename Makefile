@@ -122,6 +122,10 @@ integration-clusterports-kind:
 integration-controllerconfig-kind:
 	./hack/test-controller-config-kind.sh
 
+.PHONY: integration-k8scoord-kind
+integration-k8scoord-kind:
+	./hack/test-kubernetes-coordination-kind.sh
+
 .PHONY: integration-restrictedpsa-kind
 integration-restrictedpsa-kind:
 	./hack/test-restricted-psa-kind.sh

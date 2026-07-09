@@ -130,9 +130,17 @@ scaleDown:
 # Required when replicas is greater than one. NiFiControl does not provision
 # ZooKeeper in this first managed-cluster release.
 coordination:
+  # How a clustered NiFi (replicas > 1) coordinates: "ZooKeeper" (external ensemble) or
+  # "Kubernetes" (native Lease-based leader election + a ConfigMap state provider, no
+  # ZooKeeper — the operator provisions the Lease/ConfigMap RBAC for the node pods).
+  mode: ZooKeeper
+  # Required for replicas > 1 in ZooKeeper mode; ignored in Kubernetes mode.
   zookeeperConnectString: ""
   zookeeperRootNode: /nifi
   electionMaxWait: 2 mins
+  # Kubernetes mode only: namespaces the Leases/state ConfigMaps so multiple clusters can
+  # share a namespace. Defaults to the cluster's resource name when empty.
+  leasePrefix: ""
 
 # Override the internal service endpoint, for example when an ingress is used.
 api:
