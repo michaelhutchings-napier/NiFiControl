@@ -829,6 +829,9 @@
         "containerSecurityContext": {
           "type": "object"
         },
+        "openShiftSCC": {
+          "type": "string"
+        },
         "terminationGracePeriodSeconds": {
           "type": ["integer", "null"],
           "minimum": 0

@@ -243,7 +243,7 @@ spec:
     logbackXml: {{ . | quote }}
     {{- end }}
   {{- end }}
-  {{- if or .Values.pod.labels .Values.pod.annotations .Values.pod.imagePullSecrets .Values.pod.serviceAccountName .Values.pod.securityContext .Values.pod.containerSecurityContext (not (kindIs "invalid" .Values.pod.terminationGracePeriodSeconds)) .Values.pod.probes .Values.pod.hostAliases .Values.pod.dnsPolicy .Values.pod.dnsConfig .Values.pod.extraVolumes .Values.pod.extraVolumeMounts .Values.pod.extraInitContainers .Values.pod.extraContainers }}
+  {{- if or .Values.pod.labels .Values.pod.annotations .Values.pod.imagePullSecrets .Values.pod.serviceAccountName .Values.pod.securityContext .Values.pod.containerSecurityContext .Values.pod.openShiftSCC (not (kindIs "invalid" .Values.pod.terminationGracePeriodSeconds)) .Values.pod.probes .Values.pod.hostAliases .Values.pod.dnsPolicy .Values.pod.dnsConfig .Values.pod.extraVolumes .Values.pod.extraVolumeMounts .Values.pod.extraInitContainers .Values.pod.extraContainers }}
   pod:
     {{- with .Values.pod.labels }}
     labels:
@@ -256,6 +256,9 @@ spec:
     {{- with .Values.pod.containerSecurityContext }}
     containerSecurityContext:
       {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.pod.openShiftSCC }}
+    openShiftSCC: {{ . | quote }}
     {{- end }}
     {{- with .Values.pod.annotations }}
     annotations:

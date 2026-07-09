@@ -125,7 +125,7 @@ func TestManagedClusterCoordinationRBACReconcileAndPrune(t *testing.T) {
 	key := types.NamespacedName{Name: name, Namespace: cluster.Namespace}
 
 	// Kubernetes mode: provision the ServiceAccount, Role, and RoleBinding.
-	if err := r.reconcileManagedClusterCoordinationRBAC(ctx, cluster); err != nil {
+	if err := r.reconcileManagedClusterPodRBAC(ctx, cluster); err != nil {
 		t.Fatalf("reconcile (Kubernetes mode): %v", err)
 	}
 	if err := k8sClient.Get(ctx, key, &corev1.ServiceAccount{}); err != nil {
@@ -149,7 +149,7 @@ func TestManagedClusterCoordinationRBACReconcileAndPrune(t *testing.T) {
 	// Reverting to ZooKeeper mode prunes the RBAC.
 	cluster.Spec.Coordination.Mode = nifiv1alpha1.CoordinationModeZooKeeper
 	cluster.Spec.Coordination.ZooKeeperConnectString = "zk.default.svc:2181"
-	if err := r.reconcileManagedClusterCoordinationRBAC(ctx, cluster); err != nil {
+	if err := r.reconcileManagedClusterPodRBAC(ctx, cluster); err != nil {
 		t.Fatalf("reconcile (ZooKeeper mode): %v", err)
 	}
 	if err := k8sClient.Get(ctx, key, &rbacv1.RoleBinding{}); !apierrors.IsNotFound(err) {
@@ -159,6 +159,69 @@ func TestManagedClusterCoordinationRBACReconcileAndPrune(t *testing.T) {
 		t.Fatalf("Role not pruned: %v", err)
 	}
 	if err := k8sClient.Get(ctx, key, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("ServiceAccount not pruned: %v", err)
+	}
+}
+
+func TestManagedClusterOpenShiftSCC(t *testing.T) {
+	scheme := managedClusterTestScheme()
+	// ZooKeeper coordination (no Lease/ConfigMap RBAC) but an OpenShift SCC grant requested:
+	// the operator still provisions a ServiceAccount and a 'use' RoleBinding for the SCC.
+	cluster := hardeningCluster()
+	cluster.Spec.Pod = &nifiv1alpha1.NiFiClusterPodSpec{OpenShiftSCC: "nonroot-v2"}
+
+	// The pods run under the operator-provisioned ServiceAccount even without coordination RBAC.
+	if got := managedClusterPodServiceAccountName(cluster); got != managedClusterCoordinationServiceAccountName(cluster) {
+		t.Fatalf("SCC pod SA = %q, want %q", got, managedClusterCoordinationServiceAccountName(cluster))
+	}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	r := &NiFiClusterReconciler{Client: k8sClient, Scheme: scheme}
+	ctx := context.Background()
+	name := managedClusterCoordinationServiceAccountName(cluster)
+	sccKey := types.NamespacedName{Name: name + "-scc", Namespace: cluster.Namespace}
+
+	if err := r.reconcileManagedClusterPodRBAC(ctx, cluster); err != nil {
+		t.Fatalf("reconcile (SCC): %v", err)
+	}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: cluster.Namespace}, &corev1.ServiceAccount{}); err != nil {
+		t.Fatalf("ServiceAccount not created for SCC: %v", err)
+	}
+	// No Kubernetes coordination -> no leases/configmaps Role.
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: cluster.Namespace}, &rbacv1.Role{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("unexpected coordination Role in ZooKeeper mode: %v", err)
+	}
+	role := &rbacv1.Role{}
+	if err := k8sClient.Get(ctx, sccKey, role); err != nil {
+		t.Fatalf("SCC Role not created: %v", err)
+	}
+	if !roleGrants(role, openShiftSCCAPIGroup, openShiftSCCResource) {
+		t.Fatalf("SCC Role missing 'use' grant: %#v", role.Rules)
+	}
+	if len(role.Rules) != 1 || len(role.Rules[0].Verbs) != 1 || role.Rules[0].Verbs[0] != "use" ||
+		len(role.Rules[0].ResourceNames) != 1 || role.Rules[0].ResourceNames[0] != "nonroot-v2" {
+		t.Fatalf("SCC Role rule wrong: %#v", role.Rules)
+	}
+	binding := &rbacv1.RoleBinding{}
+	if err := k8sClient.Get(ctx, sccKey, binding); err != nil {
+		t.Fatalf("SCC RoleBinding not created: %v", err)
+	}
+	if len(binding.Subjects) != 1 || binding.Subjects[0].Name != name {
+		t.Fatalf("SCC RoleBinding subject wrong: %#v", binding.Subjects)
+	}
+
+	// Clearing openShiftSCC prunes the SCC RBAC and the ServiceAccount.
+	cluster.Spec.Pod.OpenShiftSCC = ""
+	if err := r.reconcileManagedClusterPodRBAC(ctx, cluster); err != nil {
+		t.Fatalf("reconcile (SCC cleared): %v", err)
+	}
+	if err := k8sClient.Get(ctx, sccKey, &rbacv1.RoleBinding{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("SCC RoleBinding not pruned: %v", err)
+	}
+	if err := k8sClient.Get(ctx, sccKey, &rbacv1.Role{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("SCC Role not pruned: %v", err)
+	}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: cluster.Namespace}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("ServiceAccount not pruned: %v", err)
 	}
 }

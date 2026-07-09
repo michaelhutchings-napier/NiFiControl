@@ -357,6 +357,33 @@ pair it with writable `emptyDir` mounts over those paths via `extraVolumes`/
 `extraVolumeMounts`. Sidecars and extra init containers you add carry their own
 `securityContext`.
 
+### OpenShift (SecurityContextConstraints)
+
+The `apache/nifi` image runs as a fixed **uid/gid 1000** and its install directory is owned by
+`1000:1000` (not group `0`), so it is **not** arbitrary-UID compatible: OpenShift's default
+`restricted-v2` SCC — which assigns a random UID from the namespace range — both rejects the
+operator's `runAsUser: 1000` and would leave that UID unable to write the install directory.
+
+`spec.pod.openShiftSCC` grants the node pods an SCC that permits the fixed uid/gid. Set it to
+**`nonroot-v2`** (the recommended built-in — it admits any non-root UID, so the operator's
+uid/gid 1000 pods are accepted):
+
+```yaml
+spec:
+  pod:
+    openShiftSCC: nonroot-v2
+```
+
+The operator then provisions a ServiceAccount for the node pods (unless you set
+`serviceAccountName`) and a Role/RoleBinding granting `use` on that SCC, and runs the pods
+under it. Clearing the field prunes that RBAC. Leave it empty off OpenShift — the
+`SecurityContextConstraints` API only exists there, and the operator's own `use` grant is inert
+elsewhere.
+
+> **Note:** this path is verified by unit tests and rendered manifests but has **not yet been
+> exercised on a live OpenShift cluster**; validate it in a non-production project before
+> relying on it, and check that your cluster actually offers the `nonroot-v2` SCC.
+
 `spec.pod.terminationGracePeriodSeconds` controls how long Kubernetes waits after `SIGTERM`
 before force-killing a node pod. NiFi is stateful — on shutdown it stops processors,
 checkpoints the flowfile repository, and flushes the content and provenance repositories —

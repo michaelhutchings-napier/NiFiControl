@@ -474,6 +474,15 @@ type NiFiClusterPodSpec struct {
 	// extra init containers carry their own securityContext.
 	// +optional
 	ContainerSecurityContext *corev1.SecurityContext `json:"containerSecurityContext,omitempty"`
+	// OpenShiftSCC is the name of an OpenShift SecurityContextConstraints to grant the node
+	// pods' ServiceAccount, for running on OpenShift where the default restricted-v2 SCC
+	// rejects the fixed uid/gid 1000 the apache/nifi image requires. Set it to "nonroot-v2"
+	// (recommended) — that built-in SCC admits any non-root uid, so the operator's uid/gid
+	// 1000 pods are accepted. The operator provisions a ServiceAccount (unless
+	// serviceAccountName is set) and a Role/RoleBinding granting 'use' on this SCC. Leave
+	// empty on non-OpenShift clusters; the SecurityContextConstraints API only exists there.
+	// +optional
+	OpenShiftSCC string `json:"openShiftSCC,omitempty"`
 	// TerminationGracePeriodSeconds is how long Kubernetes waits after sending SIGTERM
 	// before forcibly killing a node pod (SIGKILL). NiFi needs time to stop gracefully —
 	// stop processors, checkpoint the flowfile repository, and flush the content and

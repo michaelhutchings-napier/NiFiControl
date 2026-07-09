@@ -6511,6 +6511,16 @@ spec:
                     description: Labels are added to the node pods. Operator-managed
                       labels take precedence.
                     type: object
+                  openShiftSCC:
+                    description: |-
+                      OpenShiftSCC is the name of an OpenShift SecurityContextConstraints to grant the node
+                      pods' ServiceAccount, for running on OpenShift where the default restricted-v2 SCC
+                      rejects the fixed uid/gid 1000 the apache/nifi image requires. Set it to "nonroot-v2"
+                      (recommended) — that built-in SCC admits any non-root uid, so the operator's uid/gid
+                      1000 pods are accepted. The operator provisions a ServiceAccount (unless
+                      serviceAccountName is set) and a Role/RoleBinding granting 'use' on this SCC. Leave
+                      empty on non-OpenShift clusters; the SecurityContextConstraints API only exists there.
+                    type: string
                   probes:
                     description: |-
                       Probes tunes the timing and thresholds of the operator's startup, liveness, and

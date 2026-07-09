@@ -246,6 +246,12 @@ pod:
   containerSecurityContext: {}
     # allowPrivilegeEscalation: false
     # capabilities: {drop: [ALL]}
+  # OpenShift: name of a SecurityContextConstraints to grant the node pods' ServiceAccount.
+  # The default restricted-v2 SCC rejects the fixed uid/gid 1000 the apache/nifi image needs;
+  # set this to "nonroot-v2" so the operator grants that SCC (it admits any non-root uid). The
+  # operator provisions a ServiceAccount and a Role/RoleBinding granting 'use'. Leave empty off
+  # OpenShift.
+  openShiftSCC: ""   # e.g. nonroot-v2
   # How long Kubernetes waits after SIGTERM before force-killing a node pod. NiFi needs
   # time to stop gracefully (checkpoint the flowfile repo, flush content/provenance repos).
   # Defaults to 60s when unset (Kubernetes' own default is only 30). Keep it above the NiFi

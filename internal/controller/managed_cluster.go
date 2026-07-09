@@ -234,11 +234,11 @@ func (r *NiFiClusterReconciler) reconcileManagedCluster(ctx context.Context, clu
 		tlsMaterials = materials
 	}
 
-	// Kubernetes coordination mode needs the node pods' ServiceAccount and Lease/ConfigMap
-	// RBAC in place before the StatefulSet pods start; this also prunes the RBAC when the
-	// cluster is in (or reverts to) ZooKeeper mode.
-	if err := r.reconcileManagedClusterCoordinationRBAC(ctx, cluster); err != nil {
-		return r.managedClusterReconcileFailed(ctx, cluster, "CoordinationRBACReconcileFailed", err)
+	// The node pods' ServiceAccount and any Lease/ConfigMap (Kubernetes coordination) or
+	// OpenShift SCC RBAC must exist before the StatefulSet pods start; this also prunes RBAC
+	// that is no longer needed (e.g. reverting to ZooKeeper mode or clearing openShiftSCC).
+	if err := r.reconcileManagedClusterPodRBAC(ctx, cluster); err != nil {
+		return r.managedClusterReconcileFailed(ctx, cluster, "PodRBACReconcileFailed", err)
 	}
 	if err := r.reconcileManagedClusterService(ctx, cluster, false); err != nil {
 		return r.managedClusterReconcileFailed(ctx, cluster, "ServiceReconcileFailed", err)

@@ -35,6 +35,14 @@ rules:
       - patch
       - update
       - watch
+  # OpenShift only (spec.pod.openShiftSCC): the operator must hold 'use' on the SCC to grant
+  # it to the NiFi pods' ServiceAccount. Inert on non-OpenShift clusters (the API is absent).
+  - apiGroups:
+      - security.openshift.io
+    resources:
+      - securitycontextconstraints
+    verbs:
+      - use
   - apiGroups:
       - apps
     resources:
