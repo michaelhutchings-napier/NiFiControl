@@ -1,0 +1,46 @@
+{{/*
+Optional NiFi resource CRs stamped out alongside the NiFiCluster from values lists, so one
+`helm install` brings up the cluster together with its parameter contexts, users, flows, and
+so on. Each list item is {name, spec, [annotations], [labels]}; spec is passed through
+verbatim. The operator reconciles the CRs asynchronously, so intra-release ordering does not
+matter (a flowDeployment referencing a bundle/context in the same release waits for them).
+
+$clusterRefKinds: kinds whose spec takes a clusterRef; the chart injects its own cluster when
+the item omits it. $plainKinds: kinds with no clusterRef (flow bundles are cluster-agnostic;
+autoscalers reference their target explicitly), passed through untouched.
+*/}}
+{{- $clusterRefKinds := dict
+  "parameterContexts" "NiFiParameterContext"
+  "users" "NiFiUser"
+  "userGroups" "NiFiUserGroup"
+  "policies" "NiFiPolicy"
+  "registryClients" "NiFiRegistryClient"
+  "reportingTasks" "NiFiReportingTask"
+  "controllerServices" "NiFiControllerService"
+  "flowDeployments" "NiFiFlowDeployment"
+  "processGroups" "NiFiProcessGroup"
+  "remoteProcessGroups" "NiFiRemoteProcessGroup"
+  "processors" "NiFiProcessor"
+  "connections" "NiFiConnection"
+  "funnels" "NiFiFunnel"
+  "inputPorts" "NiFiInputPort"
+  "outputPorts" "NiFiOutputPort"
+  "labels" "NiFiLabel"
+  "nodeGroups" "NiFiNodeGroup"
+  "backups" "NiFiBackup"
+  "restores" "NiFiRestore"
+-}}
+{{- $plainKinds := dict
+  "flowBundles" "NiFiFlowBundle"
+  "autoscalers" "NiFiAutoscaler"
+-}}
+{{- range $key, $kind := $clusterRefKinds }}
+{{- range $item := (index $.Values $key) }}
+{{ include "nifi-cluster.resource" (dict "root" $ "kind" $kind "item" $item "injectClusterRef" true) }}
+{{- end }}
+{{- end }}
+{{- range $key, $kind := $plainKinds }}
+{{- range $item := (index $.Values $key) }}
+{{ include "nifi-cluster.resource" (dict "root" $ "kind" $kind "item" $item "injectClusterRef" false) }}
+{{- end }}
+{{- end }}

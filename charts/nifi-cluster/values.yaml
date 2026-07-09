@@ -329,3 +329,56 @@ authentication:
 deletionPolicy: Delete
 driftPolicy:
   mode: Reconcile
+
+# ---------------------------------------------------------------------------------------------
+# Optional resources stamped out alongside this cluster, so one `helm install` brings up the
+# cluster together with its parameter contexts, users, flows, and so on. Each entry is
+# {name, spec, [annotations], [labels]}; `spec` is the CR spec verbatim (see the CRD or
+# config/samples for fields). For every kind except flowBundles and autoscalers, `clusterRef`
+# is filled in with THIS cluster when you omit it, so you set it once.
+#
+# Example:
+#   parameterContexts:
+#     - name: payments-prod
+#       spec:
+#         parameters:
+#           - {name: kafka.bootstrap.servers, value: kafka:9092}
+#           - name: db.password
+#             sensitiveValueFrom: {secretKeyRef: {name: payments-db, key: password}}
+#   flowDeployments:
+#     - name: payments-prod
+#       spec:
+#         source: {bundleRef: {name: payments}, version: 1.0.0}
+#         target: {parentProcessGroupRef: {root: true}, processGroupName: payments-release}
+#         parameterContextRef: {name: payments-prod}
+
+# Security / access
+users: []
+userGroups: []
+policies: []
+
+# Registry, parameters, controller services, reporting
+registryClients: []
+parameterContexts: []
+controllerServices: []
+reportingTasks: []
+
+# Flows
+flowBundles: []          # NiFiFlowBundle — cluster-agnostic flow content (no clusterRef)
+flowDeployments: []
+processGroups: []
+remoteProcessGroups: []
+
+# Individual flow components (usually managed via a flowBundle instead)
+processors: []
+connections: []
+funnels: []
+inputPorts: []
+outputPorts: []
+labels: []
+
+# Topology and operations
+nodeGroups: []
+autoscalers: []          # NiFiAutoscaler — references its target explicitly (no clusterRef)
+backups: []
+restores: []

@@ -38,6 +38,7 @@ helm-template: helm-crds-check
 	$(HELM) template clustered $(HELM_CLUSTER_CHART) --namespace dataflows --set replicas=3 --set coordination.zookeeperConnectString=zookeeper.dataflows.svc:2181 >/dev/null
 	$(HELM) template metrics $(HELM_CLUSTER_CHART) --namespace dataflows --set replicas=3 --set coordination.zookeeperConnectString=zookeeper.dataflows.svc:2181 --set metrics.enabled=true --set metrics.serviceMonitor.enabled=true >/dev/null
 	$(HELM) template operator-sm $(HELM_CHART) --namespace nificontrol-system --set metrics.serviceMonitor.enabled=true >/dev/null
+	$(HELM) template allinone $(HELM_CLUSTER_CHART) --namespace dataflows --set-json 'parameterContexts=[{"name":"pc","spec":{"parameters":[{"name":"k","value":"v"}]}}]' --set-json 'users=[{"name":"u","spec":{"identity":"CN=u"}}]' --set-json 'flowBundles=[{"name":"fb","spec":{"version":"1.0.0"}}]' >/dev/null
 
 .PHONY: helm-verify
 helm-verify: helm-lint helm-template

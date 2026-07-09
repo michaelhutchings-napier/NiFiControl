@@ -66,3 +66,47 @@ helm upgrade --install production ./charts/nifi-cluster \
   --namespace dataflows \
   --set 'configOverrides.nifiProperties.nifi\.queue\.swap\.threshold=40000'
 ```
+
+## Bundling resources with the cluster (one config file)
+
+By default this chart renders only the `NiFiCluster`, and you apply parameter contexts, users,
+flows, and other resources as their own CRs (see `config/samples/`). If you would rather manage
+them in one place, the chart also stamps them out from `values.yaml` lists, so a single
+`helm install` brings up the cluster together with everything it needs:
+
+```yaml
+# values.yaml
+parameterContexts:
+  - name: payments-prod
+    spec:
+      parameters:
+        - {name: kafka.bootstrap.servers, value: kafka:9092}
+        - name: db.password
+          sensitiveValueFrom: {secretKeyRef: {name: payments-db, key: password}}
+users:
+  - name: alice
+    spec: {identity: "CN=alice"}
+flowBundles:
+  - name: payments
+    spec: {version: "1.0.0", source: {snapshot: {flowContents: {identifier: payments-flow, name: payments}}}}
+flowDeployments:
+  - name: payments-prod
+    spec:
+      source: {bundleRef: {name: payments}, version: "1.0.0"}
+      target: {parentProcessGroupRef: {root: true}, processGroupName: payments-release}
+      parameterContextRef: {name: payments-prod}
+```
+
+Each list item is `{name, spec, [annotations], [labels]}`, where `spec` is the CR spec verbatim
+(consult the CRD or `config/samples/` for the fields). Available lists: `users`, `userGroups`,
+`policies`, `registryClients`, `parameterContexts`, `controllerServices`, `reportingTasks`,
+`flowBundles`, `flowDeployments`, `processGroups`, `remoteProcessGroups`, `processors`,
+`connections`, `funnels`, `inputPorts`, `outputPorts`, `labels`, `nodeGroups`, `autoscalers`,
+`backups`, `restores`.
+
+For every kind except `flowBundles` (cluster-agnostic flow content) and `autoscalers` (which
+reference their target explicitly), `clusterRef` is filled in with **this** cluster when you
+omit it — so you set it once. The operator reconciles the CRs asynchronously, so ordering within
+the release does not matter: a `flowDeployments` entry that references a bundle and parameter
+context created in the same release simply waits until they exist. The lists all default to
+empty, so leaving them out keeps the chart a cluster-only release.
