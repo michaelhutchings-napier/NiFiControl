@@ -380,6 +380,12 @@ under it. Clearing the field prunes that RBAC. Leave it empty off OpenShift — 
 `SecurityContextConstraints` API only exists there, and the operator's own `use` grant is inert
 elsewhere.
 
+**Custom SCCs** work the same way — `openShiftSCC` is just a name, so you can point it at an SCC
+your cluster admin created instead of a built-in. The operator holds `use` on all SCCs, so it
+can grant any of them; you are responsible for two things: the named SCC must **already exist**
+(the operator never creates SCCs) and it must **admit the pods' security context** — uid/gid
+1000, `runAsNonRoot`, `fsGroup`, and dropped capabilities — or admission still fails.
+
 > **Note:** this path is verified by unit tests and rendered manifests but has **not yet been
 > exercised on a live OpenShift cluster**; validate it in a non-production project before
 > relying on it, and check that your cluster actually offers the `nonroot-v2` SCC.

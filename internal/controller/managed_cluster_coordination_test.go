@@ -226,6 +226,28 @@ func TestManagedClusterOpenShiftSCC(t *testing.T) {
 	}
 }
 
+func TestManagedClusterOpenShiftCustomSCC(t *testing.T) {
+	// A custom SCC name flows through unchanged to the Role's resourceNames — the operator
+	// grants 'use' on whatever is named, not just the built-in nonroot-v2.
+	scheme := managedClusterTestScheme()
+	cluster := hardeningCluster()
+	cluster.Spec.Pod = &nifiv1alpha1.NiFiClusterPodSpec{OpenShiftSCC: "acme-nifi-scc"}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	r := &NiFiClusterReconciler{Client: k8sClient, Scheme: scheme}
+	ctx := context.Background()
+	if err := r.reconcileManagedClusterPodRBAC(ctx, cluster); err != nil {
+		t.Fatalf("reconcile (custom SCC): %v", err)
+	}
+	role := &rbacv1.Role{}
+	key := types.NamespacedName{Name: managedClusterCoordinationServiceAccountName(cluster) + "-scc", Namespace: cluster.Namespace}
+	if err := k8sClient.Get(ctx, key, role); err != nil {
+		t.Fatalf("custom SCC Role not created: %v", err)
+	}
+	if len(role.Rules) != 1 || len(role.Rules[0].ResourceNames) != 1 || role.Rules[0].ResourceNames[0] != "acme-nifi-scc" {
+		t.Fatalf("custom SCC not honored in Role: %#v", role.Rules)
+	}
+}
+
 func roleGrants(role *rbacv1.Role, group, resource string) bool {
 	for _, rule := range role.Rules {
 		hasGroup := false
