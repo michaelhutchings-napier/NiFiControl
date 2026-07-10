@@ -58,16 +58,22 @@ never installs it.
 ### TLS clusters
 
 On a cluster with `internalTLS.enabled`, NiFi serves metrics over HTTPS and the endpoint
-requires authentication (NiFi 2.x accepts a client certificate or a bearer token). The
-operator renders the ServiceMonitor with `scheme: https`, `serverName` set to the Service FQDN,
-and a `tlsConfig` referencing the operator-managed client certificate Secret
-(`ca.crt`/`tls.crt`/`tls.key`). Two prerequisites apply:
+requires authentication and authorization (read on `/flow`). The operator renders the
+ServiceMonitor with `scheme: https`, `serverName` set to the Service FQDN, and a `tlsConfig`
+referencing the operator-managed client certificate Secret (`ca.crt`/`tls.crt`/`tls.key`). That
+client identity is NiFi's **Initial Admin**, which NiFi seeds with `read` on `/flow`, so
+**metrics scraping works out of the box on a secured cluster** — no extra policy required.
+(Verified end to end by `hack/test-metrics-tls-kind.sh`.) Two operational notes:
 
-1. The Prometheus instance must be able to read that Secret (Prometheus Operator loads the
-   referenced keys), and
-2. the client-certificate identity must be **authorized to read** in NiFi. Until policy
-   automation lands (a future `NiFiPolicy`), grant the operator client identity read access, or
-   set `serviceMonitor.insecureSkipVerify: true` only for development.
+1. The Prometheus instance must be able to read that Secret — it lives in the cluster's
+   namespace, so a cross-namespace Prometheus needs access to it (the Prometheus Operator loads
+   the referenced keys). `serviceMonitor.insecureSkipVerify: true` disables TLS **server**
+   verification and is for development only.
+2. To scrape with a **dedicated least-privilege identity** instead of the admin certificate,
+   issue a client certificate for a `NiFiUser`, grant it read on `/flow` with a `NiFiPolicy`
+   (`resource: /flow`, `action: read`), and use your own ServiceMonitor whose `tlsConfig`
+   references that identity's Secret. The operator-rendered ServiceMonitor always scrapes as the
+   operator client identity.
 
 ## Operator metrics
 

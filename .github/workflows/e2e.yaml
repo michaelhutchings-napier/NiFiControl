@@ -36,6 +36,7 @@ jobs:
           - integration-secureauth-kind
           - integration-tls-autoreload-kind
           - integration-tls-pernode-kind
+          - integration-metrics-tls-kind
           - integration-oidc-kind
           - integration-oidc-tls-kind
           - integration-reportingtask-kind

@@ -114,6 +114,10 @@ integration-tls-autoreload-kind:
 integration-tls-pernode-kind:
 	./hack/test-tls-pernode-kind.sh
 
+.PHONY: integration-metrics-tls-kind
+integration-metrics-tls-kind:
+	./hack/test-metrics-tls-kind.sh
+
 .PHONY: integration-secureauth-kind
 integration-secureauth-kind:
 	./hack/test-secure-auth-kind.sh
