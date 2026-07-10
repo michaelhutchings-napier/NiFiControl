@@ -188,6 +188,13 @@ internalTLS:
   autoReload:
     enabled: false
     interval: "10 secs"   # NiFi duration: e.g. "10 secs", "500 ms", "5 mins"
+  # Per-node certificates: issue each node pod its own certificate + private key via the
+  # cert-manager CSI driver (csi.cert-manager.io), instead of one shared server certificate.
+  # Each node's key is generated in-pod and never stored centrally; each cert carries a
+  # distinct identity mapped to the node role, so the cluster still forms and scales.
+  # Requires cert-manager-csi-driver installed; selfSigned/issuerRef only (not external).
+  perNodeCertificates:
+    enabled: false
 
 # Prometheus metrics. NiFi 2.x always serves Prometheus-format metrics from its REST API
 # at /nifi-api/flow/metrics/prometheus on the web port, so enabling metrics only controls

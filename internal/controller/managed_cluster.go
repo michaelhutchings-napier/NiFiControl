@@ -127,11 +127,38 @@ prop_replace 'nifi.web.https.host' "${NIFI_WEB_HTTPS_HOST:-0.0.0.0}"
 prop_replace 'nifi.web.https.port' "${NIFI_WEB_HTTPS_PORT}"
 prop_replace 'nifi.web.proxy.host' "${NIFI_WEB_PROXY_HOST}"
 prop_replace 'nifi.web.proxy.context.path' "${NIFI_WEB_PROXY_CONTEXT_PATH:-}"
-prop_replace 'nifi.security.keystore' "${NIFI_SECURITY_DIR}/keystore.p12"
+nificontrol_keystore="${NIFI_SECURITY_DIR}/keystore.p12"
+nificontrol_truststore="${NIFI_SECURITY_DIR}/truststore.p12"
+if [ "${NIFI_TLS_PER_NODE:-false}" = "true" ]; then
+  # Per-node certificates: the cert-manager CSI driver mounts this pod's own tls.crt/tls.key/ca.crt
+  # (PEM). Build the PKCS12 keystore (this node's identity) and truststore (the CA) NiFi consumes,
+  # and map every per-node CN (node-<pod>) to the shared node authorization identity.
+  node_tls_dir="/opt/nifi/nifi-current/nificontrol-node-tls"
+  mkdir -p "${node_tls_dir}"
+  nificontrol_keystore="${node_tls_dir}/keystore.p12"
+  nificontrol_truststore="${node_tls_dir}/truststore.p12"
+  rm -f "${nificontrol_keystore}" "${nificontrol_truststore}"
+  openssl pkcs12 -export -name nifi-node \
+    -in "${NIFI_SECURITY_DIR}/tls.crt" -inkey "${NIFI_SECURITY_DIR}/tls.key" -certfile "${NIFI_SECURITY_DIR}/ca.crt" \
+    -out "${nificontrol_keystore}" -passout "pass:${NIFI_KEYSTORE_PASSWORD}"
+  "${JAVA_HOME}/bin/keytool" -importcert -noprompt -alias nificontrol-ca -file "${NIFI_SECURITY_DIR}/ca.crt" \
+    -keystore "${nificontrol_truststore}" -storetype PKCS12 -storepass "${NIFI_KEYSTORE_PASSWORD}"
+  # These identity-mapping keys are not present in the stock nifi.properties, and prop_replace only
+  # rewrites existing "key=" lines (it cannot add new ones), so append them — guarded for idempotency
+  # in case conf is persisted across restarts.
+  if ! grep -q '^nifi.security.identity.mapping.pattern.nificontrolnode=' "${nifi_props_file}"; then
+    printf '%s\n' \
+      'nifi.security.identity.mapping.pattern.nificontrolnode=^CN=node-.*$' \
+      'nifi.security.identity.mapping.value.nificontrolnode=node' \
+      'nifi.security.identity.mapping.transform.nificontrolnode=NONE' \
+      >> "${nifi_props_file}"
+  fi
+fi
+prop_replace 'nifi.security.keystore' "${nificontrol_keystore}"
 prop_replace 'nifi.security.keystoreType' 'PKCS12'
 prop_replace 'nifi.security.keystorePasswd' "${NIFI_KEYSTORE_PASSWORD}"
 prop_replace 'nifi.security.keyPasswd' "${NIFI_KEYSTORE_PASSWORD}"
-prop_replace 'nifi.security.truststore' "${NIFI_SECURITY_DIR}/truststore.p12"
+prop_replace 'nifi.security.truststore' "${nificontrol_truststore}"
 prop_replace 'nifi.security.truststoreType' 'PKCS12'
 prop_replace 'nifi.security.truststorePasswd' "${NIFI_KEYSTORE_PASSWORD}"
 prop_replace 'nifi.security.needClientAuth' "${NIFI_NEED_CLIENT_AUTH:-true}"
@@ -161,7 +188,7 @@ if [ -f "${auth_ca}" ]; then
     # OIDC has no custom truststore path: add the CA to a writable copy of the server
     # truststore (a superset that still trusts the cluster/mTLS CA) and use strategy NIFI.
     oidc_ts="${ts_dir}/oidc-truststore.p12"
-    cp "${NIFI_SECURITY_DIR}/truststore.p12" "${oidc_ts}"
+    cp "${nificontrol_truststore}" "${oidc_ts}"
     # cp inherits the read-only mode of the Secret-mounted source; keytool must rewrite it.
     chmod u+w "${oidc_ts}"
     "${keytool_bin}" -importcert -noprompt -alias nificontrol-oidc-ca -file "${auth_ca}" \
@@ -587,14 +614,33 @@ func nodeVolumes(storageEnabled bool, tls *clusterTLSMaterials, overridesSecret,
 		})
 	}
 	if tls != nil {
+		tlsVolume := corev1.Volume{
+			Name: managedTLSVolume,
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName:  tls.serverSecretName,
+				DefaultMode: ptr.To[int32](0o440),
+			}},
+		}
+		if tls.perNode {
+			// Each pod gets its own certificate issued in-pod by the cert-manager CSI driver;
+			// ${POD_NAME}/${POD_NAMESPACE} are expanded per pod so one set of attributes serves
+			// every node pool. The private key is generated in-pod and never stored centrally.
+			tlsVolume.VolumeSource = corev1.VolumeSource{CSI: &corev1.CSIVolumeSource{
+				Driver:   certManagerCSIDriverName,
+				ReadOnly: ptr.To(true),
+				VolumeAttributes: map[string]string{
+					"csi.cert-manager.io/issuer-name":  tls.csi.issuerName,
+					"csi.cert-manager.io/issuer-kind":  tls.csi.issuerKind,
+					"csi.cert-manager.io/issuer-group": tls.csi.issuerGroup,
+					"csi.cert-manager.io/common-name":  tls.csi.commonName,
+					"csi.cert-manager.io/dns-names":    tls.csi.dnsNames,
+					"csi.cert-manager.io/key-usages":   tls.csi.keyUsages,
+					"csi.cert-manager.io/fs-group":     "1000",
+				},
+			}}
+		}
 		volumes = append(volumes,
-			corev1.Volume{
-				Name: managedTLSVolume,
-				VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
-					SecretName:  tls.serverSecretName,
-					DefaultMode: ptr.To[int32](0o440),
-				}},
-			},
+			tlsVolume,
 			corev1.Volume{
 				Name: managedTLSConfigVol,
 				VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
@@ -862,6 +908,11 @@ func nodeEnvironment(cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials
 				corev1.EnvVar{Name: "NIFI_TLS_AUTORELOAD_ENABLED", Value: "true"},
 				corev1.EnvVar{Name: "NIFI_TLS_AUTORELOAD_INTERVAL", Value: managedClusterTLSAutoReloadInterval(cluster)},
 			)
+		}
+		// Per-node certificates: the CSI driver mounts PEM material; the start script builds the
+		// PKCS12 keystore/truststore in-pod and maps each node CN to the node identity.
+		if tls.perNode {
+			environment = append(environment, corev1.EnvVar{Name: "NIFI_TLS_PER_NODE", Value: "true"})
 		}
 		// User authentication (single-user, LDAP, OIDC) only exists over HTTPS; the mode's
 		// login provider, credentials, and OIDC settings arrive through the environment.

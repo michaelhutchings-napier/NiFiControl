@@ -171,9 +171,11 @@ an operator client certificate (`clientAuth`), consumes the cert-manager PKCS12 
 directly, derives the NiFi initial admin and node identities from predictable common
 names, and rolls pods on certificate rotation. Optionally, `internalTLS.autoReload` turns on
 NiFi's SSL-context auto-reload so a rotated leaf certificate is picked up in place without
-restarting the nodes (a CA change still rolls them). See
+restarting the nodes (a CA change still rolls them); and `internalTLS.perNodeCertificates`
+issues each node its own certificate and in-pod-generated private key through the cert-manager
+CSI driver, instead of a single shared server certificate. See
 [docs/internal-tls.md](docs/internal-tls.md) for the trust model, ownership, rotation
-behaviour, the shared node-identity limitation, and migration from development HTTP.
+behaviour, shared vs per-node certificates, and migration from development HTTP.
 `insecureSkipVerify` is never used for managed clusters. Because NiFi does not seed the initial
 admin with root-process-group access on a fresh secured cluster, the operator grants its own
 identity that access before marking the cluster `Ready`, so it can manage the canvas without any

@@ -158,15 +158,46 @@ policies NiFi would have seeded had the flow existed. The step is idempotent, re
 it succeeds (reported as `AuthorizationBootstrapPending`), and is a no-op on insecure
 clusters (no managed authorizer) and external clusters (not the operator's to bootstrap).
 
-### Shared node identity limitation
+### Node certificates: shared (default) or per-node
 
-The cluster uses a **single shared server/node certificate** whose DNS SANs cover the
-Service names and a wildcard for the per-pod headless addresses
-(`*.<cluster>-nifi-headless.<ns>.svc`). All nodes therefore present the same identity,
-and a single `Node Identity` authorizer entry (`CN=<cluster>-node`) covers the cluster.
-This keeps the certificate stable as replicas scale, but it means individual nodes are not
-distinguished from one another in NiFi's authorizations. Per-node identities are a future
-enhancement.
+By default the cluster uses a **single shared server/node certificate** whose DNS SANs cover
+the Service names and a wildcard for the per-pod headless addresses
+(`*.<cluster>-nifi-headless.<ns>.svc`). All nodes present the same identity, and a single
+`Node Identity` authorizer entry (`CN=<cluster>-node`) covers the cluster. This keeps the
+certificate stable as replicas scale, and the shared private key is distributed to every node.
+
+Set `internalTLS.perNodeCertificates.enabled` to instead issue **each node pod its own
+certificate and private key**, through the cert-manager CSI driver:
+
+```yaml
+spec:
+  internalTLS:
+    enabled: true
+    selfSigned: {}            # or issuerRef; not supported with external
+    perNodeCertificates:
+      enabled: true
+```
+
+Each pod mounts a CSI ephemeral volume that the driver populates at startup with a certificate
+whose **private key is generated in-pod and never stored centrally** — stronger isolation than
+a shared keystore, where a single leaked key impersonates every node. The certificate carries a
+distinct per-node identity (`CN=node-<pod>`) and only that pod's own headless SAN. To keep the
+cluster forming and scaling without re-issuing authorizations on every replica change, the
+operator adds a NiFi identity-mapping rule (`^CN=node-.*$` → `node`) so every per-node
+certificate authorizes as the single node role; the operator's admin identity and NiFiUser
+identities are unaffected.
+
+Requirements and caveats:
+
+- The **cert-manager CSI driver** (`csi.cert-manager.io`) must be installed in the cluster. If
+  it is missing the cluster reports `TLSReady=False` (`CSIDriverMissing`) rather than leaving
+  pods stuck unable to mount their certificate volume.
+- Supported for the `selfSigned` and `issuerRef` providers only, not `external`.
+- The node keystore/truststore are built in-pod from the CSI-mounted PEM at startup, so a
+  per-node certificate is refreshed when its pod (re)starts (rollouts, scaling, upgrades);
+  `autoReload` does not apply to the in-pod-built keystore.
+- The operator's own mutual-TLS client is unchanged — it still uses the operator client
+  certificate and trusts nodes through the shared issuing CA that signs every per-node cert.
 
 ## TLS readiness gating
 

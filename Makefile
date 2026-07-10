@@ -41,6 +41,7 @@ helm-template: helm-crds-check
 	$(HELM) template allinone $(HELM_CLUSTER_CHART) --namespace dataflows --set-json 'parameterContexts=[{"name":"pc","spec":{"parameters":[{"name":"k","value":"v"}]}}]' --set-json 'users=[{"name":"u","spec":{"identity":"CN=u"}}]' --set-json 'flowBundles=[{"name":"fb","spec":{"version":"1.0.0"}}]' >/dev/null
 	$(HELM) template logging $(HELM_CLUSTER_CHART) --namespace dataflows --set-json 'logging={"level":"DEBUG","console":true,"loggers":{"org.apache.nifi.web.security":"TRACE"},"retention":{"maxFileSize":"250MB","maxHistory":7,"totalSizeCap":"10GB"}}' >/dev/null
 	$(HELM) template tls-autoreload $(HELM_CLUSTER_CHART) --namespace dataflows --set internalTLS.enabled=true --set internalTLS.autoReload.enabled=true --set internalTLS.autoReload.interval='15 secs' >/dev/null
+	$(HELM) template tls-pernode $(HELM_CLUSTER_CHART) --namespace dataflows --set replicas=2 --set coordination.mode=Kubernetes --set internalTLS.enabled=true --set internalTLS.perNodeCertificates.enabled=true >/dev/null
 
 .PHONY: helm-verify
 helm-verify: helm-lint helm-template
@@ -108,6 +109,10 @@ integration-logging-kind:
 .PHONY: integration-tls-autoreload-kind
 integration-tls-autoreload-kind:
 	./hack/test-tls-autoreload-kind.sh
+
+.PHONY: integration-tls-pernode-kind
+integration-tls-pernode-kind:
+	./hack/test-tls-pernode-kind.sh
 
 .PHONY: integration-secureauth-kind
 integration-secureauth-kind:

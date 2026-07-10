@@ -12,6 +12,7 @@ import (
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/certmanager"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -55,11 +56,76 @@ type clusterTLSMaterials struct {
 	nodeIdentity         string
 	proxyHosts           string
 	checksum             string
+	// perNode issues each node pod its own certificate through the cert-manager CSI driver
+	// rather than mounting a single shared server Secret; csi carries the volume attributes.
+	perNode bool
+	csi     csiCertParams
 }
+
+// csiCertParams are the cert-manager CSI driver volume attributes used to issue a per-node
+// certificate into each pod. The ${POD_NAME}/${POD_NAMESPACE} placeholders are expanded by
+// the driver, so one set of attributes serves every node pool.
+type csiCertParams struct {
+	issuerName  string
+	issuerKind  string
+	issuerGroup string
+	commonName  string
+	dnsNames    string
+	keyUsages   string
+}
+
+// perNodeNodeAuthzIdentity is the authorization identity every per-node certificate maps to
+// (via nifi.security.identity.mapping) so the cluster authorizes any node without enumerating
+// per-pod identities — which would otherwise roll the cluster on every scale change.
+const perNodeNodeAuthzIdentity = "node"
+
+// certManagerCSIDriverName is the CSI driver that issues per-node certificates.
+const certManagerCSIDriverName = "csi.cert-manager.io"
 
 // internalTLSEnabled reports whether the cluster requests operator-managed HTTPS/mTLS.
 func internalTLSEnabled(cluster *nifiv1alpha1.NiFiCluster) bool {
 	return cluster.Spec.InternalTLS != nil && cluster.Spec.InternalTLS.Enabled
+}
+
+// managedClusterPerNodeCertificatesEnabled reports whether each node pod should receive its
+// own certificate through the cert-manager CSI driver instead of a shared server Secret.
+func managedClusterPerNodeCertificatesEnabled(cluster *nifiv1alpha1.NiFiCluster) bool {
+	return internalTLSEnabled(cluster) && cluster.Spec.InternalTLS.External == nil &&
+		cluster.Spec.InternalTLS.PerNodeCertificates != nil && cluster.Spec.InternalTLS.PerNodeCertificates.Enabled
+}
+
+// managedClusterCSIDNSNames returns the cert-manager CSI dns-names attribute for a per-node
+// certificate: the pod's own headless address plus the shared Service names, with
+// ${POD_NAME}/${POD_NAMESPACE} placeholders the driver expands per pod. Node-group pods share
+// the primary headless Service, so this one value serves every pool.
+func managedClusterCSIDNSNames(cluster *nifiv1alpha1.NiFiCluster) string {
+	service := managedClusterResourceName(cluster)
+	headless := managedClusterHeadlessServiceName(cluster)
+	domain := managedClusterDomain(cluster)
+	names := []string{
+		"localhost",
+		fmt.Sprintf("${POD_NAME}.%s.${POD_NAMESPACE}.svc", headless),
+		fmt.Sprintf("${POD_NAME}.%s.${POD_NAMESPACE}.svc.%s", headless, domain),
+		fmt.Sprintf("%s.${POD_NAMESPACE}.svc", service),
+		fmt.Sprintf("%s.${POD_NAMESPACE}.svc.%s", service, domain),
+		fmt.Sprintf("%s.${POD_NAMESPACE}.svc", headless),
+		fmt.Sprintf("%s.${POD_NAMESPACE}.svc.%s", headless, domain),
+	}
+	return strings.Join(names, ",")
+}
+
+// csiDriverInstalled reports whether the cert-manager CSI driver is registered in the cluster,
+// so per-node certificates can surface a clear condition when it is missing rather than
+// leaving pods stuck unable to mount their certificate volume.
+func (r *NiFiClusterReconciler) csiDriverInstalled(ctx context.Context) (bool, error) {
+	driver := &storagev1.CSIDriver{}
+	if err := r.Get(ctx, types.NamespacedName{Name: certManagerCSIDriverName}, driver); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func managedClusterHTTPSPort(cluster *nifiv1alpha1.NiFiCluster) int32 {
@@ -114,12 +180,27 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterTLS(ctx context.Context, 
 		return nil, false, err
 	}
 
-	if err := r.reconcileServerCertificate(ctx, cluster, plan, issuer); err != nil {
-		if certmanager.IsCRDNotInstalled(err) {
-			return nil, false, r.markManagedClusterTLSNotReady(ctx, cluster, "CertManagerMissing",
-				"cert-manager CRDs are not installed; install cert-manager before enabling internalTLS.")
+	perNode := managedClusterPerNodeCertificatesEnabled(cluster)
+	if perNode {
+		// Per-node certificates are provisioned in-pod by the cert-manager CSI driver rather
+		// than by an operator-created server Certificate; fail fast with a clear condition when
+		// the driver is missing so pods do not hang unable to mount their certificate volume.
+		installed, err := r.csiDriverInstalled(ctx)
+		if err != nil {
+			return nil, false, err
 		}
-		return nil, false, err
+		if !installed {
+			return nil, false, r.markManagedClusterTLSNotReady(ctx, cluster, "CSIDriverMissing",
+				fmt.Sprintf("internalTLS.perNodeCertificates requires the cert-manager CSI driver (%s), which is not installed in the cluster.", certManagerCSIDriverName))
+		}
+	} else {
+		if err := r.reconcileServerCertificate(ctx, cluster, plan, issuer); err != nil {
+			if certmanager.IsCRDNotInstalled(err) {
+				return nil, false, r.markManagedClusterTLSNotReady(ctx, cluster, "CertManagerMissing",
+					"cert-manager CRDs are not installed; install cert-manager before enabling internalTLS.")
+			}
+			return nil, false, err
+		}
 	}
 	if err := r.reconcileClientCertificate(ctx, cluster, plan, issuer); err != nil {
 		if certmanager.IsCRDNotInstalled(err) {
@@ -133,16 +214,9 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterTLS(ctx context.Context, 
 		return nil, false, err
 	}
 
-	// Require the issued materials before declaring TLS ready. A not-yet-created Secret
-	// means cert-manager has not finished issuing, which is pending rather than an error.
-	serverData, serverMissing, err := r.tlsSecretMaterials(ctx, cluster.Namespace, plan.serverSecretName)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			serverMissing = requiredManagedTLSSecretKeys
-		} else {
-			return nil, false, err
-		}
-	}
+	// The operator client materials are always required before declaring TLS ready. The shared
+	// server Secret is required only when not issuing per-node certificates (the CSI driver
+	// provisions those into each pod, so there is no server Secret to wait for).
 	_, clientMissing, err := r.tlsSecretMaterials(ctx, cluster.Namespace, plan.clientSecretName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -151,17 +225,51 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterTLS(ctx context.Context, 
 			return nil, false, err
 		}
 	}
+	var serverData map[string][]byte
+	var serverMissing []string
+	if !perNode {
+		serverData, serverMissing, err = r.tlsSecretMaterials(ctx, cluster.Namespace, plan.serverSecretName)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				serverMissing = requiredManagedTLSSecretKeys
+			} else {
+				return nil, false, err
+			}
+		}
+	}
 	if len(serverMissing) > 0 || len(clientMissing) > 0 {
 		return nil, false, r.markManagedClusterTLSNotReady(ctx, cluster, "TLSPending",
 			tlsMissingMessage("Waiting for cert-manager to issue TLS materials.", plan, serverMissing, clientMissing))
 	}
 
 	materials := plan.materials()
-	materials.checksum = tlsChecksum(serverData, r.tlsConfigChecksumInput(plan), managedClusterTLSAutoReloadEnabled(cluster))
+	if perNode {
+		materials.perNode = true
+		materials.csi = csiCertParams{
+			issuerName:  issuer.Name,
+			issuerKind:  issuer.Kind,
+			issuerGroup: issuer.Group,
+			commonName:  "node-${POD_NAME}",
+			dnsNames:    managedClusterCSIDNSNames(cluster),
+			keyUsages:   "server auth,client auth",
+		}
+		// Cert rotation is handled in-pod by the CSI driver, so the roll checksum covers only
+		// the rendered config and the CSI attributes — not per-rotation certificate bytes.
+		materials.checksum = tlsChecksum(nil, r.tlsConfigChecksumInput(plan)+csiChecksumInput(materials.csi), false)
+	} else {
+		materials.checksum = tlsChecksum(serverData, r.tlsConfigChecksumInput(plan), managedClusterTLSAutoReloadEnabled(cluster))
+	}
 	if err := r.markManagedClusterTLSReady(ctx, cluster, plan); err != nil {
 		return nil, false, err
 	}
 	return materials, true, nil
+}
+
+// csiChecksumInput folds the per-node CSI attributes into the TLS checksum so a change to the
+// issuer, identity, or SANs rolls the pods, while routine certificate rotation (which does not
+// change these attributes) does not.
+func csiChecksumInput(csi csiCertParams) string {
+	return strings.Join([]string{csi.issuerName, csi.issuerKind, csi.issuerGroup, csi.commonName, csi.dnsNames, csi.keyUsages}, "|")
 }
 
 // reconcileExternalTLS validates externally supplied PKCS12 Secrets and renders config.
@@ -550,6 +658,12 @@ func resolveTLSPlan(cluster *nifiv1alpha1.NiFiCluster) tlsPlan {
 			}
 		}
 		plan.applyDerivedIdentities(cluster)
+	}
+	// With per-node certificates every node presents a distinct CN (node-<pod>) that NiFi maps
+	// to this single authorization identity, so authorizers.xml and the node policies are seeded
+	// with the mapped value rather than a per-pod CN.
+	if managedClusterPerNodeCertificatesEnabled(cluster) {
+		plan.nodeIdentity = perNodeNodeAuthzIdentity
 	}
 	return plan
 }

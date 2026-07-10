@@ -844,6 +844,7 @@ type NiFiClusterServiceMonitorSpec struct {
 // chain, or externally supplied PKCS12 Secrets.
 //
 // +kubebuilder:validation:XValidation:rule="!self.enabled || [has(self.issuerRef), has(self.selfSigned), has(self.external)].exists_one(x, x)",message="when internalTLS is enabled, set exactly one of issuerRef, selfSigned, or external"
+// +kubebuilder:validation:XValidation:rule="!has(self.perNodeCertificates) || !self.perNodeCertificates.enabled || !has(self.external)",message="perNodeCertificates is not supported with externally supplied TLS (external); use selfSigned or issuerRef"
 type NiFiClusterInternalTLSSpec struct {
 	// Enabled turns on HTTPS and mutual TLS for the managed StatefulSet.
 	// +kubebuilder:default=false
@@ -871,6 +872,22 @@ type NiFiClusterInternalTLSSpec struct {
 	// trust-anchor rotation) still rolls the pods. Opt-in; leave it unset to keep rolling the
 	// nodes on every certificate change.
 	AutoReload *NiFiClusterTLSAutoReload `json:"autoReload,omitempty"`
+	// PerNodeCertificates issues a unique certificate and private key to each node pod via the
+	// cert-manager CSI driver, instead of a single shared server certificate. Each node's
+	// private key is generated in-pod and never stored centrally (stronger isolation than a
+	// shared keystore), and each certificate carries a distinct identity (CN=node-<pod>) that
+	// the operator maps to the cluster node role for authorization, so the cluster still forms
+	// and scales without rolling. Requires the cert-manager CSI driver
+	// (csi.cert-manager.io) installed in the cluster; supported only for the selfSigned and
+	// issuerRef providers, not external.
+	PerNodeCertificates *NiFiClusterPerNodeCertificates `json:"perNodeCertificates,omitempty"`
+}
+
+// NiFiClusterPerNodeCertificates configures per-node certificates issued through the
+// cert-manager CSI driver.
+type NiFiClusterPerNodeCertificates struct {
+	// Enabled turns on per-node certificates.
+	Enabled bool `json:"enabled"`
 }
 
 // NiFiClusterTLSAutoReload configures NiFi's SSL-context auto-reload.

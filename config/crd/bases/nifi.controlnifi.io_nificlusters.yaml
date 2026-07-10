@@ -1074,6 +1074,23 @@ spec:
                     required:
                     - name
                     type: object
+                  perNodeCertificates:
+                    description: |-
+                      PerNodeCertificates issues a unique certificate and private key to each node pod via the
+                      cert-manager CSI driver, instead of a single shared server certificate. Each node's
+                      private key is generated in-pod and never stored centrally (stronger isolation than a
+                      shared keystore), and each certificate carries a distinct identity (CN=node-<pod>) that
+                      the operator maps to the cluster node role for authorization, so the cluster still forms
+                      and scales without rolling. Requires the cert-manager CSI driver
+                      (csi.cert-manager.io) installed in the cluster; supported only for the selfSigned and
+                      issuerRef providers, not external.
+                    properties:
+                      enabled:
+                        description: Enabled turns on per-node certificates.
+                        type: boolean
+                    required:
+                    - enabled
+                    type: object
                   selfSigned:
                     description: |-
                       SelfSigned requests an operator-managed, namespaced two-stage self-signed CA chain
@@ -1096,6 +1113,10 @@ spec:
                     selfSigned, or external
                   rule: '!self.enabled || [has(self.issuerRef), has(self.selfSigned),
                     has(self.external)].exists_one(x, x)'
+                - message: perNodeCertificates is not supported with externally supplied
+                    TLS (external); use selfSigned or issuerRef
+                  rule: '!has(self.perNodeCertificates) || !self.perNodeCertificates.enabled
+                    || !has(self.external)'
               jvm:
                 properties:
                   heapInitial:

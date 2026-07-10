@@ -203,6 +203,10 @@ spec:
       interval: {{ . | quote }}
       {{- end }}
     {{- end }}
+    {{- if .Values.internalTLS.perNodeCertificates.enabled }}
+    perNodeCertificates:
+      enabled: true
+    {{- end }}
   {{- end }}
   {{- if .Values.metrics.enabled }}
   metrics:

@@ -589,7 +589,8 @@
         "issuerRef",
         "external",
         "certificate",
-        "autoReload"
+        "autoReload",
+        "perNodeCertificates"
       ],
       "properties": {
         "enabled": {
@@ -720,6 +721,17 @@
             "interval": {
               "type": "string",
               "pattern": "^[1-9][0-9]*\\s+(millis|milliseconds?|ms|secs?|seconds?|mins?|minutes?|hours?|days?)$"
+            }
+          }
+        },
+        "perNodeCertificates": {
+          "type": "object",
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
             }
           }
         }
