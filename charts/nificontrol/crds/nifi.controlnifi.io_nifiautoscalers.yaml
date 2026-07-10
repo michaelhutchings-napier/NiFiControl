@@ -126,6 +126,61 @@ spec:
                         serves metrics such as nifi_amount_items_queued at /nifi-api/flow/metrics/prometheus; see
                         docs/observability.md for getting those into Prometheus.
                       properties:
+                        authentication:
+                          description: |-
+                            Authentication configures how KEDA authenticates to a secured Prometheus. When set, the
+                            operator renders a KEDA TriggerAuthentication from the referenced Secret and wires the
+                            trigger's authModes/authenticationRef. Omit for an unauthenticated in-cluster Prometheus.
+                          properties:
+                            bearerTokenKey:
+                              default: bearerToken
+                              description: BearerTokenKey is the Secret key holding
+                                the bearer token (Mode=Bearer).
+                              type: string
+                            caKey:
+                              default: ca.crt
+                              description: |-
+                                CAKey is the Secret key holding the CA bundle that verifies the Prometheus server
+                                certificate (Mode=TLS).
+                              type: string
+                            certKey:
+                              default: tls.crt
+                              description: CertKey is the Secret key holding the client
+                                certificate for mutual TLS (Mode=TLS).
+                              type: string
+                            keyKey:
+                              default: tls.key
+                              description: KeyKey is the Secret key holding the client
+                                private key for mutual TLS (Mode=TLS).
+                              type: string
+                            mode:
+                              description: |-
+                                Mode selects the KEDA authentication mode: Bearer uses a bearer token; Basic uses a
+                                username and password; TLS uses a client certificate (mutual TLS).
+                              enum:
+                              - Bearer
+                              - Basic
+                              - TLS
+                              type: string
+                            passwordKey:
+                              default: password
+                              description: PasswordKey is the Secret key holding the
+                                password (Mode=Basic).
+                              type: string
+                            secretName:
+                              description: SecretName is the Secret, in the NiFiAutoscaler's
+                                namespace, holding the credentials.
+                              minLength: 1
+                              type: string
+                            usernameKey:
+                              default: username
+                              description: UsernameKey is the Secret key holding the
+                                username (Mode=Basic).
+                              type: string
+                          required:
+                          - mode
+                          - secretName
+                          type: object
                         name:
                           description: Name optionally names the trigger (defaults
                             to the metric index).
@@ -147,6 +202,11 @@ spec:
                             bounded by min/max). Expressed as a string to allow fractional values.
                           minLength: 1
                           type: string
+                        unsafeSsl:
+                          description: |-
+                            UnsafeSSL disables TLS certificate verification when querying Prometheus over HTTPS.
+                            Intended for development only; prefer providing a CA via TLS authentication.
+                          type: boolean
                       required:
                       - query
                       - serverAddress

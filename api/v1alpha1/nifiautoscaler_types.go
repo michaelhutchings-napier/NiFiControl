@@ -78,6 +78,47 @@ type PrometheusMetricSource struct {
 	Threshold string `json:"threshold"`
 	// Name optionally names the trigger (defaults to the metric index).
 	Name string `json:"name,omitempty"`
+	// Authentication configures how KEDA authenticates to a secured Prometheus. When set, the
+	// operator renders a KEDA TriggerAuthentication from the referenced Secret and wires the
+	// trigger's authModes/authenticationRef. Omit for an unauthenticated in-cluster Prometheus.
+	Authentication *PrometheusAuthentication `json:"authentication,omitempty"`
+	// UnsafeSSL disables TLS certificate verification when querying Prometheus over HTTPS.
+	// Intended for development only; prefer providing a CA via TLS authentication.
+	UnsafeSSL bool `json:"unsafeSsl,omitempty"`
+}
+
+// PrometheusAuthentication renders a KEDA TriggerAuthentication so the prometheus trigger can
+// reach a secured Prometheus. Credentials are read by KEDA from a Secret in the NiFiAutoscaler's
+// namespace — the operator only references the Secret, never its contents. The key fields default
+// to the conventional Secret keys (and, for TLS, to the exact keys a cert-manager Certificate
+// produces), so a standard Secret needs no overrides.
+type PrometheusAuthentication struct {
+	// Mode selects the KEDA authentication mode: Bearer uses a bearer token; Basic uses a
+	// username and password; TLS uses a client certificate (mutual TLS).
+	// +kubebuilder:validation:Enum=Bearer;Basic;TLS
+	Mode string `json:"mode"`
+	// SecretName is the Secret, in the NiFiAutoscaler's namespace, holding the credentials.
+	// +kubebuilder:validation:MinLength=1
+	SecretName string `json:"secretName"`
+	// BearerTokenKey is the Secret key holding the bearer token (Mode=Bearer).
+	// +kubebuilder:default=bearerToken
+	BearerTokenKey string `json:"bearerTokenKey,omitempty"`
+	// UsernameKey is the Secret key holding the username (Mode=Basic).
+	// +kubebuilder:default=username
+	UsernameKey string `json:"usernameKey,omitempty"`
+	// PasswordKey is the Secret key holding the password (Mode=Basic).
+	// +kubebuilder:default=password
+	PasswordKey string `json:"passwordKey,omitempty"`
+	// CAKey is the Secret key holding the CA bundle that verifies the Prometheus server
+	// certificate (Mode=TLS).
+	// +kubebuilder:default=ca.crt
+	CAKey string `json:"caKey,omitempty"`
+	// CertKey is the Secret key holding the client certificate for mutual TLS (Mode=TLS).
+	// +kubebuilder:default=tls.crt
+	CertKey string `json:"certKey,omitempty"`
+	// KeyKey is the Secret key holding the client private key for mutual TLS (Mode=TLS).
+	// +kubebuilder:default=tls.key
+	KeyKey string `json:"keyKey,omitempty"`
 }
 
 // ResourceMetricSource configures a native HPA resource metric.

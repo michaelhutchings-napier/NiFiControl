@@ -7,10 +7,12 @@ import (
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/keda"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -20,11 +22,12 @@ import (
 
 func kedaTestScheme() *runtime.Scheme {
 	scheme := managedClusterTestScheme()
-	gvk := keda.ScaledObjectGVK
-	scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
-	listGVK := gvk
-	listGVK.Kind += "List"
-	scheme.AddKnownTypeWithName(listGVK, &unstructured.UnstructuredList{})
+	for _, gvk := range []schema.GroupVersionKind{keda.ScaledObjectGVK, keda.TriggerAuthenticationGVK} {
+		scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
+		listGVK := gvk
+		listGVK.Kind += "List"
+		scheme.AddKnownTypeWithName(listGVK, &unstructured.UnstructuredList{})
+	}
 	return scheme
 }
 
@@ -123,6 +126,116 @@ func TestNiFiAutoscalerRendersKEDAScaledObject(t *testing.T) {
 	got := getAutoscaler(t, c, as.Name)
 	if !got.Status.Ready || got.Status.Mode != "KEDA" || got.Status.ScaledObjectName == "" {
 		t.Fatalf("status not KEDA-ready: %+v", got.Status)
+	}
+}
+
+func authPrometheusMetric(auth *nifiv1alpha1.PrometheusAuthentication) nifiv1alpha1.NiFiAutoscalerMetric {
+	m := prometheusMetric()
+	m.Prometheus.Name = "queue"
+	m.Prometheus.Authentication = auth
+	return m
+}
+
+func getTriggerAuth(t *testing.T, c client.Client, name string) (*unstructured.Unstructured, error) {
+	t.Helper()
+	ta := keda.NewTriggerAuthentication()
+	err := c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "default"}, ta)
+	return ta, err
+}
+
+func TestNiFiAutoscalerRendersPrometheusAuthentication(t *testing.T) {
+	scheme := kedaTestScheme()
+	cluster := newAutoscalerCluster()
+	as := newAutoscaler([]nifiv1alpha1.NiFiAutoscalerMetric{
+		authPrometheusMetric(&nifiv1alpha1.PrometheusAuthentication{Mode: "Basic", SecretName: "prom-creds"}),
+	})
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, as).
+		WithStatusSubresource(&nifiv1alpha1.NiFiAutoscaler{}).Build()
+	reconcileAutoscaler(t, c, scheme, as.Name)
+
+	// The trigger carries authModes and references the rendered TriggerAuthentication.
+	so := keda.New()
+	if err := c.Get(context.Background(), types.NamespacedName{Name: autoscalerResourceName(as), Namespace: "default"}, so); err != nil {
+		t.Fatalf("ScaledObject not created: %v", err)
+	}
+	triggers, _, _ := unstructured.NestedSlice(so.Object, "spec", "triggers")
+	trigger := triggers[0].(map[string]any)
+	meta, _, _ := unstructured.NestedStringMap(trigger, "metadata")
+	if meta["authModes"] != "basic" {
+		t.Errorf("authModes = %q, want basic", meta["authModes"])
+	}
+	ref, _ := trigger["authenticationRef"].(map[string]any)
+	authName := autoscalerAuthName(as, "queue")
+	if ref == nil || ref["name"] != authName {
+		t.Fatalf("authenticationRef = %v, want name %q", trigger["authenticationRef"], authName)
+	}
+
+	// The TriggerAuthentication maps username/password to the referenced Secret.
+	ta, err := getTriggerAuth(t, c, authName)
+	if err != nil {
+		t.Fatalf("TriggerAuthentication not created: %v", err)
+	}
+	refs, _, _ := unstructured.NestedSlice(ta.Object, "spec", "secretTargetRef")
+	if len(refs) != 2 {
+		t.Fatalf("want 2 secretTargetRef, got %d", len(refs))
+	}
+	first := refs[0].(map[string]any)
+	if first["parameter"] != "username" || first["name"] != "prom-creds" || first["key"] != "username" {
+		t.Errorf("unexpected secretTargetRef[0]: %#v", first)
+	}
+}
+
+func TestNiFiAutoscalerTLSAuthDefaultsToCertManagerKeys(t *testing.T) {
+	scheme := kedaTestScheme()
+	as := newAutoscaler([]nifiv1alpha1.NiFiAutoscalerMetric{
+		authPrometheusMetric(&nifiv1alpha1.PrometheusAuthentication{Mode: "TLS", SecretName: "prom-tls"}),
+	})
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(newAutoscalerCluster(), as).
+		WithStatusSubresource(&nifiv1alpha1.NiFiAutoscaler{}).Build()
+	reconcileAutoscaler(t, c, scheme, as.Name)
+
+	ta, err := getTriggerAuth(t, c, autoscalerAuthName(as, "queue"))
+	if err != nil {
+		t.Fatalf("TriggerAuthentication not created: %v", err)
+	}
+	refs, _, _ := unstructured.NestedSlice(ta.Object, "spec", "secretTargetRef")
+	got := map[string]string{}
+	for _, r := range refs {
+		m := r.(map[string]any)
+		got[m["parameter"].(string)] = m["key"].(string)
+	}
+	// A cert-manager-issued Secret has exactly these keys, so TLS auth works with no overrides.
+	for param, wantKey := range map[string]string{"ca": "ca.crt", "cert": "tls.crt", "key": "tls.key"} {
+		if got[param] != wantKey {
+			t.Errorf("param %q key = %q, want %q", param, got[param], wantKey)
+		}
+	}
+}
+
+func TestNiFiAutoscalerPrunesTriggerAuthWhenAuthRemoved(t *testing.T) {
+	scheme := kedaTestScheme()
+	as := newAutoscaler([]nifiv1alpha1.NiFiAutoscalerMetric{
+		authPrometheusMetric(&nifiv1alpha1.PrometheusAuthentication{Mode: "Bearer", SecretName: "prom-token"}),
+	})
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(newAutoscalerCluster(), as).
+		WithStatusSubresource(&nifiv1alpha1.NiFiAutoscaler{}).Build()
+	reconcileAutoscaler(t, c, scheme, as.Name)
+
+	authName := autoscalerAuthName(as, "queue")
+	if _, err := getTriggerAuth(t, c, authName); err != nil {
+		t.Fatalf("TriggerAuthentication should exist after first reconcile: %v", err)
+	}
+
+	// Remove authentication and reconcile again: the stale TriggerAuthentication is pruned.
+	got := getAutoscaler(t, c, as.Name)
+	got.Spec.Metrics[0].Prometheus.Authentication = nil
+	if err := c.Update(context.Background(), got); err != nil {
+		t.Fatalf("update autoscaler: %v", err)
+	}
+	reconcileAutoscaler(t, c, scheme, as.Name)
+
+	if _, err := getTriggerAuth(t, c, authName); !apierrors.IsNotFound(err) {
+		t.Fatalf("stale TriggerAuthentication should be pruned, got err=%v", err)
 	}
 }
 

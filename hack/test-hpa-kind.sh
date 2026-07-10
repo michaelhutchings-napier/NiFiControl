@@ -51,7 +51,9 @@ if ! docker exec "${cluster}-control-plane" crictl images 2>/dev/null | grep -q 
 fi
 
 echo "Installing CRDs..."
-kubectl --context "${ctx}" apply -f "${repo_root}/config/crd/bases/" >/dev/null
+# Server-side apply: the nificlusters CRD exceeds the 262144-byte client-side last-applied
+# annotation limit.
+kubectl --context "${ctx}" apply --server-side --force-conflicts -f "${repo_root}/config/crd/bases/" >/dev/null
 
 echo "Installing metrics-server (with --kubelet-insecure-tls for kind)..."
 kubectl --context "${ctx}" apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml >/dev/null

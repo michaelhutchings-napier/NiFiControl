@@ -43,6 +43,59 @@ func TestNewScaledObjectRendersSpec(t *testing.T) {
 	}
 }
 
+func TestTriggerCarriesAuthenticationRef(t *testing.T) {
+	so, err := NewScaledObject("flow-as", "dataflows", nil, ScaledObjectSpec{
+		ScaleTargetRef: ScaleTargetRef{Kind: "NiFiCluster", Name: "production"},
+		Triggers: []Trigger{{
+			Type:              "prometheus",
+			Name:              "queue",
+			Metadata:          map[string]string{"authModes": "bearer"},
+			AuthenticationRef: &AuthenticationRef{Name: "flow-as-queue-auth"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	triggers, _, _ := unstructured.NestedSlice(so.Object, "spec", "triggers")
+	trigger := triggers[0].(map[string]any)
+	ref, ok := trigger["authenticationRef"].(map[string]any)
+	if !ok {
+		t.Fatalf("trigger missing authenticationRef: %#v", trigger)
+	}
+	if ref["name"] != "flow-as-queue-auth" {
+		t.Errorf("authenticationRef.name = %v", ref["name"])
+	}
+}
+
+func TestNewTriggerAuthenticationRendersSecretTargetRef(t *testing.T) {
+	ta, err := NewTriggerAuthenticationObject("flow-as-queue-auth", "dataflows", map[string]string{"team": "data"},
+		TriggerAuthenticationSpec{SecretTargetRef: []SecretTargetRef{
+			{Parameter: "username", Name: "prom-creds", Key: "username"},
+			{Parameter: "password", Name: "prom-creds", Key: "password"},
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ta.GetKind() != KindTriggerAuthentication || ta.GetAPIVersion() != GroupName+"/"+Version {
+		t.Fatalf("unexpected GVK: %s %s", ta.GetAPIVersion(), ta.GetKind())
+	}
+	refs, _, _ := unstructured.NestedSlice(ta.Object, "spec", "secretTargetRef")
+	if len(refs) != 2 {
+		t.Fatalf("want 2 secretTargetRef, got %d", len(refs))
+	}
+	first := refs[0].(map[string]any)
+	if first["parameter"] != "username" || first["name"] != "prom-creds" || first["key"] != "username" {
+		t.Errorf("unexpected secretTargetRef: %#v", first)
+	}
+}
+
+func TestNewTriggerAuthenticationListGVK(t *testing.T) {
+	list := NewTriggerAuthenticationList()
+	if list.GetObjectKind().GroupVersionKind().Kind != KindTriggerAuthentication+"List" {
+		t.Errorf("list kind = %q", list.GetObjectKind().GroupVersionKind().Kind)
+	}
+}
+
 func TestIsCRDNotInstalled(t *testing.T) {
 	if IsCRDNotInstalled(nil) {
 		t.Error("nil must not be CRD-not-installed")

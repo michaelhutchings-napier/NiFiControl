@@ -80,6 +80,41 @@ What it does:
 It composes with the lower-level objects below; reach for those directly only if you need a
 KEDA/HPA feature the CRD does not yet expose.
 
+### Authenticating to a secured Prometheus
+
+If Prometheus (or Thanos/Cortex/Grafana Cloud) requires authentication, set
+`prometheus.authentication`. The operator renders a KEDA `TriggerAuthentication` from the
+referenced Secret and wires the trigger's `authModes`/`authenticationRef` — you no longer have
+to hand-write the `ScaledObject` *and* a `TriggerAuthentication`. KEDA (not the operator) reads
+the Secret, so the operator never handles the credential material.
+
+```yaml
+  metrics:
+    - type: Prometheus
+      prometheus:
+        serverAddress: https://prometheus.monitoring.svc:9090
+        query: sum(nifi_amount_items_queued)
+        threshold: "10000"
+        authentication:
+          mode: Bearer            # Bearer | Basic | TLS
+          secretName: prom-creds  # a Secret in the NiFiAutoscaler's namespace
+        # unsafeSsl: true         # dev only — skip TLS verification instead of providing a CA
+```
+
+The credential Secret keys default to the conventional names, so a standard Secret needs no
+overrides:
+
+- **Bearer** reads `bearerToken` (override with `bearerTokenKey`).
+- **Basic** reads `username` and `password` (`usernameKey`/`passwordKey`).
+- **TLS** (mutual TLS) reads `ca.crt`, `tls.crt`, and `tls.key` (`caKey`/`certKey`/`keyKey`) —
+  exactly the keys a cert-manager `Certificate` produces, so a cert-manager-issued Secret works
+  as-is.
+
+The rendered `TriggerAuthentication` is owned by the `NiFiAutoscaler` (garbage-collected with it)
+and is pruned automatically if you later remove `authentication` or rename the trigger. For any
+KEDA auth surface beyond these three modes (pod identity, a `ClusterTriggerAuthentication`,
+Vault, etc.), reach for a hand-written `TriggerAuthentication` as shown below.
+
 ## KEDA directly
 
 NiFi load is event/queue-driven, so scale on dataflow signals (queue depth, backpressure,

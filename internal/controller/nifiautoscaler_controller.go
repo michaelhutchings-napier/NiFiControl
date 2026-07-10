@@ -27,6 +27,7 @@ import (
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiautoscalers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiautoscalers/finalizers,verbs=update
 // +kubebuilder:rbac:groups=keda.sh,resources=scaledobjects,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=keda.sh,resources=triggerauthentications,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
 
 const (
@@ -83,21 +84,43 @@ func (r *NiFiAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		if err := r.deleteOwnedHPA(ctx, instance); err != nil {
 			return ctrl.Result{}, err
 		}
-		so, err := desiredScaledObject(instance)
+		so, auths, err := desiredAutoscalerObjects(instance)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if err := r.applyOwned(ctx, instance, so); err != nil {
+		// Apply the TriggerAuthentications before the ScaledObject that references them.
+		for _, ta := range auths {
+			if err := r.applyOwnedObject(ctx, instance, ta, keda.NewTriggerAuthentication()); err != nil {
+				if keda.IsCRDNotInstalled(err) {
+					return r.notReady(ctx, instance, "KEDANotInstalled",
+						"KEDA CRDs (keda.sh) are not installed; install KEDA to autoscale on Prometheus/external metrics.")
+				}
+				return ctrl.Result{}, err
+			}
+		}
+		if err := r.applyOwnedObject(ctx, instance, so, keda.New()); err != nil {
 			if keda.IsCRDNotInstalled(err) {
 				return r.notReady(ctx, instance, "KEDANotInstalled",
 					"KEDA CRDs (keda.sh) are not installed; install KEDA to autoscale on Prometheus/external metrics.")
 			}
 			return ctrl.Result{}, err
 		}
+		// Prune TriggerAuthentications no longer referenced (auth removed or a trigger renamed).
+		keep := make(map[string]bool, len(auths))
+		for _, ta := range auths {
+			keep[ta.GetName()] = true
+		}
+		if err := r.pruneOwnedTriggerAuths(ctx, instance, keep); err != nil {
+			return ctrl.Result{}, err
+		}
 		return r.ready(ctx, instance, autoscalerModeKEDA, so.GetName(), "", current, desired)
 	case autoscalerModeHPA:
-		// Remove a stale ScaledObject from a previous Prometheus configuration (tolerate KEDA absent).
+		// Remove a stale ScaledObject and any TriggerAuthentications from a previous Prometheus
+		// configuration (tolerate KEDA absent).
 		if err := r.deleteOwnedScaledObject(ctx, instance); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.pruneOwnedTriggerAuths(ctx, instance, nil); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.applyHPA(ctx, instance); err != nil {
@@ -198,25 +221,77 @@ func autoscalerLabels(instance *nifiv1alpha1.NiFiAutoscaler) map[string]string {
 	}
 }
 
-func desiredScaledObject(instance *nifiv1alpha1.NiFiAutoscaler) (*unstructured.Unstructured, error) {
+// autoscalerAuthName is the deterministic name of the TriggerAuthentication rendered for one
+// authenticated Prometheus trigger.
+func autoscalerAuthName(instance *nifiv1alpha1.NiFiAutoscaler, triggerName string) string {
+	return boundedManagedName(instance.Name+"-"+triggerName, "auth")
+}
+
+// prometheusAuthParams maps a PrometheusAuthentication to the KEDA authModes value and the
+// TriggerAuthentication secretTargetRef entries for that mode. Empty key overrides fall back to
+// the conventional Secret keys so the mapping is robust without CRD defaulting (e.g. in tests).
+func prometheusAuthParams(a *nifiv1alpha1.PrometheusAuthentication) (mode string, refs []keda.SecretTargetRef) {
+	orDefault := func(v, d string) string {
+		if v == "" {
+			return d
+		}
+		return v
+	}
+	switch a.Mode {
+	case "Bearer":
+		return "bearer", []keda.SecretTargetRef{
+			{Parameter: "bearerToken", Name: a.SecretName, Key: orDefault(a.BearerTokenKey, "bearerToken")},
+		}
+	case "Basic":
+		return "basic", []keda.SecretTargetRef{
+			{Parameter: "username", Name: a.SecretName, Key: orDefault(a.UsernameKey, "username")},
+			{Parameter: "password", Name: a.SecretName, Key: orDefault(a.PasswordKey, "password")},
+		}
+	case "TLS":
+		return "tls", []keda.SecretTargetRef{
+			{Parameter: "ca", Name: a.SecretName, Key: orDefault(a.CAKey, "ca.crt")},
+			{Parameter: "cert", Name: a.SecretName, Key: orDefault(a.CertKey, "tls.crt")},
+			{Parameter: "key", Name: a.SecretName, Key: orDefault(a.KeyKey, "tls.key")},
+		}
+	}
+	return "", nil
+}
+
+// desiredAutoscalerObjects renders the KEDA ScaledObject and any TriggerAuthentications its
+// Prometheus triggers need. Each authenticated trigger gets its own TriggerAuthentication.
+func desiredAutoscalerObjects(instance *nifiv1alpha1.NiFiAutoscaler) (*unstructured.Unstructured, []*unstructured.Unstructured, error) {
 	stabilization, maxNodes, period := behaviorDefaults(instance)
 
 	triggers := make([]keda.Trigger, 0, len(instance.Spec.Metrics))
+	var auths []*unstructured.Unstructured
 	for i, metric := range instance.Spec.Metrics {
 		source := metric.Prometheus
 		name := source.Name
 		if name == "" {
 			name = fmt.Sprintf("prometheus-%d", i)
 		}
-		triggers = append(triggers, keda.Trigger{
-			Type: "prometheus",
-			Name: name,
-			Metadata: map[string]string{
-				"serverAddress": source.ServerAddress,
-				"query":         source.Query,
-				"threshold":     source.Threshold,
-			},
-		})
+		metadata := map[string]string{
+			"serverAddress": source.ServerAddress,
+			"query":         source.Query,
+			"threshold":     source.Threshold,
+		}
+		if source.UnsafeSSL {
+			metadata["unsafeSsl"] = "true"
+		}
+		trigger := keda.Trigger{Type: "prometheus", Name: name, Metadata: metadata}
+		if source.Authentication != nil {
+			authName := autoscalerAuthName(instance, name)
+			authModes, refs := prometheusAuthParams(source.Authentication)
+			metadata["authModes"] = authModes
+			trigger.AuthenticationRef = &keda.AuthenticationRef{Name: authName}
+			ta, err := keda.NewTriggerAuthenticationObject(authName, instance.Namespace, autoscalerLabels(instance),
+				keda.TriggerAuthenticationSpec{SecretTargetRef: refs})
+			if err != nil {
+				return nil, nil, err
+			}
+			auths = append(auths, ta)
+		}
+		triggers = append(triggers, trigger)
 	}
 
 	spec := keda.ScaledObjectSpec{
@@ -242,11 +317,17 @@ func desiredScaledObject(instance *nifiv1alpha1.NiFiAutoscaler) (*unstructured.U
 		},
 		Triggers: triggers,
 	}
-	return keda.NewScaledObject(autoscalerResourceName(instance), instance.Namespace, autoscalerLabels(instance), spec)
+	so, err := keda.NewScaledObject(autoscalerResourceName(instance), instance.Namespace, autoscalerLabels(instance), spec)
+	if err != nil {
+		return nil, nil, err
+	}
+	return so, auths, nil
 }
 
-func (r *NiFiAutoscalerReconciler) applyOwned(ctx context.Context, instance *nifiv1alpha1.NiFiAutoscaler, desired *unstructured.Unstructured) error {
-	existing := keda.New()
+// applyOwnedObject creates or updates an owned unstructured KEDA object (ScaledObject or
+// TriggerAuthentication). existing is an empty object of the desired kind used as the mutation
+// target.
+func (r *NiFiAutoscalerReconciler) applyOwnedObject(ctx context.Context, instance *nifiv1alpha1.NiFiAutoscaler, desired, existing *unstructured.Unstructured) error {
 	existing.SetName(desired.GetName())
 	existing.SetNamespace(desired.GetNamespace())
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, existing, func() error {
@@ -255,6 +336,30 @@ func (r *NiFiAutoscalerReconciler) applyOwned(ctx context.Context, instance *nif
 		return controllerutil.SetControllerReference(instance, existing, r.Scheme)
 	})
 	return err
+}
+
+// pruneOwnedTriggerAuths deletes owned TriggerAuthentications whose names are not in keep (pass a
+// nil/empty keep to delete all). Tolerates KEDA being absent.
+func (r *NiFiAutoscalerReconciler) pruneOwnedTriggerAuths(ctx context.Context, instance *nifiv1alpha1.NiFiAutoscaler, keep map[string]bool) error {
+	list := keda.NewTriggerAuthenticationList()
+	if err := r.List(ctx, list,
+		client.InNamespace(instance.Namespace),
+		client.MatchingLabels{"nifi.controlnifi.io/nifiautoscaler": instance.Name}); err != nil {
+		if keda.IsCRDNotInstalled(err) {
+			return nil
+		}
+		return err
+	}
+	for i := range list.Items {
+		item := &list.Items[i]
+		if keep[item.GetName()] {
+			continue
+		}
+		if err := r.Delete(ctx, item); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *NiFiAutoscalerReconciler) applyHPA(ctx context.Context, instance *nifiv1alpha1.NiFiAutoscaler) error {

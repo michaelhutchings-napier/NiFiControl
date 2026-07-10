@@ -23,6 +23,8 @@ const (
 	Version = "v1alpha1"
 
 	KindScaledObject = "ScaledObject"
+	// KindTriggerAuthentication is the KEDA resource that supplies credentials to a trigger.
+	KindTriggerAuthentication = "TriggerAuthentication"
 )
 
 // GroupVersion identifies the KEDA API surface used by NiFiControl.
@@ -30,6 +32,9 @@ var GroupVersion = schema.GroupVersion{Group: GroupName, Version: Version}
 
 // ScaledObjectGVK is the GroupVersionKind of the ScaledObject resource.
 var ScaledObjectGVK = GroupVersion.WithKind(KindScaledObject)
+
+// TriggerAuthenticationGVK is the GroupVersionKind of the TriggerAuthentication resource.
+var TriggerAuthenticationGVK = GroupVersion.WithKind(KindTriggerAuthentication)
 
 // ScaleTargetRef references the workload (or scalable custom resource) KEDA scales.
 type ScaleTargetRef struct {
@@ -40,9 +45,30 @@ type ScaleTargetRef struct {
 
 // Trigger is a single KEDA scaler. Metadata carries the scaler-specific configuration.
 type Trigger struct {
-	Type     string            `json:"type"`
-	Name     string            `json:"name,omitempty"`
-	Metadata map[string]string `json:"metadata"`
+	Type              string             `json:"type"`
+	Name              string             `json:"name,omitempty"`
+	Metadata          map[string]string  `json:"metadata"`
+	AuthenticationRef *AuthenticationRef `json:"authenticationRef,omitempty"`
+}
+
+// AuthenticationRef points a trigger at a TriggerAuthentication (or ClusterTriggerAuthentication)
+// that supplies its credentials.
+type AuthenticationRef struct {
+	Name string `json:"name"`
+	Kind string `json:"kind,omitempty"`
+}
+
+// SecretTargetRef maps a KEDA trigger-auth parameter to a key in a Kubernetes Secret. KEDA (not
+// the operator) reads the Secret, so the operator never handles the credential material.
+type SecretTargetRef struct {
+	Parameter string `json:"parameter"`
+	Name      string `json:"name"`
+	Key       string `json:"key"`
+}
+
+// TriggerAuthenticationSpec is the subset of the KEDA TriggerAuthentication spec NiFiControl sets.
+type TriggerAuthenticationSpec struct {
+	SecretTargetRef []SecretTargetRef `json:"secretTargetRef,omitempty"`
 }
 
 // HPAScalingPolicy is one scale policy (mirrors autoscaling/v2 HPAScalingPolicy).
@@ -108,6 +134,43 @@ func NewScaledObject(name, namespace string, labels map[string]string, spec Scal
 	}
 	if err := unstructured.SetNestedMap(obj.Object, specMap, "spec"); err != nil {
 		return nil, fmt.Errorf("set ScaledObject spec: %w", err)
+	}
+	return obj, nil
+}
+
+// NewTriggerAuthentication returns an empty unstructured TriggerAuthentication, suitable as a
+// target for client.Get, client.Delete, or controllerutil.CreateOrUpdate.
+func NewTriggerAuthentication() *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(TriggerAuthenticationGVK)
+	return obj
+}
+
+// NewTriggerAuthenticationList returns an empty unstructured list for client.List of
+// TriggerAuthentication resources.
+func NewTriggerAuthenticationList() *unstructured.UnstructuredList {
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(GroupVersion.WithKind(KindTriggerAuthentication + "List"))
+	return list
+}
+
+// NewTriggerAuthenticationObject builds an unstructured namespaced TriggerAuthentication with the
+// given labels and spec.
+func NewTriggerAuthenticationObject(name, namespace string, labels map[string]string, spec TriggerAuthenticationSpec) (*unstructured.Unstructured, error) {
+	specMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&spec)
+	if err != nil {
+		return nil, fmt.Errorf("convert TriggerAuthentication spec: %w", err)
+	}
+	obj := NewTriggerAuthentication()
+	obj.SetName(name)
+	if namespace != "" {
+		obj.SetNamespace(namespace)
+	}
+	if len(labels) > 0 {
+		obj.SetLabels(labels)
+	}
+	if err := unstructured.SetNestedMap(obj.Object, specMap, "spec"); err != nil {
+		return nil, fmt.Errorf("set TriggerAuthentication spec: %w", err)
 	}
 	return obj, nil
 }

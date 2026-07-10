@@ -9,7 +9,9 @@
 #      (no KEDA required); the autoscaler reports Ready, mode HPA,
 #   4. Prometheus metric with KEDA absent -> Ready=False, reason KEDANotInstalled, no ScaledObject,
 #   5. install the real KEDA CRDs -> the operator renders a ScaledObject that validates against
-#      KEDA's own schema; the autoscaler reports Ready, mode KEDA.
+#      KEDA's own schema; the autoscaler reports Ready, mode KEDA,
+#   6. Prometheus authentication -> the operator renders a KEDA TriggerAuthentication (validated
+#      against KEDA's schema) and wires the trigger's authModes/authenticationRef.
 #
 # Requires kind, kubectl, docker, go, and internet access (for the KEDA CRDs). Run:
 #   make integration-autoscaler-kind
@@ -44,7 +46,9 @@ if ! kind get clusters 2>/dev/null | grep -qx "${cluster}"; then
 fi
 
 echo "Installing CRDs..."
-kubectl --context "${ctx}" apply -f "${repo_root}/config/crd/bases/" >/dev/null
+# Server-side apply: the nificlusters CRD exceeds the 262144-byte client-side last-applied
+# annotation limit.
+kubectl --context "${ctx}" apply --server-side --force-conflicts -f "${repo_root}/config/crd/bases/" >/dev/null
 
 # Ensure KEDA is absent for the degradation check (it may linger from a prior run).
 kubectl --context "${ctx}" delete crd scaledobjects.keda.sh --ignore-not-found >/dev/null 2>&1 || true
@@ -149,4 +153,40 @@ for _ in $(seq 1 30); do
 done
 [ "${phase3_ok}" = "1" ] || { echo "operator did not render a ScaledObject in mode=KEDA (mode='${mode:-<none>}', so='${so:-<none>}')" >&2; exit 1; }
 
-echo "PASS: NiFiAutoscaler renders an HPA, degrades gracefully without KEDA, and renders a valid KEDA ScaledObject."
+echo "Phase 4: Prometheus authentication -> TriggerAuthentication rendered and validated by KEDA..."
+kubectl --context "${ctx}" -n "${namespace}" create secret generic prom-creds \
+  --from-literal=bearerToken=dummy --dry-run=client -o yaml | kubectl --context "${ctx}" apply -f - >/dev/null
+kubectl --context "${ctx}" -n "${namespace}" apply -f - >/dev/null <<'YAML'
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiAutoscaler
+metadata: {name: as-secure}
+spec:
+  target: {kind: NiFiCluster, name: as}
+  minReplicas: 1
+  maxReplicas: 6
+  metrics:
+    - type: Prometheus
+      prometheus:
+        serverAddress: https://prometheus.monitoring.svc:9090
+        query: sum(nifi_amount_items_queued)
+        threshold: "10000"
+        authentication:
+          mode: Bearer
+          secretName: prom-creds
+YAML
+phase4_ok=0
+for _ in $(seq 1 30); do
+  authmodes="$(kubectl --context "${ctx}" -n "${namespace}" get scaledobject as-secure-nifiautoscaler -o jsonpath='{.spec.triggers[0].metadata.authModes}' 2>/dev/null || true)"
+  authref="$(kubectl --context "${ctx}" -n "${namespace}" get scaledobject as-secure-nifiautoscaler -o jsonpath='{.spec.triggers[0].authenticationRef.name}' 2>/dev/null || true)"
+  taparam=""
+  [ -n "${authref}" ] && taparam="$(kubectl --context "${ctx}" -n "${namespace}" get triggerauthentication "${authref}" -o jsonpath='{.spec.secretTargetRef[0].parameter}' 2>/dev/null || true)"
+  if [ "${authmodes}" = "bearer" ] && [ -n "${authref}" ] && [ "${taparam}" = "bearerToken" ]; then
+    echo "  trigger authModes=bearer -> TriggerAuthentication ${authref} validated by KEDA (secretTargetRef[0].parameter=bearerToken)."
+    phase4_ok=1
+    break
+  fi
+  sleep 3
+done
+[ "${phase4_ok}" = "1" ] || { echo "operator did not render a valid authenticated trigger + TriggerAuthentication (authModes='${authmodes:-<none>}', authRef='${authref:-<none>}', taParam='${taparam:-<none>}')" >&2; exit 1; }
+
+echo "PASS: NiFiAutoscaler renders an HPA, degrades gracefully without KEDA, renders a valid KEDA ScaledObject, and renders a KEDA TriggerAuthentication for a secured Prometheus."
