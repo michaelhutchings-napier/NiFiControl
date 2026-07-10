@@ -224,6 +224,16 @@ components and enabled controller services, with `maxUnavailable` and `timeoutSe
 re-attempts), and `rollout.cancel` (abort an in-flight rollout). See
 [docs/rollout-readiness.md](docs/rollout-readiness.md).
 
+## Migrating From NiFiKop
+
+Coming from [NiFiKop](https://github.com/konpyutaika/nifikop)? See
+[docs/migrating-from-nifikop.md](docs/migrating-from-nifikop.md) for a kind-by-kind mapping of
+`Nifi*` resources to their NiFiControl `NiFi*` equivalents, with before/after examples. It is
+explicit about what translates cleanly (parameter contexts, users/groups/policies, registry
+clients), what needs review (the `NifiCluster` node-list becomes a StatefulSet), and what a
+manifest tool cannot do — NiFiKop defaults to NiFi 1.x, so the flows themselves require a NiFi
+1.x → 2.x upgrade that is separate from translating the Kubernetes resources.
+
 ## Module
 
 ```text
