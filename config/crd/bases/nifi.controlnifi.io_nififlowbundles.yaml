@@ -66,9 +66,221 @@ spec:
                             - key
                             type: object
                             x-kubernetes-map-type: atomic
+                          clientCertificateSecretKeyRef:
+                            description: |-
+                              ClientCertificateSecretKeyRef and ClientKeySecretKeyRef present a PEM client certificate
+                              for mutual TLS to an HTTPS NiFi Registry or OCI source. They are additive to token or
+                              username/password authentication (the certificate authenticates the connection, the
+                              token/credentials authenticate the request). Not used for Git.
+                            properties:
+                              key:
+                                description: The key of the secret to select from.  Must
+                                  be a valid secret key.
+                                type: string
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              optional:
+                                description: Specify whether the Secret or its key
+                                  must be defined
+                                type: boolean
+                            required:
+                            - key
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          clientKeySecretKeyRef:
+                            properties:
+                              key:
+                                description: The key of the secret to select from.  Must
+                                  be a valid secret key.
+                                type: string
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              optional:
+                                description: Specify whether the Secret or its key
+                                  must be defined
+                                type: boolean
+                            required:
+                            - key
+                            type: object
+                            x-kubernetes-map-type: atomic
                           insecureSkipVerify:
                             type: boolean
+                          oidc:
+                            description: |-
+                              OIDC obtains a bearer token through the OAuth2 client-credentials grant and uses it to
+                              authenticate to a NiFi Registry source. Mutually exclusive with token and
+                              username/password; registry sources only.
+                            properties:
+                              audience:
+                                description: |-
+                                  Audience requested in the token grant, sent as the `audience` form parameter for
+                                  providers that require it (Auth0, for example).
+                                type: string
+                              clientIDSecretKeyRef:
+                                description: ClientIDSecretKeyRef holds the OAuth2
+                                  client id.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.  Must
+                                      be a valid secret key.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                  optional:
+                                    description: Specify whether the Secret or its
+                                      key must be defined
+                                    type: boolean
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              clientSecretSecretKeyRef:
+                                description: ClientSecretSecretKeyRef holds the OAuth2
+                                  client secret.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.  Must
+                                      be a valid secret key.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                  optional:
+                                    description: Specify whether the Secret or its
+                                      key must be defined
+                                    type: boolean
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              scopes:
+                                description: Scopes requested in the token grant.
+                                items:
+                                  type: string
+                                maxItems: 32
+                                type: array
+                              tokenURL:
+                                description: TokenURL is the OAuth2 token endpoint
+                                  (must be HTTPS).
+                                minLength: 1
+                                pattern: ^https://
+                                type: string
+                            required:
+                            - clientIDSecretKeyRef
+                            - clientSecretSecretKeyRef
+                            - tokenURL
+                            type: object
                           passwordSecretKeyRef:
+                            properties:
+                              key:
+                                description: The key of the secret to select from.  Must
+                                  be a valid secret key.
+                                type: string
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              optional:
+                                description: Specify whether the Secret or its key
+                                  must be defined
+                                type: boolean
+                            required:
+                            - key
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          sshInsecureIgnoreHostKey:
+                            description: |-
+                              SSHInsecureIgnoreHostKey disables SSH host-key verification. Development only: it exposes
+                              the fetch to man-in-the-middle attacks. Prefer sshKnownHostsSecretKeyRef in production.
+                            type: boolean
+                          sshKnownHostsSecretKeyRef:
+                            description: |-
+                              SSHKnownHostsSecretKeyRef provides an OpenSSH known_hosts file used to verify the Git
+                              server's host key. Required for SSH Git unless sshInsecureIgnoreHostKey is set.
+                            properties:
+                              key:
+                                description: The key of the secret to select from.  Must
+                                  be a valid secret key.
+                                type: string
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              optional:
+                                description: Specify whether the Secret or its key
+                                  must be defined
+                                type: boolean
+                            required:
+                            - key
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          sshPrivateKeyPassphraseSecretKeyRef:
+                            description: SSHPrivateKeyPassphraseSecretKeyRef decrypts
+                              an encrypted SSH private key.
+                            properties:
+                              key:
+                                description: The key of the secret to select from.  Must
+                                  be a valid secret key.
+                                type: string
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              optional:
+                                description: Specify whether the Secret or its key
+                                  must be defined
+                                type: boolean
+                            required:
+                            - key
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          sshPrivateKeySecretKeyRef:
+                            description: |-
+                              SSHPrivateKeySecretKeyRef selects SSH authentication for an ssh:// or scp-style Git URL
+                              (git@host:org/repo.git). The referenced value is a PEM-encoded SSH private key. SSH auth
+                              applies to Git sources only.
                             properties:
                               key:
                                 description: The key of the secret to select from.  Must
@@ -145,6 +357,18 @@ spec:
                             mutually exclusive
                           rule: '!(has(self.tokenSecretKeyRef) && (has(self.usernameSecretKeyRef)
                             || has(self.passwordSecretKeyRef)))'
+                        - message: clientCertificateSecretKeyRef and clientKeySecretKeyRef
+                            must be configured together
+                          rule: has(self.clientCertificateSecretKeyRef) == has(self.clientKeySecretKeyRef)
+                        - message: oidc is mutually exclusive with token and username/password
+                            authentication
+                          rule: '!(has(self.oidc) && (has(self.tokenSecretKeyRef)
+                            || has(self.usernameSecretKeyRef) || has(self.passwordSecretKeyRef)))'
+                        - message: sshKnownHostsSecretKeyRef requires sshPrivateKeySecretKeyRef
+                          rule: '!has(self.sshKnownHostsSecretKeyRef) || has(self.sshPrivateKeySecretKeyRef)'
+                        - message: sshPrivateKeyPassphraseSecretKeyRef requires sshPrivateKeySecretKeyRef
+                          rule: '!has(self.sshPrivateKeyPassphraseSecretKeyRef) ||
+                            has(self.sshPrivateKeySecretKeyRef)'
                       path:
                         type: string
                       ref:
@@ -182,9 +406,221 @@ spec:
                             - key
                             type: object
                             x-kubernetes-map-type: atomic
+                          clientCertificateSecretKeyRef:
+                            description: |-
+                              ClientCertificateSecretKeyRef and ClientKeySecretKeyRef present a PEM client certificate
+                              for mutual TLS to an HTTPS NiFi Registry or OCI source. They are additive to token or
+                              username/password authentication (the certificate authenticates the connection, the
+                              token/credentials authenticate the request). Not used for Git.
+                            properties:
+                              key:
+                                description: The key of the secret to select from.  Must
+                                  be a valid secret key.
+                                type: string
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              optional:
+                                description: Specify whether the Secret or its key
+                                  must be defined
+                                type: boolean
+                            required:
+                            - key
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          clientKeySecretKeyRef:
+                            properties:
+                              key:
+                                description: The key of the secret to select from.  Must
+                                  be a valid secret key.
+                                type: string
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              optional:
+                                description: Specify whether the Secret or its key
+                                  must be defined
+                                type: boolean
+                            required:
+                            - key
+                            type: object
+                            x-kubernetes-map-type: atomic
                           insecureSkipVerify:
                             type: boolean
+                          oidc:
+                            description: |-
+                              OIDC obtains a bearer token through the OAuth2 client-credentials grant and uses it to
+                              authenticate to a NiFi Registry source. Mutually exclusive with token and
+                              username/password; registry sources only.
+                            properties:
+                              audience:
+                                description: |-
+                                  Audience requested in the token grant, sent as the `audience` form parameter for
+                                  providers that require it (Auth0, for example).
+                                type: string
+                              clientIDSecretKeyRef:
+                                description: ClientIDSecretKeyRef holds the OAuth2
+                                  client id.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.  Must
+                                      be a valid secret key.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                  optional:
+                                    description: Specify whether the Secret or its
+                                      key must be defined
+                                    type: boolean
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              clientSecretSecretKeyRef:
+                                description: ClientSecretSecretKeyRef holds the OAuth2
+                                  client secret.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.  Must
+                                      be a valid secret key.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                  optional:
+                                    description: Specify whether the Secret or its
+                                      key must be defined
+                                    type: boolean
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              scopes:
+                                description: Scopes requested in the token grant.
+                                items:
+                                  type: string
+                                maxItems: 32
+                                type: array
+                              tokenURL:
+                                description: TokenURL is the OAuth2 token endpoint
+                                  (must be HTTPS).
+                                minLength: 1
+                                pattern: ^https://
+                                type: string
+                            required:
+                            - clientIDSecretKeyRef
+                            - clientSecretSecretKeyRef
+                            - tokenURL
+                            type: object
                           passwordSecretKeyRef:
+                            properties:
+                              key:
+                                description: The key of the secret to select from.  Must
+                                  be a valid secret key.
+                                type: string
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              optional:
+                                description: Specify whether the Secret or its key
+                                  must be defined
+                                type: boolean
+                            required:
+                            - key
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          sshInsecureIgnoreHostKey:
+                            description: |-
+                              SSHInsecureIgnoreHostKey disables SSH host-key verification. Development only: it exposes
+                              the fetch to man-in-the-middle attacks. Prefer sshKnownHostsSecretKeyRef in production.
+                            type: boolean
+                          sshKnownHostsSecretKeyRef:
+                            description: |-
+                              SSHKnownHostsSecretKeyRef provides an OpenSSH known_hosts file used to verify the Git
+                              server's host key. Required for SSH Git unless sshInsecureIgnoreHostKey is set.
+                            properties:
+                              key:
+                                description: The key of the secret to select from.  Must
+                                  be a valid secret key.
+                                type: string
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              optional:
+                                description: Specify whether the Secret or its key
+                                  must be defined
+                                type: boolean
+                            required:
+                            - key
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          sshPrivateKeyPassphraseSecretKeyRef:
+                            description: SSHPrivateKeyPassphraseSecretKeyRef decrypts
+                              an encrypted SSH private key.
+                            properties:
+                              key:
+                                description: The key of the secret to select from.  Must
+                                  be a valid secret key.
+                                type: string
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              optional:
+                                description: Specify whether the Secret or its key
+                                  must be defined
+                                type: boolean
+                            required:
+                            - key
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          sshPrivateKeySecretKeyRef:
+                            description: |-
+                              SSHPrivateKeySecretKeyRef selects SSH authentication for an ssh:// or scp-style Git URL
+                              (git@host:org/repo.git). The referenced value is a PEM-encoded SSH private key. SSH auth
+                              applies to Git sources only.
                             properties:
                               key:
                                 description: The key of the secret to select from.  Must
@@ -261,6 +697,18 @@ spec:
                             mutually exclusive
                           rule: '!(has(self.tokenSecretKeyRef) && (has(self.usernameSecretKeyRef)
                             || has(self.passwordSecretKeyRef)))'
+                        - message: clientCertificateSecretKeyRef and clientKeySecretKeyRef
+                            must be configured together
+                          rule: has(self.clientCertificateSecretKeyRef) == has(self.clientKeySecretKeyRef)
+                        - message: oidc is mutually exclusive with token and username/password
+                            authentication
+                          rule: '!(has(self.oidc) && (has(self.tokenSecretKeyRef)
+                            || has(self.usernameSecretKeyRef) || has(self.passwordSecretKeyRef)))'
+                        - message: sshKnownHostsSecretKeyRef requires sshPrivateKeySecretKeyRef
+                          rule: '!has(self.sshKnownHostsSecretKeyRef) || has(self.sshPrivateKeySecretKeyRef)'
+                        - message: sshPrivateKeyPassphraseSecretKeyRef requires sshPrivateKeySecretKeyRef
+                          rule: '!has(self.sshPrivateKeyPassphraseSecretKeyRef) ||
+                            has(self.sshPrivateKeySecretKeyRef)'
                       digest:
                         type: string
                       image:
@@ -336,9 +784,221 @@ spec:
                             - key
                             type: object
                             x-kubernetes-map-type: atomic
+                          clientCertificateSecretKeyRef:
+                            description: |-
+                              ClientCertificateSecretKeyRef and ClientKeySecretKeyRef present a PEM client certificate
+                              for mutual TLS to an HTTPS NiFi Registry or OCI source. They are additive to token or
+                              username/password authentication (the certificate authenticates the connection, the
+                              token/credentials authenticate the request). Not used for Git.
+                            properties:
+                              key:
+                                description: The key of the secret to select from.  Must
+                                  be a valid secret key.
+                                type: string
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              optional:
+                                description: Specify whether the Secret or its key
+                                  must be defined
+                                type: boolean
+                            required:
+                            - key
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          clientKeySecretKeyRef:
+                            properties:
+                              key:
+                                description: The key of the secret to select from.  Must
+                                  be a valid secret key.
+                                type: string
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              optional:
+                                description: Specify whether the Secret or its key
+                                  must be defined
+                                type: boolean
+                            required:
+                            - key
+                            type: object
+                            x-kubernetes-map-type: atomic
                           insecureSkipVerify:
                             type: boolean
+                          oidc:
+                            description: |-
+                              OIDC obtains a bearer token through the OAuth2 client-credentials grant and uses it to
+                              authenticate to a NiFi Registry source. Mutually exclusive with token and
+                              username/password; registry sources only.
+                            properties:
+                              audience:
+                                description: |-
+                                  Audience requested in the token grant, sent as the `audience` form parameter for
+                                  providers that require it (Auth0, for example).
+                                type: string
+                              clientIDSecretKeyRef:
+                                description: ClientIDSecretKeyRef holds the OAuth2
+                                  client id.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.  Must
+                                      be a valid secret key.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                  optional:
+                                    description: Specify whether the Secret or its
+                                      key must be defined
+                                    type: boolean
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              clientSecretSecretKeyRef:
+                                description: ClientSecretSecretKeyRef holds the OAuth2
+                                  client secret.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.  Must
+                                      be a valid secret key.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                  optional:
+                                    description: Specify whether the Secret or its
+                                      key must be defined
+                                    type: boolean
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              scopes:
+                                description: Scopes requested in the token grant.
+                                items:
+                                  type: string
+                                maxItems: 32
+                                type: array
+                              tokenURL:
+                                description: TokenURL is the OAuth2 token endpoint
+                                  (must be HTTPS).
+                                minLength: 1
+                                pattern: ^https://
+                                type: string
+                            required:
+                            - clientIDSecretKeyRef
+                            - clientSecretSecretKeyRef
+                            - tokenURL
+                            type: object
                           passwordSecretKeyRef:
+                            properties:
+                              key:
+                                description: The key of the secret to select from.  Must
+                                  be a valid secret key.
+                                type: string
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              optional:
+                                description: Specify whether the Secret or its key
+                                  must be defined
+                                type: boolean
+                            required:
+                            - key
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          sshInsecureIgnoreHostKey:
+                            description: |-
+                              SSHInsecureIgnoreHostKey disables SSH host-key verification. Development only: it exposes
+                              the fetch to man-in-the-middle attacks. Prefer sshKnownHostsSecretKeyRef in production.
+                            type: boolean
+                          sshKnownHostsSecretKeyRef:
+                            description: |-
+                              SSHKnownHostsSecretKeyRef provides an OpenSSH known_hosts file used to verify the Git
+                              server's host key. Required for SSH Git unless sshInsecureIgnoreHostKey is set.
+                            properties:
+                              key:
+                                description: The key of the secret to select from.  Must
+                                  be a valid secret key.
+                                type: string
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              optional:
+                                description: Specify whether the Secret or its key
+                                  must be defined
+                                type: boolean
+                            required:
+                            - key
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          sshPrivateKeyPassphraseSecretKeyRef:
+                            description: SSHPrivateKeyPassphraseSecretKeyRef decrypts
+                              an encrypted SSH private key.
+                            properties:
+                              key:
+                                description: The key of the secret to select from.  Must
+                                  be a valid secret key.
+                                type: string
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              optional:
+                                description: Specify whether the Secret or its key
+                                  must be defined
+                                type: boolean
+                            required:
+                            - key
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          sshPrivateKeySecretKeyRef:
+                            description: |-
+                              SSHPrivateKeySecretKeyRef selects SSH authentication for an ssh:// or scp-style Git URL
+                              (git@host:org/repo.git). The referenced value is a PEM-encoded SSH private key. SSH auth
+                              applies to Git sources only.
                             properties:
                               key:
                                 description: The key of the secret to select from.  Must
@@ -415,6 +1075,18 @@ spec:
                             mutually exclusive
                           rule: '!(has(self.tokenSecretKeyRef) && (has(self.usernameSecretKeyRef)
                             || has(self.passwordSecretKeyRef)))'
+                        - message: clientCertificateSecretKeyRef and clientKeySecretKeyRef
+                            must be configured together
+                          rule: has(self.clientCertificateSecretKeyRef) == has(self.clientKeySecretKeyRef)
+                        - message: oidc is mutually exclusive with token and username/password
+                            authentication
+                          rule: '!(has(self.oidc) && (has(self.tokenSecretKeyRef)
+                            || has(self.usernameSecretKeyRef) || has(self.passwordSecretKeyRef)))'
+                        - message: sshKnownHostsSecretKeyRef requires sshPrivateKeySecretKeyRef
+                          rule: '!has(self.sshKnownHostsSecretKeyRef) || has(self.sshPrivateKeySecretKeyRef)'
+                        - message: sshPrivateKeyPassphraseSecretKeyRef requires sshPrivateKeySecretKeyRef
+                          rule: '!has(self.sshPrivateKeyPassphraseSecretKeyRef) ||
+                            has(self.sshPrivateKeySecretKeyRef)'
                       flowId:
                         minLength: 1
                         type: string

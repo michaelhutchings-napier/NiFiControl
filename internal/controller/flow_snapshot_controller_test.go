@@ -158,6 +158,15 @@ func TestFlowSourceReferencesSecret(t *testing.T) {
 	ociVerify := &nifiv1alpha1.FlowBundleSource{OCI: &nifiv1alpha1.OCISource{
 		Verify: &nifiv1alpha1.FlowArtifactVerification{CosignPublicKeySecretRef: srcRef("creds", "cosign.pub")},
 	}}
+	sshGit := &nifiv1alpha1.FlowBundleSource{Git: &nifiv1alpha1.GitSource{
+		Credentials: &nifiv1alpha1.FlowArtifactCredentials{SSHPrivateKeySecretKeyRef: srcRef("creds", "ssh-key")},
+	}}
+	clientCert := &nifiv1alpha1.FlowBundleSource{Registry: &nifiv1alpha1.RegistryFlowSource{
+		Credentials: &nifiv1alpha1.FlowArtifactCredentials{ClientKeySecretKeyRef: srcRef("creds", "tls.key")},
+	}}
+	oidc := &nifiv1alpha1.FlowBundleSource{Registry: &nifiv1alpha1.RegistryFlowSource{
+		Credentials: &nifiv1alpha1.FlowArtifactCredentials{OIDC: &nifiv1alpha1.FlowArtifactOIDC{ClientSecretSecretKeyRef: srcRef("creds", "client-secret")}},
+	}}
 	noCreds := &nifiv1alpha1.FlowBundleSource{Git: &nifiv1alpha1.GitSource{URL: "https://git.example.com/flows.git"}}
 
 	for _, tc := range []struct {
@@ -171,6 +180,9 @@ func TestFlowSourceReferencesSecret(t *testing.T) {
 		{"oci token matches", oci, "creds", true},
 		{"oci verify key matches", ociVerify, "creds", true},
 		{"registry ca matches", registry, "creds", true},
+		{"ssh key matches", sshGit, "creds", true},
+		{"client cert matches", clientCert, "creds", true},
+		{"oidc client secret matches", oidc, "creds", true},
 		{"source without credentials", noCreds, "creds", false},
 		{"nil source", nil, "creds", false},
 	} {

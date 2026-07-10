@@ -22,11 +22,13 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	gittransport "github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
+	cryptossh "golang.org/x/crypto/ssh"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/yaml"
 )
@@ -59,6 +61,16 @@ type Credentials struct {
 	Token              string
 	CAData             []byte
 	InsecureSkipVerify bool
+	// SSH authentication for scp-style or ssh:// Git URLs. Host-key verification uses
+	// SSHKnownHosts unless SSHInsecureIgnoreHostKey is set.
+	SSHPrivateKey            []byte
+	SSHPrivateKeyPassphrase  []byte
+	SSHKnownHosts            []byte
+	SSHInsecureIgnoreHostKey bool
+	// Client certificate (mutual TLS) for HTTPS registry and OCI sources; additive to the
+	// token/username/password application-level auth.
+	ClientCertData []byte
+	ClientKeyData  []byte
 }
 
 type Artifact struct {
@@ -110,7 +122,7 @@ func (r DefaultResolver) resolveOCI(ctx context.Context, source nifiv1alpha1.OCI
 			Username: credentials.Username, Password: credentials.Password, RegistryToken: credentials.Token,
 		})))
 	}
-	if len(credentials.CAData) > 0 || credentials.InsecureSkipVerify {
+	if sourceNeedsHTTPTransport(credentials) {
 		transport, err := sourceHTTPTransport(credentials)
 		if err != nil {
 			return nil, err
@@ -156,7 +168,10 @@ func (r DefaultResolver) resolveOCI(ctx context.Context, source nifiv1alpha1.OCI
 }
 
 func (r DefaultResolver) resolveGit(ctx context.Context, source nifiv1alpha1.GitSource, credentials Credentials) (*Artifact, error) {
-	auth := gitAuthentication(credentials)
+	auth, err := gitAuthentication(source.URL, credentials)
+	if err != nil {
+		return nil, err
+	}
 	referenceName, err := resolveRemoteReference(ctx, source.URL, source.Ref, auth, credentials)
 	if err != nil {
 		return nil, err
@@ -287,7 +302,13 @@ func resolveRemoteReference(ctx context.Context, repositoryURL string, requested
 	return "", fmt.Errorf("Git flow source ref %q was not found", requested)
 }
 
-func gitAuthentication(credentials Credentials) gittransport.AuthMethod {
+// gitAuthentication selects the Git transport authentication for the source URL: SSH
+// public-key auth for ssh:// and scp-style URLs (git@host:org/repo.git), HTTP basic auth
+// (token sent as the password) otherwise.
+func gitAuthentication(rawURL string, credentials Credentials) (gittransport.AuthMethod, error) {
+	if endpoint, err := gittransport.NewEndpoint(rawURL); err == nil && endpoint.Protocol == "ssh" {
+		return sshAuthentication(endpoint.User, credentials)
+	}
 	password := credentials.Password
 	username := credentials.Username
 	if credentials.Token != "" {
@@ -297,9 +318,56 @@ func gitAuthentication(credentials Credentials) gittransport.AuthMethod {
 		}
 	}
 	if username == "" && password == "" {
-		return nil
+		return nil, nil
 	}
-	return &githttp.BasicAuth{Username: username, Password: password}
+	return &githttp.BasicAuth{Username: username, Password: password}, nil
+}
+
+// sshAuthentication builds SSH public-key auth for a Git clone, with host-key verification
+// against the supplied known_hosts unless explicitly disabled.
+func sshAuthentication(user string, credentials Credentials) (gittransport.AuthMethod, error) {
+	if len(credentials.SSHPrivateKey) == 0 {
+		return nil, fmt.Errorf("SSH Git URL requires an SSH private key (sshPrivateKeySecretKeyRef)")
+	}
+	if user == "" {
+		user = "git"
+	}
+	publicKeys, err := gitssh.NewPublicKeys(user, credentials.SSHPrivateKey, string(credentials.SSHPrivateKeyPassphrase))
+	if err != nil {
+		return nil, fmt.Errorf("parse SSH private key: %w", err)
+	}
+	callback, err := sshHostKeyCallback(credentials)
+	if err != nil {
+		return nil, err
+	}
+	publicKeys.HostKeyCallback = callback
+	return publicKeys, nil
+}
+
+// sshHostKeyCallback verifies the Git server's host key against the supplied known_hosts.
+// Host-key verification is only skipped when explicitly requested; otherwise an SSH source
+// without known_hosts is rejected rather than silently trusting any host key.
+func sshHostKeyCallback(credentials Credentials) (cryptossh.HostKeyCallback, error) {
+	if len(credentials.SSHKnownHosts) > 0 {
+		// go-git's known-hosts callback reads a file, so materialize the supplied bytes.
+		file, err := os.CreateTemp("", "nificontrol-known-hosts-*")
+		if err != nil {
+			return nil, fmt.Errorf("stage SSH known hosts: %w", err)
+		}
+		defer os.Remove(file.Name())
+		if _, err := file.Write(credentials.SSHKnownHosts); err != nil {
+			file.Close()
+			return nil, fmt.Errorf("write SSH known hosts: %w", err)
+		}
+		if err := file.Close(); err != nil {
+			return nil, fmt.Errorf("write SSH known hosts: %w", err)
+		}
+		return gitssh.NewKnownHostsCallback(file.Name())
+	}
+	if credentials.SSHInsecureIgnoreHostKey {
+		return cryptossh.InsecureIgnoreHostKey(), nil // #nosec G106 -- explicitly opted in by the source owner.
+	}
+	return nil, fmt.Errorf("SSH host key verification requires known hosts (sshKnownHostsSecretKeyRef) or sshInsecureIgnoreHostKey")
 }
 
 func sourceHTTPTransport(credentials Credentials) (*http.Transport, error) {
@@ -310,11 +378,26 @@ func sourceHTTPTransport(credentials Credentials) (*http.Transport, error) {
 	if len(credentials.CAData) > 0 && !roots.AppendCertsFromPEM(credentials.CAData) {
 		return nil, fmt.Errorf("source CA data does not contain a PEM certificate")
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{
+	tlsConfig := &tls.Config{
 		RootCAs: roots, InsecureSkipVerify: credentials.InsecureSkipVerify, // #nosec G402 -- explicitly configured by the source owner.
 	}
+	if len(credentials.ClientCertData) > 0 || len(credentials.ClientKeyData) > 0 {
+		certificate, err := tls.X509KeyPair(credentials.ClientCertData, credentials.ClientKeyData)
+		if err != nil {
+			return nil, fmt.Errorf("load source client certificate: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{certificate}
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsConfig
 	return transport, nil
+}
+
+// sourceNeedsHTTPTransport reports whether a custom HTTP transport is required to carry the
+// source's TLS settings (custom CA, skip-verify, or a client certificate).
+func sourceNeedsHTTPTransport(credentials Credentials) bool {
+	return len(credentials.CAData) > 0 || credentials.InsecureSkipVerify ||
+		len(credentials.ClientCertData) > 0 || len(credentials.ClientKeyData) > 0
 }
 
 func secureSnapshotPath(root string, configured string) (string, error) {

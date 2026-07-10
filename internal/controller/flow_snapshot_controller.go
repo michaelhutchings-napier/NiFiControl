@@ -4,15 +4,21 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/flowartifact"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/nifi"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/clientcredentials"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -182,7 +188,16 @@ func resolvedFlowArtifactCredentials(ctx context.Context, c client.Client, names
 	if declared == nil {
 		return flowartifact.Credentials{}, nil
 	}
-	resolved := flowartifact.Credentials{InsecureSkipVerify: declared.InsecureSkipVerify}
+	// Reject auth methods scoped to a different source kind rather than silently ignoring a
+	// security credential: SSH is Git-only, and client certificates / OIDC are for the HTTPS
+	// registry (and OCI, for the client certificate) rather than Git.
+	if declared.SSHPrivateKeySecretKeyRef != nil && source.Git == nil {
+		return flowartifact.Credentials{}, fmt.Errorf("credentials.sshPrivateKeySecretKeyRef is only supported for git sources")
+	}
+	if (declared.ClientCertificateSecretKeyRef != nil || declared.ClientKeySecretKeyRef != nil) && source.Git != nil {
+		return flowartifact.Credentials{}, fmt.Errorf("credentials client certificate authentication is not supported for git sources; use SSH or HTTPS token authentication")
+	}
+	resolved := flowartifact.Credentials{InsecureSkipVerify: declared.InsecureSkipVerify, SSHInsecureIgnoreHostKey: declared.SSHInsecureIgnoreHostKey}
 	values := []struct {
 		ref    *nifiv1alpha1.SecretKeyRef
 		target *string
@@ -205,14 +220,78 @@ func resolvedFlowArtifactCredentials(ctx context.Context, c client.Client, names
 			*value.target = strings.TrimSpace(*value.target)
 		}
 	}
-	if declared.CASecretKeyRef != nil {
-		data, err := secretKeyValue(ctx, c, namespace, declared.CASecretKeyRef)
+	// Byte-valued material (CA bundle, SSH key/known-hosts, client certificate) is used verbatim.
+	byteValues := []struct {
+		ref    *nifiv1alpha1.SecretKeyRef
+		target *[]byte
+	}{
+		{declared.CASecretKeyRef, &resolved.CAData},
+		{declared.SSHPrivateKeySecretKeyRef, &resolved.SSHPrivateKey},
+		{declared.SSHPrivateKeyPassphraseSecretKeyRef, &resolved.SSHPrivateKeyPassphrase},
+		{declared.SSHKnownHostsSecretKeyRef, &resolved.SSHKnownHosts},
+		{declared.ClientCertificateSecretKeyRef, &resolved.ClientCertData},
+		{declared.ClientKeySecretKeyRef, &resolved.ClientKeyData},
+	}
+	for _, value := range byteValues {
+		if value.ref == nil {
+			continue
+		}
+		data, err := secretKeyValue(ctx, c, namespace, value.ref)
 		if err != nil {
 			return flowartifact.Credentials{}, err
 		}
-		resolved.CAData = data
+		*value.target = data
+	}
+	if declared.OIDC != nil {
+		if source.Registry == nil {
+			return flowartifact.Credentials{}, fmt.Errorf("credentials.oidc is only supported for registry sources")
+		}
+		token, err := flowArtifactOIDCToken(ctx, c, namespace, declared.OIDC, resolved.CAData, declared.InsecureSkipVerify)
+		if err != nil {
+			return flowartifact.Credentials{}, err
+		}
+		resolved.Token = token
 	}
 	return resolved, nil
+}
+
+// flowArtifactOIDCToken performs the OAuth2 client-credentials grant and returns a bearer
+// token for a registry source. The token endpoint is contacted with the source's CA/skip-verify
+// settings so a privately-issued token endpoint is trusted the same way as the registry.
+func flowArtifactOIDCToken(ctx context.Context, c client.Client, namespace string, oidc *nifiv1alpha1.FlowArtifactOIDC, caData []byte, insecureSkipVerify bool) (string, error) {
+	clientID, err := secretKeyValue(ctx, c, namespace, oidc.ClientIDSecretKeyRef)
+	if err != nil {
+		return "", err
+	}
+	clientSecret, err := secretKeyValue(ctx, c, namespace, oidc.ClientSecretSecretKeyRef)
+	if err != nil {
+		return "", err
+	}
+	roots, err := x509.SystemCertPool()
+	if err != nil || roots == nil {
+		roots = x509.NewCertPool()
+	}
+	if len(caData) > 0 && !roots.AppendCertsFromPEM(caData) {
+		return "", fmt.Errorf("credentials.oidc: caSecretKeyRef does not contain a PEM certificate")
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{RootCAs: roots, InsecureSkipVerify: insecureSkipVerify} // #nosec G402 -- explicitly configured by the source owner.
+	httpClient := &http.Client{Timeout: 30 * time.Second, Transport: transport}
+
+	config := clientcredentials.Config{
+		ClientID:     strings.TrimSpace(string(clientID)),
+		ClientSecret: strings.TrimSpace(string(clientSecret)),
+		TokenURL:     oidc.TokenURL,
+		Scopes:       oidc.Scopes,
+	}
+	if oidc.Audience != "" {
+		config.EndpointParams = url.Values{"audience": {oidc.Audience}}
+	}
+	token, err := config.Token(context.WithValue(ctx, oauth2.HTTPClient, httpClient))
+	if err != nil {
+		return "", fmt.Errorf("credentials.oidc: obtain token: %w", err)
+	}
+	return token.AccessToken, nil
 }
 
 // resolvedFlowArtifactVerification loads the cosign public key an OCI source must be signed with, or

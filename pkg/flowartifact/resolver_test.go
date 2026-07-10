@@ -195,9 +195,13 @@ func TestDefaultResolverAuthenticatesRegistryRequest(t *testing.T) {
 }
 
 func TestGitAuthenticationUsesTokenAsPassword(t *testing.T) {
-	auth, ok := gitAuthentication(Credentials{Token: "git-token"}).(*githttp.BasicAuth)
+	method, err := gitAuthentication("https://example.com/org/repo.git", Credentials{Token: "git-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth, ok := method.(*githttp.BasicAuth)
 	if !ok {
-		t.Fatalf("auth type = %T", auth)
+		t.Fatalf("auth type = %T", method)
 	}
 	if auth.Username != "oauth2" || auth.Password != "git-token" {
 		t.Fatalf("auth = %#v", auth)

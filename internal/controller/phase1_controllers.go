@@ -3958,7 +3958,12 @@ func flowSourceReferencesSecret(source *nifiv1alpha1.FlowBundleSource, secretNam
 	}
 	refs := []*nifiv1alpha1.SecretKeyRef{}
 	if credentials != nil {
-		refs = append(refs, credentials.UsernameSecretKeyRef, credentials.PasswordSecretKeyRef, credentials.TokenSecretKeyRef, credentials.CASecretKeyRef)
+		refs = append(refs, credentials.UsernameSecretKeyRef, credentials.PasswordSecretKeyRef, credentials.TokenSecretKeyRef, credentials.CASecretKeyRef,
+			credentials.SSHPrivateKeySecretKeyRef, credentials.SSHPrivateKeyPassphraseSecretKeyRef, credentials.SSHKnownHostsSecretKeyRef,
+			credentials.ClientCertificateSecretKeyRef, credentials.ClientKeySecretKeyRef)
+		if credentials.OIDC != nil {
+			refs = append(refs, credentials.OIDC.ClientIDSecretKeyRef, credentials.OIDC.ClientSecretSecretKeyRef)
+		}
 	}
 	if source.OCI != nil && source.OCI.Verify != nil {
 		refs = append(refs, source.OCI.Verify.CosignPublicKeySecretRef)

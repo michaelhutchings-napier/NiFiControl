@@ -72,9 +72,9 @@ services, and high-level flow deployments.
 - Public and private Git repositories, OCI images, and NiFi Registry sources fetch
   and materialize full snapshots. Private sources authenticate with credentials read
   from Secrets (see [TLS And Credentials](#tls-and-credentials)): HTTPS Git with a
-  token or username/password, private OCI registries, and token- or basic-authenticated
-  NiFi Registry, each with an optional custom CA. SSH Git remotes and
-  client-certificate/OIDC Registry auth are not yet supported.
+  token or username/password or SSH Git with a private key and known_hosts, private OCI
+  registries, and NiFi Registry with a bearer token, basic auth, a mutual-TLS client
+  certificate, or an OAuth2/OIDC client-credentials grant — each with an optional custom CA.
 
 ## Full Flow Snapshots
 
@@ -138,10 +138,14 @@ Git, OCI, and NiFi Registry sources accept `credentials` with
 `usernameSecretKeyRef`, `passwordSecretKeyRef`, `tokenSecretKeyRef`, and
 `caSecretKeyRef`. Configure either a token or a username/password pair.
 `insecureSkipVerify` is available for controlled development environments.
-Referenced Secret changes automatically trigger reconciliation. Authentication is
-over HTTPS: Git uses HTTP basic auth (a token is sent as the password), OCI uses
-standard registry auth, and NiFi Registry uses a bearer token or basic auth. SSH
-Git remotes and client-certificate/OIDC Registry authentication are not supported.
+Referenced Secret changes automatically trigger reconciliation. Git over HTTPS uses
+basic auth (a token is sent as the password); an `ssh://` or `git@host:` URL instead
+uses SSH key auth via `sshPrivateKeySecretKeyRef` with host-key verification against
+`sshKnownHostsSecretKeyRef` (or `sshInsecureIgnoreHostKey` for development). OCI uses
+standard registry auth. NiFi Registry uses a bearer token or basic auth, and can also
+present a mutual-TLS client certificate (`clientCertificateSecretKeyRef` /
+`clientKeySecretKeyRef`) or obtain a bearer token through an OAuth2/OIDC
+client-credentials grant (`oidc`). The client certificate also applies to OCI sources.
 
 ### Managed internal HTTPS and mTLS
 

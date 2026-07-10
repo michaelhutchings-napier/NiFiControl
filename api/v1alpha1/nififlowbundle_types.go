@@ -57,12 +57,61 @@ type RegistryFlowSource struct {
 
 // +kubebuilder:validation:XValidation:rule="has(self.usernameSecretKeyRef) == has(self.passwordSecretKeyRef)",message="username and password must be configured together"
 // +kubebuilder:validation:XValidation:rule="!(has(self.tokenSecretKeyRef) && (has(self.usernameSecretKeyRef) || has(self.passwordSecretKeyRef)))",message="token and username/password authentication are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="has(self.clientCertificateSecretKeyRef) == has(self.clientKeySecretKeyRef)",message="clientCertificateSecretKeyRef and clientKeySecretKeyRef must be configured together"
+// +kubebuilder:validation:XValidation:rule="!(has(self.oidc) && (has(self.tokenSecretKeyRef) || has(self.usernameSecretKeyRef) || has(self.passwordSecretKeyRef)))",message="oidc is mutually exclusive with token and username/password authentication"
+// +kubebuilder:validation:XValidation:rule="!has(self.sshKnownHostsSecretKeyRef) || has(self.sshPrivateKeySecretKeyRef)",message="sshKnownHostsSecretKeyRef requires sshPrivateKeySecretKeyRef"
+// +kubebuilder:validation:XValidation:rule="!has(self.sshPrivateKeyPassphraseSecretKeyRef) || has(self.sshPrivateKeySecretKeyRef)",message="sshPrivateKeyPassphraseSecretKeyRef requires sshPrivateKeySecretKeyRef"
 type FlowArtifactCredentials struct {
 	UsernameSecretKeyRef *SecretKeyRef `json:"usernameSecretKeyRef,omitempty"`
 	PasswordSecretKeyRef *SecretKeyRef `json:"passwordSecretKeyRef,omitempty"`
 	TokenSecretKeyRef    *SecretKeyRef `json:"tokenSecretKeyRef,omitempty"`
 	CASecretKeyRef       *SecretKeyRef `json:"caSecretKeyRef,omitempty"`
-	InsecureSkipVerify   bool          `json:"insecureSkipVerify,omitempty"`
+	// SSHPrivateKeySecretKeyRef selects SSH authentication for an ssh:// or scp-style Git URL
+	// (git@host:org/repo.git). The referenced value is a PEM-encoded SSH private key. SSH auth
+	// applies to Git sources only.
+	SSHPrivateKeySecretKeyRef *SecretKeyRef `json:"sshPrivateKeySecretKeyRef,omitempty"`
+	// SSHPrivateKeyPassphraseSecretKeyRef decrypts an encrypted SSH private key.
+	SSHPrivateKeyPassphraseSecretKeyRef *SecretKeyRef `json:"sshPrivateKeyPassphraseSecretKeyRef,omitempty"`
+	// SSHKnownHostsSecretKeyRef provides an OpenSSH known_hosts file used to verify the Git
+	// server's host key. Required for SSH Git unless sshInsecureIgnoreHostKey is set.
+	SSHKnownHostsSecretKeyRef *SecretKeyRef `json:"sshKnownHostsSecretKeyRef,omitempty"`
+	// SSHInsecureIgnoreHostKey disables SSH host-key verification. Development only: it exposes
+	// the fetch to man-in-the-middle attacks. Prefer sshKnownHostsSecretKeyRef in production.
+	SSHInsecureIgnoreHostKey bool `json:"sshInsecureIgnoreHostKey,omitempty"`
+	// ClientCertificateSecretKeyRef and ClientKeySecretKeyRef present a PEM client certificate
+	// for mutual TLS to an HTTPS NiFi Registry or OCI source. They are additive to token or
+	// username/password authentication (the certificate authenticates the connection, the
+	// token/credentials authenticate the request). Not used for Git.
+	ClientCertificateSecretKeyRef *SecretKeyRef `json:"clientCertificateSecretKeyRef,omitempty"`
+	ClientKeySecretKeyRef         *SecretKeyRef `json:"clientKeySecretKeyRef,omitempty"`
+	// OIDC obtains a bearer token through the OAuth2 client-credentials grant and uses it to
+	// authenticate to a NiFi Registry source. Mutually exclusive with token and
+	// username/password; registry sources only.
+	OIDC               *FlowArtifactOIDC `json:"oidc,omitempty"`
+	InsecureSkipVerify bool              `json:"insecureSkipVerify,omitempty"`
+}
+
+// FlowArtifactOIDC configures the OAuth2 client-credentials grant used to obtain a bearer token
+// for a NiFi Registry source.
+type FlowArtifactOIDC struct {
+	// TokenURL is the OAuth2 token endpoint (must be HTTPS).
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^https://`
+	TokenURL string `json:"tokenURL"`
+	// ClientIDSecretKeyRef holds the OAuth2 client id.
+	// +kubebuilder:validation:Required
+	ClientIDSecretKeyRef *SecretKeyRef `json:"clientIDSecretKeyRef"`
+	// ClientSecretSecretKeyRef holds the OAuth2 client secret.
+	// +kubebuilder:validation:Required
+	ClientSecretSecretKeyRef *SecretKeyRef `json:"clientSecretSecretKeyRef"`
+	// Scopes requested in the token grant.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	Scopes []string `json:"scopes,omitempty"`
+	// Audience requested in the token grant, sent as the `audience` form parameter for
+	// providers that require it (Auth0, for example).
+	// +optional
+	Audience string `json:"audience,omitempty"`
 }
 
 type NiFiFlowBundleSpec struct {
