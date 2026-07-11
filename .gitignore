@@ -6,3 +6,6 @@ dist/
 *.test
 coverage.out
 
+
+# compiled operator binary from `go build ./cmd/manager`
+/manager
