@@ -1,0 +1,100 @@
+# Canvas flow: build a small dataflow declaratively, component by component.
+#
+#   kubectl -n dataflows apply -f examples/canvas-flow.yaml
+#
+# Topology (all inside a process group named "etl"):
+#
+#   [GenerateFlowFile] --success--> (Funnel) --> [OutputPort]
+#
+# plus a JSON record-reader controller service and a documentation label. The operator resolves
+# cross-references (a connection waits for its endpoints) and creates everything in dependency
+# order. Components are left Stopped/Disabled here; flip .spec.state to Running/Enabled to run them.
+# These reconcile against a Ready NiFiCluster (see quickstart.yaml / secured-cluster.yaml).
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiProcessGroup
+metadata: {name: etl}
+spec:
+  clusterRef: {name: quickstart}
+  parentProcessGroupRef: {root: true}
+  displayName: etl
+  # parameterContextRef: {name: payments}   # bind a NiFiParameterContext (see tenancy.yaml)
+  deletionPolicy: Delete
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiControllerService
+metadata: {name: json-reader}
+spec:
+  clusterRef: {name: quickstart}
+  parentProcessGroupRef: {name: etl}         # scope the service to the "etl" group
+  type: org.apache.nifi.json.JsonTreeReader
+  state: Enabled                             # Enabled | Disabled
+  deletionPolicy: Delete
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiProcessor
+metadata: {name: generate}
+spec:
+  clusterRef: {name: quickstart}
+  parentProcessGroupRef: {name: etl}
+  type: org.apache.nifi.processors.standard.GenerateFlowFile
+  position: {x: 0, "y": 0}
+  scheduling: {period: 60 sec}
+  state: Stopped                             # Running | Stopped | Disabled
+  deletionPolicy: Delete
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiFunnel
+metadata: {name: collector}
+spec:
+  clusterRef: {name: quickstart}
+  parentProcessGroupRef: {name: etl}
+  position: {x: 400, "y": 0}
+  deletionPolicy: Delete
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiOutputPort
+metadata: {name: egress}
+spec:
+  clusterRef: {name: quickstart}
+  parentProcessGroupRef: {name: etl}
+  displayName: egress
+  position: {x: 800, "y": 0}
+  state: Stopped
+  deletionPolicy: Delete
+---
+# GenerateFlowFile --success--> collector
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiConnection
+metadata: {name: generate-to-collector}
+spec:
+  clusterRef: {name: quickstart}
+  parentProcessGroupRef: {name: etl}
+  source: {type: Processor, name: generate}
+  destination: {type: Funnel, name: collector}
+  selectedRelationships: [success]           # required for a Processor source
+  backPressureObjectThreshold: "10000"
+  deletionPolicy: Delete
+---
+# collector --> egress
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiConnection
+metadata: {name: collector-to-egress}
+spec:
+  clusterRef: {name: quickstart}
+  parentProcessGroupRef: {name: etl}
+  source: {type: Funnel, name: collector}
+  destination: {type: OutputPort, name: egress}
+  deletionPolicy: Delete
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiLabel
+metadata: {name: note}
+spec:
+  clusterRef: {name: quickstart}
+  parentProcessGroupRef: {name: etl}
+  text: "ETL: generate -> collect -> egress"
+  position: {x: 0, "y": 200}
+  width: 400
+  height: 80
+  deletionPolicy: Delete

@@ -1,0 +1,70 @@
+# GitOps flow deployment: version a flow as a bundle, then deploy it into a process group.
+#
+#   kubectl -n dataflows apply -f examples/flow-deployment.yaml
+#
+# A NiFiFlowBundle resolves a RegisteredFlowSnapshot from a source (inline / git / oci / a NiFi
+# Registry) and exposes its digest. A NiFiFlowDeployment imports that snapshot into a target process
+# group and keeps it in sync: when the bundle's content changes, the running flow is replaced in
+# place (rollout strategy). See docs/bluegreen-rollout.md and docs/rollout-readiness.md.
+#
+# This example uses an INLINE snapshot so it is self-contained. In production you would point the
+# bundle at git/oci/a registry instead (a NiFiRegistryClient is shown at the bottom for that path).
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiFlowBundle
+metadata: {name: payments-flow}
+spec:
+  version: "1.0.0"
+  source:
+    # One of: snapshot (inline), git, oci, registry. Inline keeps this example dependency-free.
+    snapshot:
+      flowContents:
+        identifier: "00000000-0000-0000-0000-000000000001"
+        name: placeholder                 # replaced with the deployment's target process-group name
+        componentType: PROCESS_GROUP
+        position: {x: 0, "y": 0}
+        processors: []
+        controllerServices: []
+        processGroups: []
+        remoteProcessGroups: []
+        inputPorts: []
+        outputPorts: []
+        connections: []
+        funnels: []
+        labels:
+          - identifier: "00000000-0000-0000-0000-0000000000aa"
+            label: payments v1.0.0
+            position: {x: 0, "y": 0}
+            width: 300
+            height: 100
+            componentType: LABEL
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiFlowDeployment
+metadata: {name: payments}
+spec:
+  clusterRef: {name: quickstart}
+  source:
+    bundleRef: {name: payments-flow}      # or source.inline: {...} to deploy a snapshot directly
+  target:
+    parentProcessGroupRef: {root: true}
+    processGroupName: payments            # the deployed process group's name
+  rollout:
+    strategy: ApplyOnly                   # ApplyOnly | StopAllThenApply | ChangedOnly | Rolling | BlueGreen
+  ownership:
+    mode: Managed                         # Managed: delete the process group when this CR is removed
+  deletionPolicy: Delete
+---
+# A flow registry client, for sourcing bundles from git-backed NiFi flow registries instead of
+# inline snapshots. Types: NiFiRegistry | GitHub | GitLab. See docs/README.md.
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiRegistryClient
+metadata: {name: flows}
+spec:
+  clusterRef: {name: quickstart}
+  type: GitHub
+  github:
+    repositoryOwner: your-org
+    repositoryName: nifi-flows
+    defaultBranch: main
+    # personalAccessTokenSecretRef references a Secret for a private repo.

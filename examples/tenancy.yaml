@@ -1,0 +1,82 @@
+# Tenancy: parameter contexts, users, groups, and access policies.
+#
+#   kubectl -n dataflows apply -f examples/tenancy.yaml
+#
+# These reconcile against a running secured cluster's REST API (see secured-cluster.yaml), so the
+# target NiFiCluster must be Ready first. Sensitive parameter values are never inlined — they are
+# read from a Secret. See docs/authorization.md.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: payments-params
+type: Opaque
+stringData:
+  apiKey: super-secret-token
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiParameterContext
+metadata:
+  name: payments
+spec:
+  clusterRef: {name: secure}
+  description: Parameters for the payments dataflows
+  parameters:
+    - {name: batchSize, value: "500"}
+    - {name: endpoint, value: "https://payments.example.com"}
+    - name: apiKey                       # sensitive: value lives in a Secret, never inlined
+      sensitiveValueFrom:
+        secretKeyRef: {name: payments-params, key: apiKey}
+  # inheritedRefs: [{name: common}]      # compose parameter contexts
+  adoptionPolicy: {mode: AdoptByName}    # adopt an existing context of the same name if present
+---
+# Two certificate-identity users...
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiUser
+metadata: {name: alice}
+spec:
+  clusterRef: {name: secure}
+  identity: "CN=alice, O=dataflows"
+  certificate: {create: true, secretName: alice-tls}
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiUser
+metadata: {name: bob}
+spec:
+  clusterRef: {name: secure}
+  identity: "CN=bob, O=dataflows"
+  certificate: {create: true, secretName: bob-tls}
+---
+# ...grouped into a team...
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiUserGroup
+metadata: {name: payments-team}
+spec:
+  clusterRef: {name: secure}
+  identity: payments-team
+  users:
+    - userRef: {name: alice}
+    - userRef: {name: bob}
+---
+# ...that may read AND write the flow. Grant policies to a group (userGroupRefs) or to individual
+# users (userRefs). resource is a NiFi policy resource such as /flow, /controller, /tenants,
+# /policies, or /process-groups/<id>.
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiPolicy
+metadata: {name: payments-team-read-flow}
+spec:
+  clusterRef: {name: secure}
+  resource: /flow
+  action: read
+  userGroupRefs:
+    - name: payments-team
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiPolicy
+metadata: {name: payments-team-write-flow}
+spec:
+  clusterRef: {name: secure}
+  resource: /flow
+  action: write
+  userGroupRefs:
+    - name: payments-team

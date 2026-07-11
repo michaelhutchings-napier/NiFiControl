@@ -1,0 +1,28 @@
+# Quickstart: the smallest possible NiFiControl cluster.
+#
+#   kubectl create namespace dataflows
+#   kubectl -n dataflows apply -f examples/quickstart.yaml
+#   kubectl -n dataflows wait --for=jsonpath='{.status.ready}'=true nificluster/quickstart --timeout=5m
+#   kubectl -n dataflows port-forward svc/quickstart-nifi 8080:8080
+#   # open http://localhost:8080/nifi
+#
+# This is an INSECURE cluster (plain HTTP, no auth) for local experimentation only. For anything
+# real, start from secured-cluster.yaml instead.
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiCluster
+metadata:
+  name: quickstart
+spec:
+  mode: Internal              # operator-managed (vs. External: drive an existing NiFi over its API)
+  image: apache/nifi:2.10.0
+  replicas: 1
+  storage:
+    enabled: false            # ephemeral; set enabled+size for a persistent repository
+  jvm:
+    heapInitial: 512m
+    heapMax: 1g
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+  deletionPolicy: Delete      # delete the StatefulSet + PVCs when this resource is removed

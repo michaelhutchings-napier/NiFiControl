@@ -1,0 +1,66 @@
+# Secured cluster: internal TLS (cert-manager) + single-user login + an admin tenant.
+#
+# Prerequisites: cert-manager installed (https://cert-manager.io). Then:
+#   kubectl -n dataflows apply -f examples/secured-cluster.yaml
+#   kubectl -n dataflows wait --for=jsonpath='{.status.ready}'=true nificluster/secure --timeout=8m
+#
+# NiFi only allows authentication over HTTPS, so a login provider (SingleUser here) requires
+# internalTLS. The operator authorizes itself and other clients through mutual TLS regardless of the
+# login mode. See docs/internal-tls.md and docs/user-authentication.md.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: admin-creds
+type: Opaque
+stringData:
+  username: admin
+  password: change-me-please-12+   # NiFi requires >= 12 characters
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiCluster
+metadata:
+  name: secure
+spec:
+  mode: Internal
+  image: apache/nifi:2.10.0
+  replicas: 1
+  storage: {enabled: true, size: 5Gi}
+  jvm: {heapInitial: 512m, heapMax: 1g}
+  resources:
+    requests: {cpu: 500m, memory: 2Gi}
+  internalTLS:
+    enabled: true
+    selfSigned: {}            # or issuerRef: {...} to use your own cert-manager Issuer,
+                              # or external: {...} to bring your own PKCS12 keystore/truststore.
+    # autoReload: {enabled: true, interval: "10 secs"}   # rotate certs with zero pod restarts
+  authentication:
+    mode: SingleUser          # or LDAP / OIDC — see docs/user-authentication.md
+    singleUser:
+      credentialsSecretRef: {name: admin-creds}
+    adminIdentities: [admin]  # grant the admin the full administrative policy set
+  deletionPolicy: Delete
+---
+# A least-privilege, certificate-identity tenant that may only READ the flow (e.g. a metrics
+# scraper or a read-only dashboard). See docs/authorization.md.
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiUser
+metadata:
+  name: readonly
+spec:
+  clusterRef: {name: secure}
+  identity: "CN=readonly, O=dataflows"
+  certificate:
+    create: true             # the operator issues a client cert via cert-manager
+    secretName: readonly-tls  # ...into this Secret (tls.crt / tls.key / ca.crt)
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiPolicy
+metadata:
+  name: readonly-read-flow
+spec:
+  clusterRef: {name: secure}
+  resource: /flow
+  action: read
+  userRefs:
+    - name: readonly

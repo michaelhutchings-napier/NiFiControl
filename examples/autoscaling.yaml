@@ -1,0 +1,49 @@
+# Scaling: a heterogeneous node pool and a queue-depth autoscaler.
+#
+#   kubectl -n dataflows apply -f examples/autoscaling.yaml
+#
+# NiFiAutoscaler renders a KEDA ScaledObject (Prometheus / queue-depth metrics; requires KEDA) or a
+# native HorizontalPodAutoscaler (CPU/memory), and drives the target's scale subresource so
+# scale-downs run the operator's graceful node offload. NiFiNodeGroup adds an extra pod pool to a
+# cluster. See docs/autoscaling.md and docs/node-groups.md.
+---
+# An extra node pool (e.g. bigger heap for heavy transforms) attached to the cluster.
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiNodeGroup
+metadata: {name: heavy}
+spec:
+  clusterRef: {name: quickstart}
+  replicas: 2
+  jvm: {heapInitial: 1g, heapMax: 4g}
+  resources:
+    requests: {cpu: "1", memory: 6Gi}
+  storage: {enabled: true, size: 20Gi}
+---
+# Scale the cluster on NiFi queue depth (a KEDA Prometheus trigger). Scaling a NiFi cluster is
+# deliberately conservative: min is floored at 1, and scale-down is one node at a time with a long
+# stabilization window, because each node offload is expensive.
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiAutoscaler
+metadata: {name: payments}
+spec:
+  target:
+    kind: NiFiCluster          # or NiFiNodeGroup, to scale a single pool
+    name: quickstart
+  minReplicas: 1
+  maxReplicas: 6
+  metrics:
+    - type: Prometheus         # renders a KEDA ScaledObject (KEDA must be installed)
+      prometheus:
+        serverAddress: http://prometheus.monitoring.svc:9090
+        query: sum(nifi_amount_items_queued)   # NiFi 2.x FlowFile queue depth
+        threshold: "10000"                      # target queued items per replica
+        # For a secured Prometheus, the operator renders a KEDA TriggerAuthentication:
+        # authentication: {mode: Bearer, secretName: prom-creds}   # Bearer | Basic | TLS
+  behavior:
+    scaleDownStrategy: HighestOrdinal   # HighestOrdinal | NonPrimary
+    stabilizationSeconds: 600
+    maxNodesPerStep: 1
+  # A CPU/memory autoscaler instead renders a native HPA (no KEDA needed):
+  #  metrics:
+  #    - type: Resource
+  #      resource: {name: cpu, targetAverageUtilization: 70}

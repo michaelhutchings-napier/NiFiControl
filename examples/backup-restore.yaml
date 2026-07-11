@@ -1,0 +1,32 @@
+# Backup and restore a flow.
+#
+#   # Back up the root process group's flow into a ConfigMap:
+#   kubectl -n dataflows apply -f examples/backup-restore.yaml
+#   kubectl -n dataflows wait --for=jsonpath='{.status.phase}'=Succeeded nifibackup/nightly --timeout=2m
+#
+# NiFiBackup downloads a process group's flow from NiFi and writes the snapshot to a ConfigMap (or
+# Secret). NiFiRestore reads a snapshot back — from a NiFiBackup or a ConfigMap/Secret directly — and
+# imports it as a new process group (mode Import) or replaces an existing one (mode Replace). Both
+# are run-once jobs; their status.phase goes Pending -> Succeeded. See docs/backup-restore.md.
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiBackup
+metadata: {name: nightly}
+spec:
+  clusterRef: {name: quickstart}
+  processGroupId: ""            # empty = the root process group (the whole flow); or a specific PG id
+  storage:
+    type: ConfigMap            # ConfigMap | Secret
+    # name defaults to "<backup-name>-flow" (here: nightly-flow). The snapshot is stored under the
+    # key "flow.json". The ConfigMap/Secret is owned by this backup and garbage-collected with it.
+---
+# Restore the captured snapshot into a new process group under the root group.
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiRestore
+metadata: {name: nightly-restore}
+spec:
+  clusterRef: {name: quickstart}
+  mode: Import                 # Import: create a new child process group. Replace: overwrite a target.
+  source:
+    backupRef: nightly         # or storageRef: {type: ConfigMap, name: some-flow} to read one directly
+  # targetProcessGroupId: ""   # empty = restore under the root process group

@@ -9,6 +9,11 @@ The project provides a Kubernetes-native API under `nifi.controlnifi.io` for
 clusters, registry clients, parameter contexts, canvas components, controller
 services, and high-level flow deployments.
 
+**Documentation:** [docs/README.md](docs/README.md) is the documentation index.
+**Examples:** [examples/](examples/) has complete, `kubectl apply`-able scenarios — from a
+one-node quickstart to a secured cluster with tenants, a declarative flow, GitOps deployments,
+autoscaling, and backup/restore.
+
 ## Current Scope
 
 - Managed clusters support production controls: pod scheduling (affinity,
