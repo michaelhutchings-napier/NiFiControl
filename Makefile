@@ -98,6 +98,10 @@ integration-reportingtask-kind:
 integration-canvas-kind:
 	./hack/test-canvas-kind.sh
 
+.PHONY: integration-flowdeploy-kind
+integration-flowdeploy-kind:
+	./hack/test-flowdeploy-kind.sh
+
 .PHONY: integration-registry-kind
 integration-registry-kind:
 	./hack/test-registry-kind.sh

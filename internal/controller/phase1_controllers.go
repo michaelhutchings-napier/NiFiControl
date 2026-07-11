@@ -2024,7 +2024,19 @@ func (r *NiFiFlowDeploymentReconciler) reconcileFlowDeploymentDelete(ctx context
 	if processGroups == nil {
 		processGroups = nifi.HTTPProcessGroupClient{}
 	}
-	if err := processGroups.DeleteProcessGroup(ctx, endpoint, processGroupID, instance.Status.Revision.Version); err != nil {
+	current, err := processGroups.GetProcessGroup(ctx, endpoint, processGroupID)
+	if err != nil {
+		if nifi.IsNotFound(err) {
+			_, err := removeFinalizer(ctx, r.Client, instance)
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	revision := instance.Status.Revision.Version
+	if current != nil {
+		revision = current.Revision.Version
+	}
+	if err := processGroups.DeleteProcessGroup(ctx, endpoint, processGroupID, revision); err != nil && !nifi.IsNotFound(err) {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 	_, err = removeFinalizer(ctx, r.Client, instance)
