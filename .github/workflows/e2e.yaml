@@ -40,6 +40,7 @@ jobs:
           - integration-oidc-kind
           - integration-oidc-tls-kind
           - integration-reportingtask-kind
+          - integration-canvas-kind
           - integration-authz-kind
           - integration-bluegreen-kind
           - integration-remoteprocessgroup-kind

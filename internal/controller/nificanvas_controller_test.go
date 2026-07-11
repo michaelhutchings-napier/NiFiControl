@@ -379,12 +379,18 @@ func (f *fakeInputPortClient) DeleteInputPort(ctx context.Context, baseURI strin
 }
 
 type fakeOutputPortClient struct {
-	created []nifi.PortEntity
-	err     error
+	created     []nifi.PortEntity
+	getEntity   *nifi.PortEntity // returned by GetOutputPort when set (e.g. to exercise delete refetch)
+	deletedRev  int64            // revision passed to the last DeleteOutputPort call
+	deleteCalls int
+	err         error
 }
 
 func (f *fakeOutputPortClient) GetOutputPort(ctx context.Context, baseURI string, id string) (*nifi.PortEntity, error) {
-	return nil, f.err
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.getEntity, nil
 }
 
 func (f *fakeOutputPortClient) CreateOutputPort(ctx context.Context, baseURI string, parentID string, entity nifi.PortEntity) (*nifi.PortEntity, error) {
@@ -412,6 +418,8 @@ func (f *fakeOutputPortClient) UpdateOutputPortRunStatus(ctx context.Context, ba
 }
 
 func (f *fakeOutputPortClient) DeleteOutputPort(ctx context.Context, baseURI string, id string, revisionVersion int64) error {
+	f.deleteCalls++
+	f.deletedRev = revisionVersion
 	return f.err
 }
 
@@ -1072,6 +1080,45 @@ func TestNiFiFunnelDeleteDropsFinalizerWhenClusterGone(t *testing.T) {
 	}
 	if len(nifiClient.deleted) != 0 {
 		t.Fatalf("must not call NiFi delete when the cluster is gone: %#v", nifiClient.deleted)
+	}
+}
+
+// A canvas component's stored revision can fall behind NiFi's current revision; deleting with the
+// stale revision returns HTTP 400 "not the most up-to-date revision" and the finalizer deadlocks.
+// The delete path must refetch the current revision (proven end to end by test-canvas-kind.sh).
+func TestNiFiOutputPortDeleteUsesRefetchedRevision(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	outputPort := &nifiv1alpha1.NiFiOutputPort{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments-out", Namespace: "default", Generation: 1, Finalizers: []string{NiFiControlFinalizer}},
+		Spec: nifiv1alpha1.NiFiOutputPortSpec{
+			ClusterRef:     nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			DeletionPolicy: nifiv1alpha1.DeletionPolicyDelete,
+		},
+		Status: nifiv1alpha1.NiFiOutputPortStatus{CommonStatus: nifiv1alpha1.CommonStatus{
+			NiFiID:   "output-port-1",
+			Revision: nifiv1alpha1.RevisionStatus{Version: 1}, // stale
+		}},
+	}
+	k8sClient := newCanvasTestClient(scheme, cluster, outputPort)
+	// NiFi reports the current (advanced) revision; the delete must use it, not the stored 1.
+	nifiClient := &fakeOutputPortClient{getEntity: &nifi.PortEntity{ID: "output-port-1", Revision: nifi.Revision{Version: 99}}}
+	reconciler := &NiFiOutputPortReconciler{Client: k8sClient, Scheme: scheme, OutputPortClient: nifiClient}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: outputPort.Name, Namespace: outputPort.Namespace}}
+
+	if err := k8sClient.Delete(context.Background(), outputPort); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+
+	if nifiClient.deleteCalls != 1 || nifiClient.deletedRev != 99 {
+		t.Fatalf("delete calls=%d revision=%d, want 1 call using the refetched revision 99 (not the stale 1)", nifiClient.deleteCalls, nifiClient.deletedRev)
+	}
+	got := &nifiv1alpha1.NiFiOutputPort{}
+	if err := k8sClient.Get(context.Background(), request.NamespacedName, got); !apierrors.IsNotFound(err) {
+		t.Fatalf("finalizer must be dropped after a successful delete; got err=%v", err)
 	}
 }
 

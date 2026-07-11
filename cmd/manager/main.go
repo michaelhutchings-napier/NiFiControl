@@ -13,6 +13,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 func main() {
@@ -23,7 +24,13 @@ func main() {
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&leaderElection, "leader-elect", false, "Enable leader election for controller manager.")
+	zapOpts := zap.Options{Development: false}
+	zapOpts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	// Without a configured logger, controller-runtime discards all logs ("log.SetLogger was never
+	// called; logs will not be displayed"), so the operator would run silently.
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zapOpts)))
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))

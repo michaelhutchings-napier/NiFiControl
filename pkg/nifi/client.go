@@ -383,13 +383,15 @@ type LabelEntity struct {
 }
 
 type LabelComponent struct {
-	ID            string            `json:"id,omitempty"`
-	ParentGroupID string            `json:"parentGroupId,omitempty"`
-	Label         string            `json:"label,omitempty"`
-	Position      *Position         `json:"position,omitempty"`
-	Width         int32             `json:"width,omitempty"`
-	Height        int32             `json:"height,omitempty"`
-	Style         map[string]string `json:"style,omitempty"`
+	ID            string    `json:"id,omitempty"`
+	ParentGroupID string    `json:"parentGroupId,omitempty"`
+	Label         string    `json:"label,omitempty"`
+	Position      *Position `json:"position,omitempty"`
+	// Width and Height are float64 because NiFi's LabelDTO models them as Double and returns
+	// them with a decimal (e.g. 200.0); unmarshaling that into an integer field fails.
+	Width  float64           `json:"width,omitempty"`
+	Height float64           `json:"height,omitempty"`
+	Style  map[string]string `json:"style,omitempty"`
 }
 
 type PortEntity struct {

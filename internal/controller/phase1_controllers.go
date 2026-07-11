@@ -699,7 +699,19 @@ func (r *NiFiParameterContextReconciler) reconcileParameterContextDelete(ctx con
 	if pcClient == nil {
 		pcClient = nifi.HTTPParameterContextClient{}
 	}
-	if err := pcClient.DeleteParameterContext(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil {
+	current, err := pcClient.GetParameterContext(ctx, endpoint, instance.Status.NiFiID)
+	if err != nil {
+		if nifi.IsNotFound(err) {
+			_, err := removeFinalizer(ctx, r.Client, instance)
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	revision := instance.Status.Revision.Version
+	if current != nil {
+		revision = current.Revision.Version
+	}
+	if err := pcClient.DeleteParameterContext(ctx, endpoint, instance.Status.NiFiID, revision); err != nil && !nifi.IsNotFound(err) {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 	_, err = removeFinalizer(ctx, r.Client, instance)
@@ -1485,7 +1497,19 @@ func (r *NiFiProcessGroupReconciler) reconcileProcessGroupDelete(ctx context.Con
 	if processGroups == nil {
 		processGroups = nifi.HTTPProcessGroupClient{}
 	}
-	if err := processGroups.DeleteProcessGroup(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil {
+	current, err := processGroups.GetProcessGroup(ctx, endpoint, instance.Status.NiFiID)
+	if err != nil {
+		if nifi.IsNotFound(err) {
+			_, err := removeFinalizer(ctx, r.Client, instance)
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	revision := instance.Status.Revision.Version
+	if current != nil {
+		revision = current.Revision.Version
+	}
+	if err := processGroups.DeleteProcessGroup(ctx, endpoint, instance.Status.NiFiID, revision); err != nil && !nifi.IsNotFound(err) {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 	_, err = removeFinalizer(ctx, r.Client, instance)
@@ -2403,7 +2427,19 @@ func (r *NiFiInputPortReconciler) reconcileInputPortDelete(ctx context.Context, 
 	if ports == nil {
 		ports = nifi.HTTPInputPortClient{}
 	}
-	if err := ports.DeleteInputPort(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil {
+	current, err := ports.GetInputPort(ctx, endpoint, instance.Status.NiFiID)
+	if err != nil {
+		if nifi.IsNotFound(err) {
+			_, err := removeFinalizer(ctx, r.Client, instance)
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	revision := instance.Status.Revision.Version
+	if current != nil {
+		revision = current.Revision.Version
+	}
+	if err := ports.DeleteInputPort(ctx, endpoint, instance.Status.NiFiID, revision); err != nil && !nifi.IsNotFound(err) {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 	_, err = removeFinalizer(ctx, r.Client, instance)
@@ -2594,7 +2630,19 @@ func (r *NiFiOutputPortReconciler) reconcileOutputPortDelete(ctx context.Context
 	if ports == nil {
 		ports = nifi.HTTPOutputPortClient{}
 	}
-	if err := ports.DeleteOutputPort(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil {
+	current, err := ports.GetOutputPort(ctx, endpoint, instance.Status.NiFiID)
+	if err != nil {
+		if nifi.IsNotFound(err) {
+			_, err := removeFinalizer(ctx, r.Client, instance)
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	revision := instance.Status.Revision.Version
+	if current != nil {
+		revision = current.Revision.Version
+	}
+	if err := ports.DeleteOutputPort(ctx, endpoint, instance.Status.NiFiID, revision); err != nil && !nifi.IsNotFound(err) {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 	_, err = removeFinalizer(ctx, r.Client, instance)
@@ -2820,7 +2868,19 @@ func (r *NiFiConnectionReconciler) reconcileConnectionDelete(ctx context.Context
 	if connections == nil {
 		connections = nifi.HTTPConnectionClient{}
 	}
-	if err := connections.DeleteConnection(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil {
+	current, err := connections.GetConnection(ctx, endpoint, instance.Status.NiFiID)
+	if err != nil {
+		if nifi.IsNotFound(err) {
+			_, err := removeFinalizer(ctx, r.Client, instance)
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	revision := instance.Status.Revision.Version
+	if current != nil {
+		revision = current.Revision.Version
+	}
+	if err := connections.DeleteConnection(ctx, endpoint, instance.Status.NiFiID, revision); err != nil && !nifi.IsNotFound(err) {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 	_, err = removeFinalizer(ctx, r.Client, instance)
@@ -3304,7 +3364,19 @@ func (r *NiFiFunnelReconciler) reconcileFunnelDelete(ctx context.Context, instan
 	if funnels == nil {
 		funnels = nifi.HTTPFunnelClient{}
 	}
-	if err := funnels.DeleteFunnel(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil {
+	current, err := funnels.GetFunnel(ctx, endpoint, instance.Status.NiFiID)
+	if err != nil {
+		if nifi.IsNotFound(err) {
+			_, err := removeFinalizer(ctx, r.Client, instance)
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	revision := instance.Status.Revision.Version
+	if current != nil {
+		revision = current.Revision.Version
+	}
+	if err := funnels.DeleteFunnel(ctx, endpoint, instance.Status.NiFiID, revision); err != nil && !nifi.IsNotFound(err) {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 	_, err = removeFinalizer(ctx, r.Client, instance)
@@ -3470,7 +3542,19 @@ func (r *NiFiLabelReconciler) reconcileLabelDelete(ctx context.Context, instance
 	if labels == nil {
 		labels = nifi.HTTPLabelClient{}
 	}
-	if err := labels.DeleteLabel(ctx, endpoint, instance.Status.NiFiID, instance.Status.Revision.Version); err != nil {
+	current, err := labels.GetLabel(ctx, endpoint, instance.Status.NiFiID)
+	if err != nil {
+		if nifi.IsNotFound(err) {
+			_, err := removeFinalizer(ctx, r.Client, instance)
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	revision := instance.Status.Revision.Version
+	if current != nil {
+		revision = current.Revision.Version
+	}
+	if err := labels.DeleteLabel(ctx, endpoint, instance.Status.NiFiID, revision); err != nil && !nifi.IsNotFound(err) {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 	_, err = removeFinalizer(ctx, r.Client, instance)
@@ -5103,8 +5187,8 @@ func desiredLabel(label *nifiv1alpha1.NiFiLabel, parentID string) nifi.LabelEnti
 	component := nifi.LabelComponent{
 		ParentGroupID: parentID,
 		Label:         label.Spec.Text,
-		Width:         label.Spec.Width,
-		Height:        label.Spec.Height,
+		Width:         float64(label.Spec.Width),
+		Height:        float64(label.Spec.Height),
 		Style:         label.Spec.Style,
 	}
 	if label.Spec.Position != nil {
