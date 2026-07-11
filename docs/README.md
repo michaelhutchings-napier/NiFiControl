@@ -18,8 +18,9 @@ scenario, verified end to end against real NiFi in kind.
 
 NiFiControl manages two layers. The **control plane** (`NiFiCluster`, `NiFiNodeGroup`) owns the
 StatefulSet, services, TLS, and coordination. The **canvas/tenant/flow layer** (users, groups,
-policies, parameter contexts, process groups, processors, connections, ports, controller services,
-reporting tasks, flow bundles, and flow deployments) reconciles by driving the NiFi REST API. Every
+policies, parameter contexts, parameter providers, process groups, processors, connections, ports,
+controller services, reporting tasks, flow bundles, and flow deployments) reconciles by driving the
+NiFi REST API. Every
 NiFi-resident kind shares `deletionPolicy` (Delete/Orphan), `driftPolicy` (Ignore/Warn/Reconcile/Fail),
 and `adoptionPolicy` (Never/IfExists/AdoptById/AdoptByName), so you choose per resource whether the
 operator prunes, reports, reconciles, or adopts what it finds in NiFi.
@@ -33,6 +34,9 @@ operator prunes, reports, reconciles, or adopts what it finds in NiFi.
   secured cluster.
 - **[Authorization (tenants and access policies)](authorization.md)** — `NiFiUser`, `NiFiUserGroup`,
   and `NiFiPolicy`, and how the operator authorizes itself and other clients.
+- **[Parameter providers](parameter-providers.md)** — `NiFiParameterProvider` sources parameters
+  from environment variables, files, or an external secret manager, keeping sensitive values out of
+  NiFi and out of CRs.
 
 ## Flow management
 
@@ -68,7 +72,7 @@ operator prunes, reports, reconciles, or adopts what it finds in NiFi.
 | Area | Kinds |
 | --- | --- |
 | Cluster | `NiFiCluster`, `NiFiNodeGroup` |
-| Tenancy | `NiFiUser`, `NiFiUserGroup`, `NiFiPolicy`, `NiFiParameterContext` |
+| Tenancy | `NiFiUser`, `NiFiUserGroup`, `NiFiPolicy`, `NiFiParameterContext`, `NiFiParameterProvider` |
 | Canvas | `NiFiProcessGroup`, `NiFiProcessor`, `NiFiConnection`, `NiFiInputPort`, `NiFiOutputPort`, `NiFiFunnel`, `NiFiLabel`, `NiFiControllerService`, `NiFiRemoteProcessGroup`, `NiFiReportingTask` |
 | Flow / GitOps | `NiFiRegistryClient`, `NiFiFlowBundle`, `NiFiFlowDeployment` |
 | Operations | `NiFiBackup`, `NiFiRestore`, `NiFiAutoscaler` |

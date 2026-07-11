@@ -106,6 +106,10 @@ integration-flowdeploy-kind:
 integration-backup-restore-kind:
 	./hack/test-backup-restore-kind.sh
 
+.PHONY: integration-paramprovider-kind
+integration-paramprovider-kind:
+	./hack/test-paramprovider-kind.sh
+
 .PHONY: integration-watchns-kind
 integration-watchns-kind:
 	./hack/test-watch-namespaces-kind.sh

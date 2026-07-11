@@ -21,6 +21,7 @@ They assume the NiFiControl operator and its CRDs are already installed (see the
 | [quickstart.yaml](quickstart.yaml) | Smallest possible single-node cluster (insecure, HTTP) | `NiFiCluster` |
 | [secured-cluster.yaml](secured-cluster.yaml) | TLS + single-user login + an admin tenant | `NiFiCluster`, `NiFiUser`, `NiFiPolicy` |
 | [tenancy.yaml](tenancy.yaml) | Parameter contexts, users, groups, and access policies | `NiFiParameterContext`, `NiFiUser`, `NiFiUserGroup`, `NiFiPolicy` |
+| [parameter-provider.yaml](parameter-provider.yaml) | Source parameters from env vars or an external secret manager | `NiFiParameterProvider` |
 | [canvas-flow.yaml](canvas-flow.yaml) | A small flow built declaratively on the canvas | `NiFiProcessGroup`, `NiFiControllerService`, `NiFiProcessor`, `NiFiConnection`, `NiFiFunnel`, `NiFiOutputPort`, `NiFiLabel` |
 | [flow-deployment.yaml](flow-deployment.yaml) | GitOps: version a flow bundle and deploy it | `NiFiFlowBundle`, `NiFiFlowDeployment`, `NiFiRegistryClient` |
 | [backup-restore.yaml](backup-restore.yaml) | Capture a flow into a ConfigMap and restore it | `NiFiBackup`, `NiFiRestore` |

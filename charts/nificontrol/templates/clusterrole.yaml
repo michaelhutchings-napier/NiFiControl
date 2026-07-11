@@ -210,6 +210,7 @@ rules:
       - nifinodegroups
       - nifioutputports
       - nifiparametercontexts
+      - nifiparameterproviders
       - nifipolicies
       - nifiprocessgroups
       - nifiprocessors
@@ -243,6 +244,7 @@ rules:
       - nifinodegroups/finalizers
       - nifioutputports/finalizers
       - nifiparametercontexts/finalizers
+      - nifiparameterproviders/finalizers
       - nifipolicies/finalizers
       - nifiprocessgroups/finalizers
       - nifiprocessors/finalizers
@@ -270,6 +272,7 @@ rules:
       - nifinodegroups/status
       - nifioutputports/status
       - nifiparametercontexts/status
+      - nifiparameterproviders/status
       - nifipolicies/status
       - nifiprocessgroups/status
       - nifiprocessors/status

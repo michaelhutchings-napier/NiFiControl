@@ -408,6 +408,28 @@ func markReportingTaskWaitingForDependencies(ctx context.Context, c client.Clien
 	return c.Status().Update(ctx, obj)
 }
 
+func markParameterProviderReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiParameterProvider, nifiID string, revisionVersion int64, validationStatus string) error {
+	obj.Status.CommonStatus.MarkReady(obj.Generation, "ParameterProviderReady", "The NiFi parameter provider is reconciled.")
+	obj.Status.NiFiID = nifiID
+	obj.Status.Revision.Version = revisionVersion
+	obj.Status.ValidationStatus = validationStatus
+	obj.Status.Sync.LastError = ""
+	return c.Status().Update(ctx, obj)
+}
+
+func markParameterProviderNotReady(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiParameterProvider, reason, message string) error {
+	obj.Status.CommonStatus.MarkNotReady(obj.Generation, reason, message)
+	obj.Status.Dependencies.Ready = true
+	obj.Status.Dependencies.WaitingFor = nil
+	obj.Status.Sync.LastError = message
+	return c.Status().Update(ctx, obj)
+}
+
+func markParameterProviderWaitingForDependencies(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiParameterProvider, waitingFor []string) error {
+	obj.Status.CommonStatus.MarkWaitingForDependencies(obj.Generation, waitingFor)
+	return c.Status().Update(ctx, obj)
+}
+
 func markFunnelAccepted(ctx context.Context, c client.Client, obj *nifiv1alpha1.NiFiFunnel) error {
 	obj.Status.CommonStatus.MarkAccepted(obj.Generation)
 	return c.Status().Update(ctx, obj)

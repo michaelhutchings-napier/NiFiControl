@@ -86,6 +86,9 @@ import (
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifireportingtasks,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifireportingtasks/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifireportingtasks/finalizers,verbs=update
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiparameterproviders,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiparameterproviders/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nifiparameterproviders/finalizers,verbs=update
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nififunnels,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nififunnels/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=nifi.controlnifi.io,resources=nififunnels/finalizers,verbs=update
@@ -3250,6 +3253,275 @@ func (r *NiFiReportingTaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+type NiFiParameterProviderReconciler struct {
+	client.Client
+	Scheme                  *runtime.Scheme
+	ParameterProviderClient nifi.ParameterProviderClient
+}
+
+func (r *NiFiParameterProviderReconciler) parameterProviderClient() nifi.ParameterProviderClient {
+	if r.ParameterProviderClient != nil {
+		return r.ParameterProviderClient
+	}
+	return nifi.HTTPParameterProviderClient{}
+}
+
+func (r *NiFiParameterProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	instance := &nifiv1alpha1.NiFiParameterProvider{}
+	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	if !instance.DeletionTimestamp.IsZero() {
+		return r.reconcileParameterProviderDelete(ctx, instance)
+	}
+	if updated, err := ensureFinalizer(ctx, r.Client, instance); err != nil || updated {
+		return ctrl.Result{}, err
+	}
+	cluster, waitingFor, err := readyClusterForReference(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markParameterProviderWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		message := "Referenced NiFiCluster is ready but does not expose a NiFi API endpoint."
+		if shouldMarkParameterProviderNotReady(instance, "ClusterEndpointMissing", message) {
+			return ctrl.Result{}, markParameterProviderNotReady(ctx, r.Client, instance, "ClusterEndpointMissing", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	entity, waitingFor, err := r.desiredParameterProvider(ctx, instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(waitingFor) > 0 {
+		if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Dependencies.Ready || waitingForChanged(instance.Status.Dependencies.WaitingFor, waitingFor) {
+			return ctrl.Result{}, markParameterProviderWaitingForDependencies(ctx, r.Client, instance, waitingFor)
+		}
+		return ctrl.Result{}, nil
+	}
+
+	providers := r.parameterProviderClient()
+	if instance.Status.NiFiID != "" {
+		existing, err := providers.GetParameterProvider(ctx, endpoint, instance.Status.NiFiID)
+		if err != nil && !nifi.IsNotFound(err) {
+			message := fmt.Sprintf("Failed to get NiFi parameter provider: %v", err)
+			if shouldMarkParameterProviderNotReady(instance, "NiFiGetFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markParameterProviderNotReady(ctx, r.Client, instance, "NiFiGetFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if existing != nil {
+			return r.reconcileExistingParameterProvider(ctx, instance, endpoint, providers, entity, existing)
+		}
+	}
+	if instance.Spec.AdoptionPolicy.Mode == nifiv1alpha1.AdoptionPolicyAdoptByID && instance.Spec.AdoptionPolicy.NiFiID != "" {
+		existing, err := providers.GetParameterProvider(ctx, endpoint, instance.Spec.AdoptionPolicy.NiFiID)
+		if err != nil {
+			message := fmt.Sprintf("Failed to adopt NiFi parameter provider: %v", err)
+			if shouldMarkParameterProviderNotReady(instance, "AdoptionFailed", message) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, markParameterProviderNotReady(ctx, r.Client, instance, "AdoptionFailed", message)
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if existing != nil {
+			return r.reconcileExistingParameterProvider(ctx, instance, endpoint, providers, entity, existing)
+		}
+	}
+
+	created, err := providers.CreateParameterProvider(ctx, endpoint, entity)
+	if err != nil {
+		message := fmt.Sprintf("Failed to create NiFi parameter provider: %v", err)
+		if shouldMarkParameterProviderNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markParameterProviderNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	if created == nil {
+		message := "NiFi returned an empty parameter provider response."
+		if shouldMarkParameterProviderNotReady(instance, "NiFiCreateFailed", message) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, markParameterProviderNotReady(ctx, r.Client, instance, "NiFiCreateFailed", message)
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	return r.reconcileExistingParameterProvider(ctx, instance, endpoint, providers, entity, created)
+}
+
+// reconcileExistingParameterProvider brings an existing NiFi parameter provider to the desired
+// config. A parameter provider has no run state, so a change is a direct PUT with the current
+// revision — no stop/start dance is needed.
+func (r *NiFiParameterProviderReconciler) reconcileExistingParameterProvider(ctx context.Context, instance *nifiv1alpha1.NiFiParameterProvider, endpoint string, providers nifi.ParameterProviderClient, desired nifi.ParameterProviderEntity, existing *nifi.ParameterProviderEntity) (ctrl.Result, error) {
+	nifiID := nifi.ParameterProviderEntityID(*existing)
+	current := existing
+
+	if parameterProviderNeedsUpdate(desired, *current) {
+		update := desired
+		update.ID = nifiID
+		update.Component.ID = nifiID
+		update.Revision.Version = current.Revision.Version
+		updated, err := providers.UpdateParameterProvider(ctx, endpoint, update)
+		if err != nil {
+			return r.parameterProviderWriteFailed(ctx, instance, "NiFiUpdateFailed", "update", err)
+		}
+		if updated != nil {
+			current = updated
+		}
+	}
+
+	if !parameterProviderStatusMatches(instance, nifiID, current.Revision.Version, current.Component.ValidationStatus) {
+		return ctrl.Result{}, markParameterProviderReady(ctx, r.Client, instance, nifiID, current.Revision.Version, current.Component.ValidationStatus)
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *NiFiParameterProviderReconciler) parameterProviderWriteFailed(ctx context.Context, instance *nifiv1alpha1.NiFiParameterProvider, reason, verb string, err error) (ctrl.Result, error) {
+	message := fmt.Sprintf("Failed to %s NiFi parameter provider: %v", verb, err)
+	if shouldMarkParameterProviderNotReady(instance, reason, message) {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, markParameterProviderNotReady(ctx, r.Client, instance, reason, message)
+	}
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+func (r *NiFiParameterProviderReconciler) reconcileParameterProviderDelete(ctx context.Context, instance *nifiv1alpha1.NiFiParameterProvider) (ctrl.Result, error) {
+	if instance.Spec.DeletionPolicy != nifiv1alpha1.DeletionPolicyDelete || instance.Status.NiFiID == "" {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	cluster, gone, err := clusterForDeletion(ctx, r.Client, instance.Namespace, instance.Spec.ClusterRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if gone {
+		// The cluster (and its parameter provider) is gone; nothing to delete remotely.
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	endpoint := clusterEndpoint(cluster)
+	if endpoint == "" {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	providers := r.parameterProviderClient()
+	// Read the provider for its current revision, then delete. Refetching avoids a stale-revision
+	// rejection if the provider changed since the CR last observed it.
+	current, err := providers.GetParameterProvider(ctx, endpoint, instance.Status.NiFiID)
+	if err != nil && !nifi.IsNotFound(err) {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	if current != nil {
+		if err := providers.DeleteParameterProvider(ctx, endpoint, instance.Status.NiFiID, current.Revision.Version); err != nil && !nifi.IsNotFound(err) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		}
+	}
+	_, err = removeFinalizer(ctx, r.Client, instance)
+	return ctrl.Result{}, err
+}
+
+func (r *NiFiParameterProviderReconciler) desiredParameterProvider(ctx context.Context, instance *nifiv1alpha1.NiFiParameterProvider) (nifi.ParameterProviderEntity, []string, error) {
+	properties := make(map[string]string, len(instance.Spec.Properties)+len(instance.Spec.SensitiveProperties))
+	for key, value := range instance.Spec.Properties {
+		properties[key] = value
+	}
+	waitingFor := make([]string, 0)
+	for propertyName, source := range instance.Spec.SensitiveProperties {
+		if source.SecretKeyRef == nil {
+			waitingFor = append(waitingFor, fmt.Sprintf("sensitiveProperties.%s.secretKeyRef", propertyName))
+			continue
+		}
+		secretRef := source.SecretKeyRef
+		secret := &corev1.Secret{}
+		key := types.NamespacedName{Name: secretRef.Name, Namespace: instance.Namespace}
+		if err := r.Get(ctx, key, secret); err != nil {
+			if apierrors.IsNotFound(err) {
+				waitingFor = append(waitingFor, fmt.Sprintf("Secret/%s/%s", instance.Namespace, secretRef.Name))
+				continue
+			}
+			return nifi.ParameterProviderEntity{}, nil, err
+		}
+		data, ok := secret.Data[secretRef.Key]
+		if !ok {
+			if secretRef.Optional != nil && *secretRef.Optional {
+				properties[propertyName] = ""
+			} else {
+				waitingFor = append(waitingFor, fmt.Sprintf("Secret/%s/%s:%s", instance.Namespace, secretRef.Name, secretRef.Key))
+			}
+			continue
+		}
+		properties[propertyName] = string(data)
+	}
+	if len(properties) == 0 {
+		properties = nil
+	}
+
+	component := nifi.ParameterProviderComponent{
+		Name:       instance.Name,
+		Type:       instance.Spec.Type,
+		Properties: properties,
+	}
+	if instance.Spec.Bundle != nil {
+		component.Bundle = &nifi.Bundle{
+			Group:    instance.Spec.Bundle.Group,
+			Artifact: instance.Spec.Bundle.Artifact,
+			Version:  instance.Spec.Bundle.Version,
+		}
+	}
+	return nifi.ParameterProviderEntity{Revision: nifi.Revision{Version: 0}, Component: component}, waitingFor, nil
+}
+
+func parameterProviderNeedsUpdate(desired nifi.ParameterProviderEntity, existing nifi.ParameterProviderEntity) bool {
+	if desired.Component.Name != existing.Component.Name ||
+		desired.Component.Type != existing.Component.Type {
+		return true
+	}
+	if !nifiBundlesEqual(desired.Component.Bundle, existing.Component.Bundle) {
+		return true
+	}
+	return !stringMapsEqual(desired.Component.Properties, existing.Component.Properties)
+}
+
+func parameterProviderStatusMatches(instance *nifiv1alpha1.NiFiParameterProvider, nifiID string, revisionVersion int64, validationStatus string) bool {
+	return instance.Status.ObservedGeneration == instance.Generation &&
+		instance.Status.Ready &&
+		instance.Status.Dependencies.Ready &&
+		instance.Status.NiFiID == nifiID &&
+		instance.Status.Revision.Version == revisionVersion &&
+		instance.Status.ValidationStatus == validationStatus
+}
+
+func shouldMarkParameterProviderNotReady(instance *nifiv1alpha1.NiFiParameterProvider, reason, message string) bool {
+	if instance.Status.ObservedGeneration != instance.Generation || instance.Status.Ready || instance.Status.Sync.LastError != message {
+		return true
+	}
+	for _, condition := range instance.Status.Conditions {
+		if condition.Type == string(nifiv1alpha1.ConditionReady) {
+			return condition.Reason != reason
+		}
+	}
+	return true
+}
+
+func (r *NiFiParameterProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &nifiv1alpha1.NiFiParameterProvider{}, clusterRefIndexField, indexParameterProviderClusterRef); err != nil {
+		return err
+	}
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&nifiv1alpha1.NiFiParameterProvider{}).
+		Watches(&nifiv1alpha1.NiFiCluster{}, handler.EnqueueRequestsFromMapFunc(r.requestsForCluster)).
+		Complete(r)
+}
+
 type NiFiFunnelReconciler struct {
 	client.Client
 	Scheme       *runtime.Scheme
@@ -3702,6 +3974,14 @@ func indexReportingTaskClusterRef(obj client.Object) []string {
 	return indexClusterRef(reportingTask.Namespace, reportingTask.Spec.ClusterRef)
 }
 
+func indexParameterProviderClusterRef(obj client.Object) []string {
+	provider, ok := obj.(*nifiv1alpha1.NiFiParameterProvider)
+	if !ok {
+		return nil
+	}
+	return indexClusterRef(provider.Namespace, provider.Spec.ClusterRef)
+}
+
 func indexFunnelClusterRef(obj client.Object) []string {
 	funnel, ok := obj.(*nifiv1alpha1.NiFiFunnel)
 	if !ok {
@@ -3860,6 +4140,18 @@ func (r *NiFiConnectionReconciler) requestsForCluster(ctx context.Context, obj c
 
 func (r *NiFiReportingTaskReconciler) requestsForCluster(ctx context.Context, obj client.Object) []reconcile.Request {
 	list := &nifiv1alpha1.NiFiReportingTaskList{}
+	if err := listByClusterRef(ctx, r.Client, obj, list); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: item.Name, Namespace: item.Namespace}})
+	}
+	return requests
+}
+
+func (r *NiFiParameterProviderReconciler) requestsForCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &nifiv1alpha1.NiFiParameterProviderList{}
 	if err := listByClusterRef(ctx, r.Client, obj, list); err != nil {
 		return nil
 	}

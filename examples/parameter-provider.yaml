@@ -1,0 +1,45 @@
+# Parameter provider: source parameters from outside NiFi so sensitive values are owned and rotated
+# externally. This example uses the built-in EnvironmentVariableParameterProvider (no external
+# service needed) plus a commented cloud-secret-manager variant whose credentials come from a
+# Kubernetes Secret via sensitiveProperties. See docs/parameter-providers.md.
+#
+# Assumes a NiFiCluster named "production" already exists (see quickstart.yaml / secured-cluster.yaml).
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiParameterProvider
+metadata:
+  name: env
+spec:
+  clusterRef: {name: production}
+  type: org.apache.nifi.parameter.EnvironmentVariableParameterProvider
+  properties:
+    # Property keys are NiFi's internal descriptor names (kebab-case), NOT the UI display names:
+    # a display name like "Parameter Group Name" is stored as an unknown dynamic property and
+    # leaves the provider INVALID. Every environment variable becomes a parameter in this group;
+    # the inclusion strategy defaults to including all, or set
+    # environment-variable-inclusion-strategy to include-all / comma-separated / regex.
+    parameter-group-name: environment
+  deletionPolicy: Delete
+# ---
+# An external secret manager. Credentials come from a Secret, so no secret material lives in the CR.
+# Property keys below are illustrative — confirm the provider's exact internal descriptor names.
+# Create the Secret first:
+#   kubectl -n dataflows create secret generic aws-creds \
+#     --from-literal=access-key-id=... --from-literal=secret-access-key=...
+#
+# apiVersion: nifi.controlnifi.io/v1alpha1
+# kind: NiFiParameterProvider
+# metadata:
+#   name: aws-secrets
+# spec:
+#   clusterRef: {name: production}
+#   type: org.apache.nifi.parameter.aws.AwsSecretsManagerParameterProvider
+#   bundle: {group: org.apache.nifi, artifact: nifi-aws-nar}
+#   properties:
+#     region: eu-west-2
+#   sensitiveProperties:
+#     access-key:
+#       secretKeyRef: {name: aws-creds, key: access-key-id}
+#     secret-key:
+#       secretKeyRef: {name: aws-creds, key: secret-access-key}
+#   deletionPolicy: Delete
