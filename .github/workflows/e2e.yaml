@@ -43,6 +43,7 @@ jobs:
           - integration-canvas-kind
           - integration-flowdeploy-kind
           - integration-backup-restore-kind
+          - integration-watchns-kind
           - integration-authz-kind
           - integration-bluegreen-kind
           - integration-remoteprocessgroup-kind

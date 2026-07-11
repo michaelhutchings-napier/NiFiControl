@@ -47,6 +47,9 @@ spec:
             {{- if .Values.leaderElection.enabled }}
             - --leader-elect
             {{- end }}
+            {{- with .Values.watchNamespaces }}
+            - --watch-namespaces={{ join "," . }}
+            {{- end }}
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

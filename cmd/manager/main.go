@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"os"
+	"strings"
 
 	"github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	"github.com/michaelhutchings-napier/NiFiControl/internal/controller"
@@ -12,9 +13,25 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
+
+// namespaceCacheConfig parses a comma-separated namespace list into a controller-runtime cache
+// restriction. An empty list returns nil, meaning watch all namespaces (cluster-scoped).
+func namespaceCacheConfig(watchNamespaces string) map[string]cache.Config {
+	config := map[string]cache.Config{}
+	for _, ns := range strings.Split(watchNamespaces, ",") {
+		if ns = strings.TrimSpace(ns); ns != "" {
+			config[ns] = cache.Config{}
+		}
+	}
+	if len(config) == 0 {
+		return nil
+	}
+	return config
+}
 
 func main() {
 	var metricsAddr string
@@ -24,6 +41,9 @@ func main() {
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&leaderElection, "leader-elect", false, "Enable leader election for controller manager.")
+	var watchNamespaces string
+	flag.StringVar(&watchNamespaces, "watch-namespaces", os.Getenv("WATCH_NAMESPACES"),
+		"Comma-separated namespaces to watch. Empty (the default) watches all namespaces. Defaults to the WATCH_NAMESPACES env var.")
 	zapOpts := zap.Options{Development: false}
 	zapOpts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -36,13 +56,19 @@ func main() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	options := ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                serverOptions(metricsAddr),
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         leaderElection,
 		LeaderElectionID:       "nificontrol.nifi.controlnifi.io",
-	})
+	}
+	// Restrict the cache (and therefore the reconcilers) to specific namespaces when requested, so
+	// the operator can run namespace-scoped (one per team) instead of cluster-wide.
+	if nsConfig := namespaceCacheConfig(watchNamespaces); nsConfig != nil {
+		options.Cache = cache.Options{DefaultNamespaces: nsConfig}
+	}
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), options)
 	if err != nil {
 		os.Exit(1)
 	}

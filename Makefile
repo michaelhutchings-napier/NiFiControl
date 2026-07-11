@@ -106,6 +106,10 @@ integration-flowdeploy-kind:
 integration-backup-restore-kind:
 	./hack/test-backup-restore-kind.sh
 
+.PHONY: integration-watchns-kind
+integration-watchns-kind:
+	./hack/test-watch-namespaces-kind.sh
+
 .PHONY: integration-registry-kind
 integration-registry-kind:
 	./hack/test-registry-kind.sh

@@ -21,6 +21,12 @@ rbac:
 leaderElection:
   enabled: true
 
+# Namespaces the operator watches. Empty (the default) watches all namespaces (cluster-scoped).
+# Set to a list, e.g. [team-a, team-b], to run the operator namespace-scoped — it then reconciles
+# only resources in those namespaces. RBAC stays a ClusterRole because a few resources the operator
+# reads are cluster-scoped (e.g. CSI drivers); scope with your own Roles if you need tighter RBAC.
+watchNamespaces: []
+
 metrics:
   bindAddress: ":8080"
   port: 8080
