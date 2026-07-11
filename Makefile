@@ -102,6 +102,10 @@ integration-canvas-kind:
 integration-flowdeploy-kind:
 	./hack/test-flowdeploy-kind.sh
 
+.PHONY: integration-backup-restore-kind
+integration-backup-restore-kind:
+	./hack/test-backup-restore-kind.sh
+
 .PHONY: integration-registry-kind
 integration-registry-kind:
 	./hack/test-registry-kind.sh
