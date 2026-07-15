@@ -15,6 +15,8 @@ scenario, verified end to end against real NiFi in kind.
   Ingress + proxy hosts, rolling / `OnDelete` upgrades, termination grace, and OpenShift SCCs.
 - **[Deploying with Argo CD](argocd.md)** — a Lua health check so Argo CD tracks NiFiControl
   resources' `Ready` status, plus CRD/sync-wave ordering for GitOps.
+- **[Running in an Istio mesh](istio.md)** — sidecar injection, excluding NiFi's node-to-node
+  cluster ports so clustering works, mesh-mTLS vs internalTLS, and ingress-gateway exposure.
 
 ## Concepts
 
