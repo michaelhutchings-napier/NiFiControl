@@ -13,6 +13,8 @@ scenario, verified end to end against real NiFi in kind.
   cluster with tenants, a declarative flow, GitOps deployments, autoscaling, and backup/restore.
 - **[Production cluster hardening](production-cluster.md)** — pod scheduling, PodDisruptionBudget,
   Ingress + proxy hosts, rolling / `OnDelete` upgrades, termination grace, and OpenShift SCCs.
+- **[Deploying with Argo CD](argocd.md)** — a Lua health check so Argo CD tracks NiFiControl
+  resources' `Ready` status, plus CRD/sync-wave ordering for GitOps.
 
 ## Concepts
 
