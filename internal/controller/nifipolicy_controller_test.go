@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 type fakeAccessPolicyClient struct {
@@ -76,6 +77,44 @@ func readyUser(name, nifiID, identity string) *nifiv1alpha1.NiFiUser {
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: 1},
 		Spec:       nifiv1alpha1.NiFiUserSpec{ClusterRef: nifiv1alpha1.ClusterReference{Name: "production"}, Identity: identity},
 		Status:     nifiv1alpha1.NiFiUserStatus{CommonStatus: nifiv1alpha1.CommonStatus{Ready: true, NiFiID: nifiID, ObservedGeneration: 1}},
+	}
+}
+
+func TestNiFiPolicyWatchesWakeCrossNamespaceReferences(t *testing.T) {
+	// A policy in team-a may grant a NiFiUser/NiFiUserGroup or reference a NiFiCluster in another
+	// namespace. Because the reconcile does not requeue while waiting on a dependency, the watch
+	// mappers must find that policy when the cross-namespace dependency changes — even though the
+	// changed object lives in a different namespace than the policy.
+	scheme := testScheme()
+	policy := &nifiv1alpha1.NiFiPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "grant", Namespace: "team-a", Generation: 1},
+		Spec: nifiv1alpha1.NiFiPolicySpec{
+			ClusterRef:    nifiv1alpha1.ClusterReference{Name: "prod", Namespace: "team-d"},
+			Resource:      "/flow",
+			Action:        "read",
+			UserRefs:      []nifiv1alpha1.LocalObjectReference{{Name: "alice", Namespace: "team-b"}},
+			UserGroupRefs: []nifiv1alpha1.LocalObjectReference{{Name: "readers", Namespace: "team-c"}},
+		},
+	}
+	r := &NiFiPolicyReconciler{Client: policyTestClient(scheme, policy), Scheme: scheme}
+	want := types.NamespacedName{Name: "grant", Namespace: "team-a"}
+
+	assertWakes := func(name string, reqs []reconcile.Request) {
+		t.Helper()
+		if len(reqs) != 1 || reqs[0].NamespacedName != want {
+			t.Fatalf("%s: expected the cross-namespace policy team-a/grant to be enqueued, got %#v", name, reqs)
+		}
+	}
+	assertWakes("user", r.requestsForPolicyUser(context.Background(), &nifiv1alpha1.NiFiUser{ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "team-b"}}))
+	assertWakes("userGroup", r.requestsForPolicyUserGroup(context.Background(), &nifiv1alpha1.NiFiUserGroup{ObjectMeta: metav1.ObjectMeta{Name: "readers", Namespace: "team-c"}}))
+	assertWakes("cluster", r.requestsForPolicyCluster(context.Background(), &nifiv1alpha1.NiFiCluster{ObjectMeta: metav1.ObjectMeta{Name: "prod", Namespace: "team-d"}}))
+
+	// Namespace must still be discriminating: a same-named object in another namespace must NOT wake it.
+	if reqs := r.requestsForPolicyUser(context.Background(), &nifiv1alpha1.NiFiUser{ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "team-x"}}); len(reqs) != 0 {
+		t.Fatalf("user in a non-referenced namespace must not wake the policy, got %#v", reqs)
+	}
+	if reqs := r.requestsForPolicyCluster(context.Background(), &nifiv1alpha1.NiFiCluster{ObjectMeta: metav1.ObjectMeta{Name: "prod", Namespace: "team-x"}}); len(reqs) != 0 {
+		t.Fatalf("cluster of the same name in another namespace must not wake the policy, got %#v", reqs)
 	}
 }
 

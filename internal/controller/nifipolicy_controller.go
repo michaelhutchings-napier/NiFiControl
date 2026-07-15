@@ -311,9 +311,15 @@ func (r *NiFiPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *NiFiPolicyReconciler) policiesInNamespace(ctx context.Context, namespace string) []nifiv1alpha1.NiFiPolicy {
+// allPolicies lists every NiFiPolicy across all namespaces. The dependency watches must scan all
+// namespaces, not just the changed object's own: a NiFiPolicy may reference a NiFiUser,
+// NiFiUserGroup, or NiFiCluster in a different namespace (LocalObjectReference and ClusterReference
+// both carry a namespace). Because the reconcile does not requeue while waiting on a dependency, a
+// namespace-scoped list would never wake a cross-namespace policy when its dependency becomes Ready,
+// leaving it stuck until the next periodic resync.
+func (r *NiFiPolicyReconciler) allPolicies(ctx context.Context) []nifiv1alpha1.NiFiPolicy {
 	list := &nifiv1alpha1.NiFiPolicyList{}
-	if err := r.List(ctx, list, client.InNamespace(namespace)); err != nil {
+	if err := r.List(ctx, list); err != nil {
 		return nil
 	}
 	return list.Items
@@ -321,8 +327,8 @@ func (r *NiFiPolicyReconciler) policiesInNamespace(ctx context.Context, namespac
 
 func (r *NiFiPolicyReconciler) requestsForPolicyCluster(ctx context.Context, obj client.Object) []reconcile.Request {
 	var out []reconcile.Request
-	for _, policy := range r.policiesInNamespace(ctx, obj.GetNamespace()) {
-		if policy.Spec.ClusterRef.Name == obj.GetName() {
+	for _, policy := range r.allPolicies(ctx) {
+		if policy.Spec.ClusterRef.Name == obj.GetName() && clusterRefNamespace(policy.Namespace, policy.Spec.ClusterRef) == obj.GetNamespace() {
 			out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: policy.Name, Namespace: policy.Namespace}})
 		}
 	}
@@ -331,7 +337,7 @@ func (r *NiFiPolicyReconciler) requestsForPolicyCluster(ctx context.Context, obj
 
 func (r *NiFiPolicyReconciler) requestsForPolicyUser(ctx context.Context, obj client.Object) []reconcile.Request {
 	var out []reconcile.Request
-	for _, policy := range r.policiesInNamespace(ctx, obj.GetNamespace()) {
+	for _, policy := range r.allPolicies(ctx) {
 		for _, ref := range policy.Spec.UserRefs {
 			if ref.Name == obj.GetName() && localObjectRefNamespace(policy.Namespace, ref) == obj.GetNamespace() {
 				out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: policy.Name, Namespace: policy.Namespace}})
@@ -344,7 +350,7 @@ func (r *NiFiPolicyReconciler) requestsForPolicyUser(ctx context.Context, obj cl
 
 func (r *NiFiPolicyReconciler) requestsForPolicyUserGroup(ctx context.Context, obj client.Object) []reconcile.Request {
 	var out []reconcile.Request
-	for _, policy := range r.policiesInNamespace(ctx, obj.GetNamespace()) {
+	for _, policy := range r.allPolicies(ctx) {
 		for _, ref := range policy.Spec.UserGroupRefs {
 			if ref.Name == obj.GetName() && localObjectRefNamespace(policy.Namespace, ref) == obj.GetNamespace() {
 				out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: policy.Name, Namespace: policy.Namespace}})
