@@ -55,6 +55,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
+      - name: Install yq
+        # The chart-image-tag pin below uses yq. ubuntu-latest currently ships yq, but that is an
+        # undocumented dependency on the runner image; install it explicitly so the release does not
+        # silently break if the image changes.
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
       - name: Resolve version from tag
         id: version
         run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
