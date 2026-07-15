@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	"github.com/michaelhutchings-napier/NiFiControl/internal/controller"
@@ -37,10 +38,17 @@ func main() {
 	var metricsAddr string
 	var probeAddr string
 	var leaderElection bool
+	var leaseDuration, renewDeadline, retryPeriod time.Duration
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&leaderElection, "leader-elect", false, "Enable leader election for controller manager.")
+	// Leader-election timing. Defaults match controller-runtime's own; tune them on slow or
+	// contended API servers to avoid spurious leadership loss. Must satisfy
+	// leaseDuration > renewDeadline > retryPeriod.
+	flag.DurationVar(&leaseDuration, "leader-elect-lease-duration", 15*time.Second, "Duration non-leaders wait before force-acquiring leadership.")
+	flag.DurationVar(&renewDeadline, "leader-elect-renew-deadline", 10*time.Second, "Duration the acting leader retries refreshing leadership before giving up.")
+	flag.DurationVar(&retryPeriod, "leader-elect-retry-period", 2*time.Second, "Interval between leader-election action attempts.")
 	var watchNamespaces string
 	flag.StringVar(&watchNamespaces, "watch-namespaces", os.Getenv("WATCH_NAMESPACES"),
 		"Comma-separated namespaces to watch. Empty (the default) watches all namespaces. Defaults to the WATCH_NAMESPACES env var.")
@@ -62,6 +70,9 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         leaderElection,
 		LeaderElectionID:       "nificontrol.nifi.controlnifi.io",
+		LeaseDuration:          &leaseDuration,
+		RenewDeadline:          &renewDeadline,
+		RetryPeriod:            &retryPeriod,
 	}
 	// Restrict the cache (and therefore the reconcilers) to specific namespaces when requested, so
 	// the operator can run namespace-scoped (one per team) instead of cluster-wide.

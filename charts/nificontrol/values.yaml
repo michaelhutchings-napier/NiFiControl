@@ -20,6 +20,12 @@ rbac:
 
 leaderElection:
   enabled: true
+  # Leader-election timing (only used when enabled). The defaults match controller-runtime's own;
+  # raise them on slow or contended API servers to avoid spurious leadership loss. Durations are
+  # Go duration strings (e.g. 30s, 1m). Must satisfy leaseDuration > renewDeadline > retryPeriod.
+  leaseDuration: 15s
+  renewDeadline: 10s
+  retryPeriod: 2s
 
 # Namespaces the operator watches. Empty (the default) watches all namespaces (cluster-scoped).
 # Set to a list, e.g. [team-a, team-b], to run the operator namespace-scoped — it then reconciles

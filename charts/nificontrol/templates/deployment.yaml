@@ -46,6 +46,15 @@ spec:
             - --health-probe-bind-address={{ .Values.healthProbe.bindAddress }}
             {{- if .Values.leaderElection.enabled }}
             - --leader-elect
+            {{- with .Values.leaderElection.leaseDuration }}
+            - --leader-elect-lease-duration={{ . }}
+            {{- end }}
+            {{- with .Values.leaderElection.renewDeadline }}
+            - --leader-elect-renew-deadline={{ . }}
+            {{- end }}
+            {{- with .Values.leaderElection.retryPeriod }}
+            - --leader-elect-retry-period={{ . }}
+            {{- end }}
             {{- end }}
             {{- with .Values.watchNamespaces }}
             - --watch-namespaces={{ join "," . }}
