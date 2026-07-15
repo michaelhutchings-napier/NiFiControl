@@ -561,11 +561,10 @@ type NiFiClusterPodSpec struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	TerminationGracePeriodSeconds *int64 `json:"terminationGracePeriodSeconds,omitempty"`
-	// Probes tunes the timing and thresholds of the operator's startup, liveness, and
-	// readiness probes for the NiFi container. The probe actions stay operator-managed (which
-	// NiFi endpoint is checked, and how TLS is handled); only the scheduling fields — periods,
-	// timeouts, and thresholds — are adjustable. Widen the startup probe for flows that take
-	// minutes to boot.
+	// Probes tunes the operator's startup, liveness, and readiness probes for the NiFi container:
+	// the scheduling fields (periods, timeouts, thresholds) and, per probe, an optional custom
+	// handler that replaces the default NiFi health check. Widen the startup probe for flows that
+	// take minutes to boot.
 	// +optional
 	Probes *NiFiClusterProbesSpec `json:"probes,omitempty"`
 	// HostAliases adds entries to the node pods' /etc/hosts, for resolving private hostnames
@@ -604,6 +603,18 @@ type NiFiClusterPodSpec struct {
 	// +kubebuilder:validation:MaxItems=8
 	// +kubebuilder:validation:XValidation:rule="self.all(c, !(c.name in ['nifi','initialize-data']))",message="container names nifi and initialize-data are reserved for the operator"
 	ExtraContainers []corev1.Container `json:"extraContainers,omitempty"`
+	// ShareProcessNamespace makes the containers in each node pod share a single PID namespace,
+	// so an ephemeral debug container (kubectl debug) can see and signal the NiFi/JVM process.
+	// Off by default. Enabling it slightly weakens container isolation, so keep it for debugging.
+	// +optional
+	ShareProcessNamespace *bool `json:"shareProcessNamespace,omitempty"`
+	// SuspendOnCrash holds the NiFi container alive after the NiFi process exits instead of
+	// letting it restart (CrashLoopBackOff), so you can `kubectl exec` in to inspect a failed
+	// start (for example a missing sensitive.props.key). The operator drops the liveness and
+	// startup probes for the pod so the kubelet will not kill the held container; the pod stays
+	// NotReady. Delete the pod to retry. Debugging aid only — do not leave it on in production.
+	// +optional
+	SuspendOnCrash *bool `json:"suspendOnCrash,omitempty"`
 }
 
 // NiFiClusterProbesSpec tunes the operator's startup, liveness, and readiness probes for the

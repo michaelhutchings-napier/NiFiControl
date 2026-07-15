@@ -299,6 +299,13 @@ pod:
   # Defaults to 60s when unset (Kubernetes' own default is only 30). Keep it above the NiFi
   # bootstrap's graceful.shutdown.seconds (20); raise it for large backlogs or node offload.
   terminationGracePeriodSeconds: null   # e.g. 120
+  # Share a single PID namespace across the pod's containers so `kubectl debug` ephemeral
+  # containers can see and signal the NiFi/JVM process. Slightly weakens isolation; for debugging.
+  shareProcessNamespace: false
+  # Hold the NiFi container alive after the process exits (instead of CrashLoopBackOff) so you can
+  # `kubectl exec` in to inspect a failed start. The operator drops the liveness/startup probes; the
+  # pod stays NotReady. Delete the pod to retry. Debugging aid only — do not leave on in production.
+  suspendOnCrash: false
   # Tune the operator's startup/liveness/readiness probes for the NiFi container. Widen the
   # startup probe for flows that take minutes to boot. Any field left unset keeps the default
   # (startup: period 10s, failureThreshold 60 ≈ 10-min boot window; liveness: period 20s,

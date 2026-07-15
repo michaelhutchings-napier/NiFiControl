@@ -8,6 +8,7 @@ import (
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 )
 
 func podTestCluster(pod *nifiv1alpha1.NiFiClusterPodSpec) *nifiv1alpha1.NiFiCluster {
@@ -116,5 +117,43 @@ func TestLogbackOverrideRendersAndDrivesChecksum(t *testing.T) {
 	command := strings.Join(spec.Template.Spec.Containers[0].Command, "\n")
 	if !strings.Contains(command, "logback.xml.image-default") {
 		t.Fatal("expected the start command to restore logback.xml from the image default when the override is removed")
+	}
+}
+
+func TestPodShareProcessNamespace(t *testing.T) {
+	tmpl := desiredManagedClusterStatefulSetSpec(podTestCluster(&nifiv1alpha1.NiFiClusterPodSpec{ShareProcessNamespace: ptr.To(true)}), nil, "", nil).Template
+	if tmpl.Spec.ShareProcessNamespace == nil || !*tmpl.Spec.ShareProcessNamespace {
+		t.Fatalf("expected shareProcessNamespace=true on the pod spec, got %v", tmpl.Spec.ShareProcessNamespace)
+	}
+	def := desiredManagedClusterStatefulSetSpec(podTestCluster(&nifiv1alpha1.NiFiClusterPodSpec{}), nil, "", nil).Template
+	if def.Spec.ShareProcessNamespace != nil {
+		t.Fatalf("shareProcessNamespace should be unset by default, got %v", *def.Spec.ShareProcessNamespace)
+	}
+}
+
+func TestPodSuspendOnCrashHoldsContainerAndDropsRestartProbes(t *testing.T) {
+	c := desiredManagedClusterStatefulSetSpec(podTestCluster(&nifiv1alpha1.NiFiClusterPodSpec{SuspendOnCrash: ptr.To(true)}), nil, "", nil).Template.Spec.Containers[0]
+	cmd := c.Command[len(c.Command)-1]
+	if strings.Contains(cmd, `exec "${NIFI_HOME}/bin/nifi.sh" run`) {
+		t.Error("suspendOnCrash should replace the exec run so the shell survives a NiFi crash")
+	}
+	if !strings.Contains(cmd, "sleep infinity") {
+		t.Error("suspendOnCrash should hold the container with sleep infinity after NiFi exits")
+	}
+	if c.LivenessProbe != nil || c.StartupProbe != nil {
+		t.Error("suspendOnCrash must drop the liveness and startup probes so the held container is not restarted")
+	}
+	if c.ReadinessProbe == nil {
+		t.Error("suspendOnCrash should keep the readiness probe so the suspended pod reports NotReady")
+	}
+}
+
+func TestPodSuspendOnCrashOffKeepsExecAndProbes(t *testing.T) {
+	c := desiredManagedClusterStatefulSetSpec(podTestCluster(&nifiv1alpha1.NiFiClusterPodSpec{}), nil, "", nil).Template.Spec.Containers[0]
+	if !strings.Contains(c.Command[len(c.Command)-1], `exec "${NIFI_HOME}/bin/nifi.sh" run`) {
+		t.Error("default start command should exec nifi.sh run")
+	}
+	if c.LivenessProbe == nil || c.StartupProbe == nil {
+		t.Error("liveness and startup probes should be present by default")
 	}
 }

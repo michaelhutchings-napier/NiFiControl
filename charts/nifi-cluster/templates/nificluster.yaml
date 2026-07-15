@@ -262,7 +262,7 @@ spec:
   logging:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  {{- if or .Values.pod.labels .Values.pod.annotations .Values.pod.imagePullSecrets .Values.pod.serviceAccountName .Values.pod.securityContext .Values.pod.containerSecurityContext .Values.pod.openShiftSCC (not (kindIs "invalid" .Values.pod.terminationGracePeriodSeconds)) .Values.pod.probes .Values.pod.hostAliases .Values.pod.dnsPolicy .Values.pod.dnsConfig .Values.pod.extraVolumes .Values.pod.extraVolumeMounts .Values.pod.extraInitContainers .Values.pod.extraContainers }}
+  {{- if or .Values.pod.labels .Values.pod.annotations .Values.pod.imagePullSecrets .Values.pod.serviceAccountName .Values.pod.securityContext .Values.pod.containerSecurityContext .Values.pod.openShiftSCC (not (kindIs "invalid" .Values.pod.terminationGracePeriodSeconds)) .Values.pod.probes .Values.pod.hostAliases .Values.pod.dnsPolicy .Values.pod.dnsConfig .Values.pod.extraVolumes .Values.pod.extraVolumeMounts .Values.pod.extraInitContainers .Values.pod.extraContainers .Values.pod.shareProcessNamespace .Values.pod.suspendOnCrash }}
   pod:
     {{- with .Values.pod.labels }}
     labels:
@@ -292,6 +292,12 @@ spec:
     {{- end }}
     {{- if not (kindIs "invalid" .Values.pod.terminationGracePeriodSeconds) }}
     terminationGracePeriodSeconds: {{ .Values.pod.terminationGracePeriodSeconds }}
+    {{- end }}
+    {{- if .Values.pod.shareProcessNamespace }}
+    shareProcessNamespace: true
+    {{- end }}
+    {{- if .Values.pod.suspendOnCrash }}
+    suspendOnCrash: true
     {{- end }}
     {{- with .Values.pod.probes }}
     probes:

@@ -396,6 +396,28 @@ pair it with writable `emptyDir` mounts over those paths via `extraVolumes`/
 `extraVolumeMounts`. Sidecars and extra init containers you add carry their own
 `securityContext`.
 
+### Debugging a failing node
+
+Two opt-in aids help when a node will not start (for example a misconfigured
+`nifi.sensitive.props.key`) or when you need to attach a debugger:
+
+```yaml
+spec:
+  pod:
+    # Hold the container alive after NiFi exits instead of CrashLoopBackOff, so you can exec in.
+    suspendOnCrash: true
+    # Share one PID namespace so `kubectl debug` ephemeral containers can see the JVM.
+    shareProcessNamespace: true
+```
+
+`suspendOnCrash` replaces the container's `exec nifi.sh run` with a run that, on exit, logs a hint
+and `sleep`s forever, and the operator drops the liveness and startup probes so the kubelet does not
+restart the held container. The pod stays **NotReady**; `kubectl exec` into it to read logs and
+config, then **delete the pod** to retry. `shareProcessNamespace` lets a
+`kubectl debug -it <pod> --image=... --target=nifi` ephemeral container inspect and signal the NiFi
+process. Both are debugging aids — turn them off for production (a suspended pod never becomes Ready,
+and a shared PID namespace slightly weakens container isolation).
+
 ### OpenShift (SecurityContextConstraints)
 
 The `apache/nifi` image runs as a fixed **uid/gid 1000** and its install directory is owned by

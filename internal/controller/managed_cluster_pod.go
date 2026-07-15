@@ -41,4 +41,7 @@ func applyPodCustomization(cluster *nifiv1alpha1.NiFiCluster, template *corev1.P
 	}
 	template.Spec.InitContainers = append(template.Spec.InitContainers, pod.ExtraInitContainers...)
 	template.Spec.Containers = append(template.Spec.Containers, pod.ExtraContainers...)
+	if pod.ShareProcessNamespace != nil {
+		template.Spec.ShareProcessNamespace = pod.ShareProcessNamespace
+	}
 }

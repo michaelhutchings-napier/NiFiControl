@@ -534,6 +534,10 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls
 		webPort = tls.httpsPort
 		startCommand = managedNiFiStartCommandTLS
 	}
+	suspendOnCrash := managedClusterSuspendOnCrash(cluster)
+	if suspendOnCrash {
+		startCommand = suspendOnCrashCommand(startCommand)
+	}
 	container := corev1.Container{
 		Name:            "nifi",
 		Image:           managedClusterImage(cluster),
@@ -552,6 +556,13 @@ func desiredManagedClusterStatefulSetSpec(cluster *nifiv1alpha1.NiFiCluster, tls
 		LivenessProbe:   managedClusterLivenessProbe(cluster, tls),
 		ReadinessProbe:  managedClusterReadinessProbe(cluster, tls),
 		VolumeMounts:    managedClusterVolumeMounts(cluster.Spec.Storage, tls, hasConfigOverrides(cluster), managedClusterAuthVolumeSource(cluster, auth) != ""),
+	}
+	if suspendOnCrash {
+		// The container is deliberately held alive after a NiFi crash so it can be inspected; a
+		// failing liveness or startup probe must not make the kubelet restart it (which would
+		// defeat the hold). Readiness stays so the suspended pod correctly reports NotReady.
+		container.LivenessProbe = nil
+		container.StartupProbe = nil
 	}
 	podSpec := corev1.PodSpec{
 		ServiceAccountName:            managedClusterPodServiceAccountName(cluster),
@@ -732,6 +743,26 @@ func managedClusterProbeTuning(cluster *nifiv1alpha1.NiFiCluster, sel func(*nifi
 		return nil
 	}
 	return sel(cluster.Spec.Pod.Probes)
+}
+
+func managedClusterSuspendOnCrash(cluster *nifiv1alpha1.NiFiCluster) bool {
+	return cluster.Spec.Pod != nil && cluster.Spec.Pod.SuspendOnCrash != nil && *cluster.Spec.Pod.SuspendOnCrash
+}
+
+// suspendOnCrashCommand rewrites the NiFi start command so that, when spec.pod.suspendOnCrash is
+// set, the container stays alive after NiFi exits instead of restarting. The trailing
+// `exec nifi.sh run` (which would replace the shell and let the container die on a NiFi crash) is
+// replaced with a non-exec run that, on exit, logs a hint and sleeps forever so the pod can be
+// inspected with `kubectl exec`. errexit is disabled around the run so a non-zero exit reaches the
+// hold rather than aborting the script.
+func suspendOnCrashCommand(startCommand string) string {
+	const execRun = `exec "${NIFI_HOME}/bin/nifi.sh" run`
+	const hold = `set +e
+"${NIFI_HOME}/bin/nifi.sh" run
+nifi_exit=$?
+echo "[nificontrol] NiFi exited (code ${nifi_exit}); spec.pod.suspendOnCrash is enabled — holding this container so you can 'kubectl exec' in to inspect. Delete the pod to restart." >&2
+sleep infinity`
+	return strings.Replace(startCommand, execRun, hold, 1)
 }
 
 // applyProbeTuning overrides a probe's scheduling fields with any set in the tuning spec, and

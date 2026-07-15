@@ -913,6 +913,12 @@
           "type": ["integer", "null"],
           "minimum": 0
         },
+        "shareProcessNamespace": {
+          "type": ["boolean", "null"]
+        },
+        "suspendOnCrash": {
+          "type": ["boolean", "null"]
+        },
         "probes": {
           "type": "object",
           "additionalProperties": false,

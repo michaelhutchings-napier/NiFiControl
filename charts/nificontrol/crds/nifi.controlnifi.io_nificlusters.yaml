@@ -6677,11 +6677,10 @@ spec:
                     type: string
                   probes:
                     description: |-
-                      Probes tunes the timing and thresholds of the operator's startup, liveness, and
-                      readiness probes for the NiFi container. The probe actions stay operator-managed (which
-                      NiFi endpoint is checked, and how TLS is handled); only the scheduling fields — periods,
-                      timeouts, and thresholds — are adjustable. Widen the startup probe for flows that take
-                      minutes to boot.
+                      Probes tunes the operator's startup, liveness, and readiness probes for the NiFi container:
+                      the scheduling fields (periods, timeouts, thresholds) and, per probe, an optional custom
+                      handler that replaces the default NiFi health check. Widen the startup probe for flows that
+                      take minutes to boot.
                     properties:
                       liveness:
                         description: |-
@@ -7381,6 +7380,20 @@ spec:
                     description: ServiceAccountName runs the node pods under a specific
                       ServiceAccount.
                     type: string
+                  shareProcessNamespace:
+                    description: |-
+                      ShareProcessNamespace makes the containers in each node pod share a single PID namespace,
+                      so an ephemeral debug container (kubectl debug) can see and signal the NiFi/JVM process.
+                      Off by default. Enabling it slightly weakens container isolation, so keep it for debugging.
+                    type: boolean
+                  suspendOnCrash:
+                    description: |-
+                      SuspendOnCrash holds the NiFi container alive after the NiFi process exits instead of
+                      letting it restart (CrashLoopBackOff), so you can `kubectl exec` in to inspect a failed
+                      start (for example a missing sensitive.props.key). The operator drops the liveness and
+                      startup probes for the pod so the kubelet will not kill the held container; the pod stays
+                      NotReady. Delete the pod to retry. Debugging aid only — do not leave it on in production.
+                    type: boolean
                   terminationGracePeriodSeconds:
                     description: |-
                       TerminationGracePeriodSeconds is how long Kubernetes waits after sending SIGTERM
