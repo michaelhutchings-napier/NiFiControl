@@ -180,6 +180,42 @@ func TestNiFiParameterProviderReconcileUpdatesOnDrift(t *testing.T) {
 	}
 }
 
+func TestNiFiParameterProviderReconcileNoChurnFromDefaultsAndMaskedSensitive(t *testing.T) {
+	// Regression: NiFi returns descriptor defaults we never set and masks the sensitive value, so a
+	// naive full-map comparison updated the provider on every reconcile forever. With the provider
+	// already matching, reconcile must issue NO update.
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "aws-creds", Namespace: "default"},
+		Data:       map[string][]byte{"secret-access-key": []byte("s3cr3t")},
+	}
+	pp := newParameterProvider("secrets")
+	pp.Spec.SensitiveProperties = map[string]nifiv1alpha1.SensitivePropertySource{
+		"secret-key": {SecretKeyRef: &nifiv1alpha1.SecretKeyRef{SecretKeySelector: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "aws-creds"}, Key: "secret-access-key"}}},
+	}
+	pp.Status = nifiv1alpha1.NiFiParameterProviderStatus{CommonStatus: nifiv1alpha1.CommonStatus{Ready: true, NiFiID: "pp-1", ObservedGeneration: 1, Dependencies: nifiv1alpha1.DependencyStatus{Ready: true}}}
+	k8sClient := parameterProviderTestClient(scheme, cluster, secret, pp)
+	// NiFi's read view: our managed group, the sensitive value masked (empty), and an extra default.
+	providers := &fakeParameterProviderClient{store: &nifi.ParameterProviderEntity{
+		ID:       "pp-1",
+		Revision: nifi.Revision{Version: 7},
+		Component: nifi.ParameterProviderComponent{
+			ID:               "pp-1",
+			Name:             "secrets",
+			Type:             "org.apache.nifi.parameter.EnvironmentVariableParameterProvider",
+			Properties:       map[string]string{"Parameter Group Name": "envs", "secret-key": "", "extra-default": "x"},
+			ValidationStatus: "VALID",
+		},
+	}}
+	r := &NiFiParameterProviderReconciler{Client: k8sClient, Scheme: scheme, ParameterProviderClient: providers}
+	reconcileTwice(t, r, pp.Name)
+
+	if len(providers.updated) != 0 {
+		t.Fatalf("expected no update (defaults + masked sensitive only), got %d: %#v", len(providers.updated), providers.updated)
+	}
+}
+
 func TestNiFiParameterProviderDeleteRemovesFromNiFi(t *testing.T) {
 	scheme := testScheme()
 	cluster := readyTestCluster()

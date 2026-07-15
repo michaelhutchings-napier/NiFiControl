@@ -55,6 +55,12 @@ pp_validation() {
   pp_get "$1" | grep -o '"validationStatus":"[A-Z]*"' | head -1 | cut -d'"' -f4
 }
 
+# pp_revision <id> -> the component's revision.version as seen by NiFi. A revision that keeps
+# climbing while nothing changes is the signature of a perpetual-update reconcile loop.
+pp_revision() {
+  pp_get "$1" | grep -o '"revision":{"version":[0-9]*' | head -1 | grep -o '[0-9]*$'
+}
+
 pp_diag() {
   local id="$1"
   echo "==== parameter provider ${id} as seen by NiFi ====" >&2
@@ -157,6 +163,21 @@ for _ in $(seq 1 18); do
 done
 [ "${valid}" = "1" ] || { echo "provider did not reach VALID in NiFi (status='$(pp_validation "${id}")')" >&2; pp_diag "${id}"; exit 1; }
 echo "  NiFi has the provider with group='${group}', validationStatus=VALID."
+
+# No-churn guard: once converged the operator must stop touching the provider. NiFi returns
+# descriptor defaults and masks sensitive values, so a naive full-map drift comparison would update
+# the provider on every reconcile forever (revision.version explodes). Prove it holds steady.
+echo "  checking the provider revision is stable (no perpetual-update loop)..."
+rev1="$(pp_revision "${id}")"
+sleep 25
+rev2="$(pp_revision "${id}")"
+if [ -z "${rev1}" ] || [ -z "${rev2}" ]; then
+  echo "could not read provider revision (rev1='${rev1}' rev2='${rev2}')" >&2; pp_diag "${id}"; exit 1
+fi
+if [ "$((rev2 - rev1))" -gt 5 ]; then
+  echo "CHURN: provider revision climbed ${rev1} -> ${rev2} in ~25s (perpetual-update loop)" >&2; pp_diag "${id}"; exit 1
+fi
+echo "  revision stable (${rev1} -> ${rev2}); no update loop."
 
 echo "Phase 2: patch a property -> reconciled into NiFi..."
 kubectl --context "${ctx}" -n "${namespace}" patch nifiparameterprovider env --type=merge \

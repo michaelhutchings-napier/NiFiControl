@@ -504,15 +504,7 @@ func registryClientNeedsUpdate(desired nifi.RegistryClientEntity, existing nifi.
 	}
 	// Compare only the properties we manage, skipping sensitive ones (NiFi masks them on read) and
 	// ignoring any additional default properties NiFi returns that we did not set.
-	for key, value := range desired.Component.Properties {
-		if sensitiveKeys[key] {
-			continue
-		}
-		if existing.Component.Properties[key] != value {
-			return true
-		}
-	}
-	return false
+	return managedPropertiesDiffer(desired.Component.Properties, existing.Component.Properties, sensitiveKeys)
 }
 
 func registryClientStatusMatches(instance *nifiv1alpha1.NiFiRegistryClient, nifiID string, revisionVersion int64, resolvedType string) bool {
@@ -1736,7 +1728,7 @@ func (r *NiFiControllerServiceReconciler) reconcileExistingControllerService(ctx
 	}
 	nifiID := controllerServiceEntityID(*existing)
 	current := existing
-	if controllerServiceNeedsUpdate(desired, *current) {
+	if controllerServiceNeedsUpdate(desired, *current, sensitivePropertyKeys(instance.Spec.SensitiveProperties)) {
 		// NiFi requires the service DISABLED to change its config.
 		if current.Component.State == "ENABLED" || current.Component.State == "ENABLING" {
 			disabled, err := controllerServices.UpdateControllerServiceRunStatus(ctx, endpoint, nifiID, current.Revision.Version, "DISABLED")
@@ -2257,7 +2249,7 @@ func (r *NiFiProcessorReconciler) reconcileExistingProcessor(ctx context.Context
 	}
 	nifiID := processorEntityID(*existing)
 	current := existing
-	if processorNeedsUpdate(desired, *current) {
+	if processorNeedsUpdate(desired, *current, sensitivePropertyKeys(instance.Spec.SensitiveProperties)) {
 		// NiFi requires the processor stopped to change its config.
 		if current.Component.State == "RUNNING" {
 			stopped, err := processors.UpdateProcessorRunStatus(ctx, endpoint, nifiID, current.Revision.Version, "STOPPED")
@@ -3048,7 +3040,7 @@ func (r *NiFiReportingTaskReconciler) reconcileExistingReportingTask(ctx context
 	nifiID := nifi.ReportingTaskEntityID(*existing)
 	current := existing
 
-	if reportingTaskNeedsUpdate(desired, *current) {
+	if reportingTaskNeedsUpdate(desired, *current, sensitivePropertyKeys(instance.Spec.SensitiveProperties)) {
 		if current.Component.State == "RUNNING" {
 			stopped, err := reportingTasks.UpdateReportingTaskRunStatus(ctx, endpoint, nifiID, current.Revision.Version, "STOPPED")
 			if err != nil {
@@ -3209,17 +3201,17 @@ func (r *NiFiReportingTaskReconciler) desiredReportingTask(ctx context.Context, 
 	return nifi.ReportingTaskEntity{Revision: nifi.Revision{Version: 0}, Component: component}, waitingFor, nil
 }
 
-func reportingTaskNeedsUpdate(desired nifi.ReportingTaskEntity, existing nifi.ReportingTaskEntity) bool {
+func reportingTaskNeedsUpdate(desired nifi.ReportingTaskEntity, existing nifi.ReportingTaskEntity, sensitiveKeys map[string]bool) bool {
 	if desired.Component.Name != existing.Component.Name ||
 		desired.Component.Type != existing.Component.Type ||
 		desired.Component.SchedulingStrategy != "" && desired.Component.SchedulingStrategy != existing.Component.SchedulingStrategy ||
 		desired.Component.SchedulingPeriod != "" && desired.Component.SchedulingPeriod != existing.Component.SchedulingPeriod {
 		return true
 	}
-	if !nifiBundlesEqual(desired.Component.Bundle, existing.Component.Bundle) {
+	if bundleDiffers(desired.Component.Bundle, existing.Component.Bundle) {
 		return true
 	}
-	return !stringMapsEqual(desired.Component.Properties, existing.Component.Properties)
+	return managedPropertiesDiffer(desired.Component.Properties, existing.Component.Properties, sensitiveKeys)
 }
 
 func reportingTaskStatusMatches(instance *nifiv1alpha1.NiFiReportingTask, nifiID string, revisionVersion int64, validationStatus string) bool {
@@ -3364,7 +3356,7 @@ func (r *NiFiParameterProviderReconciler) reconcileExistingParameterProvider(ctx
 	nifiID := nifi.ParameterProviderEntityID(*existing)
 	current := existing
 
-	if parameterProviderNeedsUpdate(desired, *current) {
+	if parameterProviderNeedsUpdate(desired, *current, sensitivePropertyKeys(instance.Spec.SensitiveProperties)) {
 		update := desired
 		update.ID = nifiID
 		update.Component.ID = nifiID
@@ -3480,15 +3472,15 @@ func (r *NiFiParameterProviderReconciler) desiredParameterProvider(ctx context.C
 	return nifi.ParameterProviderEntity{Revision: nifi.Revision{Version: 0}, Component: component}, waitingFor, nil
 }
 
-func parameterProviderNeedsUpdate(desired nifi.ParameterProviderEntity, existing nifi.ParameterProviderEntity) bool {
+func parameterProviderNeedsUpdate(desired nifi.ParameterProviderEntity, existing nifi.ParameterProviderEntity, sensitiveKeys map[string]bool) bool {
 	if desired.Component.Name != existing.Component.Name ||
 		desired.Component.Type != existing.Component.Type {
 		return true
 	}
-	if !nifiBundlesEqual(desired.Component.Bundle, existing.Component.Bundle) {
+	if bundleDiffers(desired.Component.Bundle, existing.Component.Bundle) {
 		return true
 	}
-	return !stringMapsEqual(desired.Component.Properties, existing.Component.Properties)
+	return managedPropertiesDiffer(desired.Component.Properties, existing.Component.Properties, sensitiveKeys)
 }
 
 func parameterProviderStatusMatches(instance *nifiv1alpha1.NiFiParameterProvider, nifiID string, revisionVersion int64, validationStatus string) bool {
@@ -4727,6 +4719,14 @@ func nifiBundlesEqual(left *nifi.Bundle, right *nifi.Bundle) bool {
 	return left.Group == right.Group && left.Artifact == right.Artifact && left.Version == right.Version
 }
 
+// bundleDiffers reports whether a user-specified desired bundle differs from what NiFi holds. Only a
+// bundle the CR pins is managed: when desired is nil the user let NiFi resolve the NAR, and NiFi
+// returns the concrete resolved bundle on read (e.g. org.apache.nifi/nifi-standard-nar/2.10.0), so
+// treating that as drift would update the component on every reconcile forever.
+func bundleDiffers(desired, existing *nifi.Bundle) bool {
+	return desired != nil && !nifiBundlesEqual(desired, existing)
+}
+
 func stringMapsEqual(left map[string]string, right map[string]string) bool {
 	if len(left) != len(right) {
 		return false
@@ -4737,6 +4737,39 @@ func stringMapsEqual(left map[string]string, right map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// managedPropertiesDiffer reports whether any property NiFiControl manages (i.e. a key in the
+// desired map) differs from what NiFi returned. It deliberately does NOT compare the maps for
+// equality: NiFi's read view of a component's properties always carries descriptor defaults for
+// keys we never set, and returns sensitive values masked (null), so a full-map comparison would
+// register drift forever and update the component on every reconcile. Sensitive keys are skipped
+// (their masked read value can never match the desired plaintext); extra properties NiFi adds are
+// ignored. Note: because sensitive values are unreadable, rotating a sensitive value alone is not
+// detected here — it is re-pushed only when some other managed property also changes.
+func managedPropertiesDiffer(desired, existing map[string]string, sensitiveKeys map[string]bool) bool {
+	for key, value := range desired {
+		if sensitiveKeys[key] {
+			continue
+		}
+		if existing[key] != value {
+			return true
+		}
+	}
+	return false
+}
+
+// sensitivePropertyKeys returns the set of property names sourced from Secrets, for use as the
+// skip-set in managedPropertiesDiffer.
+func sensitivePropertyKeys(props map[string]nifiv1alpha1.SensitivePropertySource) map[string]bool {
+	if len(props) == 0 {
+		return nil
+	}
+	keys := make(map[string]bool, len(props))
+	for name := range props {
+		keys[name] = true
+	}
+	return keys
 }
 
 func stringSlicesEqual(left []string, right []string) bool {
@@ -4821,7 +4854,7 @@ func controllerServiceEntityID(entity nifi.ControllerServiceEntity) string {
 	return entity.Component.ID
 }
 
-func controllerServiceNeedsUpdate(desired nifi.ControllerServiceEntity, existing nifi.ControllerServiceEntity) bool {
+func controllerServiceNeedsUpdate(desired nifi.ControllerServiceEntity, existing nifi.ControllerServiceEntity, sensitiveKeys map[string]bool) bool {
 	// Enabled/disabled state is reconciled separately via the run-status endpoint, so it is
 	// excluded here.
 	if desired.Component.Name != existing.Component.Name ||
@@ -4829,10 +4862,10 @@ func controllerServiceNeedsUpdate(desired nifi.ControllerServiceEntity, existing
 		desired.Component.ParentGroupID != "" && desired.Component.ParentGroupID != existing.Component.ParentGroupID {
 		return true
 	}
-	if !nifiBundlesEqual(desired.Component.Bundle, existing.Component.Bundle) {
+	if bundleDiffers(desired.Component.Bundle, existing.Component.Bundle) {
 		return true
 	}
-	return !stringMapsEqual(desired.Component.Properties, existing.Component.Properties)
+	return managedPropertiesDiffer(desired.Component.Properties, existing.Component.Properties, sensitiveKeys)
 }
 
 func controllerServiceStatusMatches(instance *nifiv1alpha1.NiFiControllerService, nifiID string, revisionVersion int64, validationStatus string) bool {
@@ -5042,7 +5075,7 @@ func processorEntityID(entity nifi.ProcessorEntity) string {
 	return entity.Component.ID
 }
 
-func processorNeedsUpdate(desired nifi.ProcessorEntity, existing nifi.ProcessorEntity) bool {
+func processorNeedsUpdate(desired nifi.ProcessorEntity, existing nifi.ProcessorEntity, sensitiveKeys map[string]bool) bool {
 	// Run state is reconciled separately via the run-status endpoint, so it is excluded here.
 	if desired.Component.Name != existing.Component.Name ||
 		desired.Component.Type != existing.Component.Type ||
@@ -5052,19 +5085,19 @@ func processorNeedsUpdate(desired nifi.ProcessorEntity, existing nifi.ProcessorE
 	if !nifiPositionsEqual(desired.Component.Position, existing.Component.Position) {
 		return true
 	}
-	if !nifiBundlesEqual(desired.Component.Bundle, existing.Component.Bundle) {
+	if bundleDiffers(desired.Component.Bundle, existing.Component.Bundle) {
 		return true
 	}
-	return processorConfigNeedsUpdate(desired.Component.Config, existing.Component.Config)
+	return processorConfigNeedsUpdate(desired.Component.Config, existing.Component.Config, sensitiveKeys)
 }
 
-func processorConfigNeedsUpdate(desired nifi.ProcessorConfig, existing nifi.ProcessorConfig) bool {
+func processorConfigNeedsUpdate(desired nifi.ProcessorConfig, existing nifi.ProcessorConfig, sensitiveKeys map[string]bool) bool {
 	if desired.SchedulingStrategy != existing.SchedulingStrategy ||
 		desired.SchedulingPeriod != existing.SchedulingPeriod ||
 		desired.ConcurrentlySchedulableTaskCount != existing.ConcurrentlySchedulableTaskCount {
 		return true
 	}
-	if !stringMapsEqual(desired.Properties, existing.Properties) {
+	if managedPropertiesDiffer(desired.Properties, existing.Properties, sensitiveKeys) {
 		return true
 	}
 	return !stringSlicesEqual(desired.AutoTerminatedRelationships, existing.AutoTerminatedRelationships)
