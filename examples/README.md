@@ -20,6 +20,7 @@ They assume the NiFiControl operator and its CRDs are already installed (see the
 | --- | --- | --- |
 | [quickstart.yaml](quickstart.yaml) | Smallest possible single-node cluster (insecure, HTTP) | `NiFiCluster` |
 | [secured-cluster.yaml](secured-cluster.yaml) | TLS + single-user login + an admin tenant | `NiFiCluster`, `NiFiUser`, `NiFiPolicy` |
+| [ldap-auth.yaml](ldap-auth.yaml) | LDAP/LDAPS login for humans + a client-cert (mTLS) service account | `NiFiCluster`, `NiFiUser`, `NiFiPolicy` |
 | [tenancy.yaml](tenancy.yaml) | Parameter contexts, users, groups, and access policies | `NiFiParameterContext`, `NiFiUser`, `NiFiUserGroup`, `NiFiPolicy` |
 | [parameter-provider.yaml](parameter-provider.yaml) | Source parameters from env vars or an external secret manager | `NiFiParameterProvider` |
 | [canvas-flow.yaml](canvas-flow.yaml) | A small flow built declaratively on the canvas | `NiFiProcessGroup`, `NiFiControllerService`, `NiFiProcessor`, `NiFiConnection`, `NiFiFunnel`, `NiFiOutputPort`, `NiFiLabel` |

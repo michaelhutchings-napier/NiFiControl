@@ -78,6 +78,45 @@ it into a PKCS12 truststore that the LDAP provider references — no custom imag
 Group synchronization (`ldap-user-group-provider`) is not yet wired — manage groups with
 `NiFiUserGroup` resources instead.
 
+## Client certificates (mTLS)
+
+On any secured (`internalTLS`) cluster, clients can authenticate with an X.509 **client
+certificate** — NiFi validates the certificate at the TLS handshake, before any login provider, so
+this works in every `spec.authentication` mode and needs no login provider at all. It is the right
+fit for service accounts and automation (the operator itself authenticates this way), and can run
+alongside `LDAP`/`OIDC` logins for humans on the same cluster.
+
+Model each certificate identity as a `NiFiUser` whose `identity` is the certificate's subject DN.
+The operator can issue the certificate for you via cert-manager:
+
+```yaml
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiUser
+metadata:
+  name: ingest-bot
+spec:
+  clusterRef: {name: secure}
+  identity: "CN=ingest-bot, O=dataflows"   # the cert subject DN becomes the NiFi identity
+  certificate:
+    create: true                           # operator issues a client cert via cert-manager…
+    secretName: ingest-bot-tls             # …into this Secret (tls.crt / tls.key / ca.crt)
+```
+
+Mount that Secret into the client and present the cert on each request, for example:
+
+```bash
+curl --cert tls.crt --key tls.key --cacert ca.crt https://<host>/nifi-api/flow/about
+```
+
+Authorize the identity like any other — list it in `adminIdentities`, or grant scoped access with
+`NiFiPolicy` (see [authorization.md](authorization.md)). To use a certificate signed **outside** the
+operator, omit `certificate.create` and set `identity` to that certificate's DN. A runnable example
+that pairs LDAP logins with an mTLS service account is
+[examples/ldap-auth.yaml](../examples/ldap-auth.yaml).
+
+Because a login provider relaxes NiFi's TLS listener from *needing* to *wanting* client certificates,
+certificate and login-based authentication coexist without extra configuration.
+
 ## OIDC
 
 ```yaml

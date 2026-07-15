@@ -1,0 +1,83 @@
+# LDAP (and LDAPS) login for humans, plus a client-certificate (mTLS) service account — on one
+# secured cluster. NiFi only allows authentication over HTTPS, so all of this requires internalTLS.
+#
+# Prerequisites: cert-manager (https://cert-manager.io) and a reachable LDAP directory. Then:
+#   kubectl -n dataflows apply -f examples/ldap-auth.yaml
+#   kubectl -n dataflows wait --for=jsonpath='{.status.ready}'=true nificluster/secure --timeout=8m
+#
+# The LDAP shape here matches what the secure-auth kind harness exercises against a real OpenLDAP.
+# See docs/user-authentication.md and docs/authorization.md.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ldap-manager
+type: Opaque
+stringData:
+  password: ldap-manager-pass   # the bind password for managerDN
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiCluster
+metadata:
+  name: secure
+spec:
+  mode: Internal
+  image: apache/nifi:2.10.0
+  replicas: 1
+  storage: {enabled: true, size: 5Gi}
+  jvm: {heapInitial: 512m, heapMax: 1g}
+  resources:
+    requests: {cpu: 500m, memory: 2Gi}
+  internalTLS:
+    enabled: true            # required for any login provider, and for client-certificate auth
+    selfSigned: {}
+  authentication:
+    mode: LDAP
+    ldap:
+      url: ldap://openldap.auth.svc:389
+      authenticationStrategy: SIMPLE          # SIMPLE | LDAPS | START_TLS
+      managerDN: cn=admin,dc=example,dc=org
+      managerPasswordSecretRef: {name: ldap-manager, key: password}
+      userSearchBase: ou=users,dc=example,dc=org
+      userSearchFilter: (uid={0})             # or (sAMAccountName={0}) for Active Directory
+      identityStrategy: USE_USERNAME          # the login username becomes the NiFi identity
+    adminIdentities: [alice]                  # alice logs in via LDAP and gets the admin policy set
+  deletionPolicy: Delete
+# ---
+# LDAPS over a PRIVATE CA — swap the ldap block above for this. Put the directory's CA (PEM) in a
+# Secret (default key ca.crt); the operator builds it into a truststore the LDAP provider uses. Use
+# START_TLS instead of LDAPS to upgrade a plaintext 389 connection to TLS.
+#
+#     ldap:
+#       url: ldaps://ldap.corp.example.com:636
+#       authenticationStrategy: LDAPS
+#       caSecretRef: {name: ldap-ca, key: ca.crt}
+#       managerDN: cn=admin,dc=example,dc=org
+#       managerPasswordSecretRef: {name: ldap-manager, key: password}
+#       userSearchBase: ou=users,dc=example,dc=org
+#       userSearchFilter: (uid={0})
+---
+# mTLS coexists with LDAP: a service account authenticates with a client certificate (checked by
+# NiFi before any login provider), while humans log in via LDAP above. The operator issues the cert
+# via cert-manager into a Secret the client mounts (tls.crt / tls.key / ca.crt).
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiUser
+metadata:
+  name: ingest-bot
+spec:
+  clusterRef: {name: secure}
+  identity: "CN=ingest-bot, O=dataflows"     # the certificate subject DN becomes the NiFi identity
+  certificate:
+    create: true
+    secretName: ingest-bot-tls
+---
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiPolicy
+metadata:
+  name: ingest-bot-read-flow
+spec:
+  clusterRef: {name: secure}
+  resource: /flow
+  action: read
+  userRefs:
+    - name: ingest-bot
