@@ -734,11 +734,15 @@ func managedClusterProbeTuning(cluster *nifiv1alpha1.NiFiCluster, sel func(*nifi
 	return sel(cluster.Spec.Pod.Probes)
 }
 
-// applyProbeTuning overrides a probe's scheduling fields with any set in the tuning spec,
-// leaving the probe action and any unset fields at the operator default.
+// applyProbeTuning overrides a probe's scheduling fields with any set in the tuning spec, and
+// replaces the probe action when a custom handler is supplied. Unset fields keep the operator
+// default (including the default action when no handler is given).
 func applyProbeTuning(p *corev1.Probe, t *nifiv1alpha1.NiFiClusterProbeTuning) {
 	if t == nil {
 		return
+	}
+	if probeHandlerHasAction(t.Handler) {
+		p.ProbeHandler = *t.Handler
 	}
 	if t.InitialDelaySeconds != nil {
 		p.InitialDelaySeconds = *t.InitialDelaySeconds
@@ -755,6 +759,14 @@ func applyProbeTuning(p *corev1.Probe, t *nifiv1alpha1.NiFiClusterProbeTuning) {
 	if t.SuccessThreshold != nil {
 		p.SuccessThreshold = *t.SuccessThreshold
 	}
+}
+
+// probeHandlerHasAction reports whether a user-supplied probe handler sets at least one action. An
+// empty handler ({}) is ignored so it cannot blank out the operator's default action (Kubernetes
+// would reject a probe with no action); a partial/multi-action handler is left for the API server
+// to validate on apply.
+func probeHandlerHasAction(h *corev1.ProbeHandler) bool {
+	return h != nil && (h.Exec != nil || h.HTTPGet != nil || h.TCPSocket != nil || h.GRPC != nil)
 }
 
 func tlsReadinessExecHandler() corev1.ProbeHandler {

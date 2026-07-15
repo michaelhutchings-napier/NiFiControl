@@ -299,11 +299,12 @@ pod:
   # Defaults to 60s when unset (Kubernetes' own default is only 30). Keep it above the NiFi
   # bootstrap's graceful.shutdown.seconds (20); raise it for large backlogs or node offload.
   terminationGracePeriodSeconds: null   # e.g. 120
-  # Tune the operator's startup/liveness/readiness probes for the NiFi container. The probe
-  # actions stay operator-managed; only these scheduling fields are adjustable. Widen the
+  # Tune the operator's startup/liveness/readiness probes for the NiFi container. Widen the
   # startup probe for flows that take minutes to boot. Any field left unset keeps the default
   # (startup: period 10s, failureThreshold 60 ≈ 10-min boot window; liveness: period 20s,
-  # failureThreshold 3; readiness: period 10s, failureThreshold 3).
+  # failureThreshold 3; readiness: period 10s, failureThreshold 3). Each probe also accepts a
+  # `handler` to replace the default action with a custom exec/httpGet/tcpSocket (escape hatch —
+  # a broken liveness handler restarts the pod).
   probes: {}
     # startup:
     #   periodSeconds: 15
@@ -311,6 +312,9 @@ pod:
     # liveness:
     #   periodSeconds: 30
     #   failureThreshold: 5
+    #   handler:                # custom action; replaces the default NiFi health check
+    #     exec:
+    #       command: ["/bin/sh", "-c", "curl -sf http://localhost:8080/nifi-api/system-diagnostics"]
     # readiness:
     #   periodSeconds: 15
     #   timeoutSeconds: 8

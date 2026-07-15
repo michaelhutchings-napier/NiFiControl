@@ -627,10 +627,16 @@ type NiFiClusterProbesSpec struct {
 	Readiness *NiFiClusterProbeTuning `json:"readiness,omitempty"`
 }
 
-// NiFiClusterProbeTuning overrides the scheduling fields of one probe. Only fields that are
-// set are applied; the rest keep the operator default. The probe action (httpGet/exec/
-// tcpSocket against the correct NiFi endpoint) is not adjustable.
+// NiFiClusterProbeTuning overrides one probe. Only fields that are set are applied; the rest keep
+// the operator default. Scheduling fields tune timing; Handler replaces the probe action itself.
 type NiFiClusterProbeTuning struct {
+	// Handler, when set, replaces the operator's default probe action (an HTTP check of NiFi's
+	// REST API, or an mTLS-aware exec check on a TLS cluster) with a custom one — an exec command,
+	// a different httpGet, or a tcpSocket. The scheduling fields below still apply. This is an
+	// escape hatch: a broken liveness handler will keep restarting the pod, so use it deliberately.
+	// Exactly one action (exec / httpGet / tcpSocket / grpc) must be set, as Kubernetes requires.
+	// +optional
+	Handler *corev1.ProbeHandler `json:"handler,omitempty"`
 	// InitialDelaySeconds delays the first probe after the container starts. Usually left at
 	// 0 for the startup probe, which already gates the boot window.
 	// +optional

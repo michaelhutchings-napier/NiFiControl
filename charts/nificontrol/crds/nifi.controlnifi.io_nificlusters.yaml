@@ -6695,6 +6695,120 @@ spec:
                             format: int32
                             minimum: 1
                             type: integer
+                          handler:
+                            description: |-
+                              Handler, when set, replaces the operator's default probe action (an HTTP check of NiFi's
+                              REST API, or an mTLS-aware exec check on a TLS cluster) with a custom one — an exec command,
+                              a different httpGet, or a tcpSocket. The scheduling fields below still apply. This is an
+                              escape hatch: a broken liveness handler will keep restarting the pod, so use it deliberately.
+                              Exactly one action (exec / httpGet / tcpSocket / grpc) must be set, as Kubernetes requires.
+                            properties:
+                              exec:
+                                description: Exec specifies a command to execute in
+                                  the container.
+                                properties:
+                                  command:
+                                    description: |-
+                                      Command is the command line to execute inside the container, the working directory for the
+                                      command  is root ('/') in the container's filesystem. The command is simply exec'd, it is
+                                      not run inside a shell, so traditional shell instructions ('|', etc) won't work. To use
+                                      a shell, you need to explicitly call out to that shell.
+                                      Exit status of 0 is treated as live/healthy and non-zero is unhealthy.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                type: object
+                              grpc:
+                                description: GRPC specifies a GRPC HealthCheckRequest.
+                                properties:
+                                  port:
+                                    description: Port number of the gRPC service.
+                                      Number must be in the range 1 to 65535.
+                                    format: int32
+                                    type: integer
+                                  service:
+                                    default: ""
+                                    description: |-
+                                      Service is the name of the service to place in the gRPC HealthCheckRequest
+                                      (see https://github.com/grpc/grpc/blob/master/doc/health-checking.md).
+
+                                      If this is not specified, the default behavior is defined by gRPC.
+                                    type: string
+                                required:
+                                - port
+                                type: object
+                              httpGet:
+                                description: HTTPGet specifies an HTTP GET request
+                                  to perform.
+                                properties:
+                                  host:
+                                    description: |-
+                                      Host name to connect to, defaults to the pod IP. You probably want to set
+                                      "Host" in httpHeaders instead.
+                                    type: string
+                                  httpHeaders:
+                                    description: Custom headers to set in the request.
+                                      HTTP allows repeated headers.
+                                    items:
+                                      description: HTTPHeader describes a custom header
+                                        to be used in HTTP probes
+                                      properties:
+                                        name:
+                                          description: |-
+                                            The header field name.
+                                            This will be canonicalized upon output, so case-variant names will be understood as the same header.
+                                          type: string
+                                        value:
+                                          description: The header field value
+                                          type: string
+                                      required:
+                                      - name
+                                      - value
+                                      type: object
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                  path:
+                                    description: Path to access on the HTTP server.
+                                    type: string
+                                  port:
+                                    anyOf:
+                                    - type: integer
+                                    - type: string
+                                    description: |-
+                                      Name or number of the port to access on the container.
+                                      Number must be in the range 1 to 65535.
+                                      Name must be an IANA_SVC_NAME.
+                                    x-kubernetes-int-or-string: true
+                                  scheme:
+                                    description: |-
+                                      Scheme to use for connecting to the host.
+                                      Defaults to HTTP.
+                                    type: string
+                                required:
+                                - port
+                                type: object
+                              tcpSocket:
+                                description: TCPSocket specifies a connection to a
+                                  TCP port.
+                                properties:
+                                  host:
+                                    description: 'Optional: Host name to connect to,
+                                      defaults to the pod IP.'
+                                    type: string
+                                  port:
+                                    anyOf:
+                                    - type: integer
+                                    - type: string
+                                    description: |-
+                                      Number or name of the port to access on the container.
+                                      Number must be in the range 1 to 65535.
+                                      Name must be an IANA_SVC_NAME.
+                                    x-kubernetes-int-or-string: true
+                                required:
+                                - port
+                                type: object
+                            type: object
                           initialDelaySeconds:
                             description: |-
                               InitialDelaySeconds delays the first probe after the container starts. Usually left at
@@ -6733,6 +6847,120 @@ spec:
                             format: int32
                             minimum: 1
                             type: integer
+                          handler:
+                            description: |-
+                              Handler, when set, replaces the operator's default probe action (an HTTP check of NiFi's
+                              REST API, or an mTLS-aware exec check on a TLS cluster) with a custom one — an exec command,
+                              a different httpGet, or a tcpSocket. The scheduling fields below still apply. This is an
+                              escape hatch: a broken liveness handler will keep restarting the pod, so use it deliberately.
+                              Exactly one action (exec / httpGet / tcpSocket / grpc) must be set, as Kubernetes requires.
+                            properties:
+                              exec:
+                                description: Exec specifies a command to execute in
+                                  the container.
+                                properties:
+                                  command:
+                                    description: |-
+                                      Command is the command line to execute inside the container, the working directory for the
+                                      command  is root ('/') in the container's filesystem. The command is simply exec'd, it is
+                                      not run inside a shell, so traditional shell instructions ('|', etc) won't work. To use
+                                      a shell, you need to explicitly call out to that shell.
+                                      Exit status of 0 is treated as live/healthy and non-zero is unhealthy.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                type: object
+                              grpc:
+                                description: GRPC specifies a GRPC HealthCheckRequest.
+                                properties:
+                                  port:
+                                    description: Port number of the gRPC service.
+                                      Number must be in the range 1 to 65535.
+                                    format: int32
+                                    type: integer
+                                  service:
+                                    default: ""
+                                    description: |-
+                                      Service is the name of the service to place in the gRPC HealthCheckRequest
+                                      (see https://github.com/grpc/grpc/blob/master/doc/health-checking.md).
+
+                                      If this is not specified, the default behavior is defined by gRPC.
+                                    type: string
+                                required:
+                                - port
+                                type: object
+                              httpGet:
+                                description: HTTPGet specifies an HTTP GET request
+                                  to perform.
+                                properties:
+                                  host:
+                                    description: |-
+                                      Host name to connect to, defaults to the pod IP. You probably want to set
+                                      "Host" in httpHeaders instead.
+                                    type: string
+                                  httpHeaders:
+                                    description: Custom headers to set in the request.
+                                      HTTP allows repeated headers.
+                                    items:
+                                      description: HTTPHeader describes a custom header
+                                        to be used in HTTP probes
+                                      properties:
+                                        name:
+                                          description: |-
+                                            The header field name.
+                                            This will be canonicalized upon output, so case-variant names will be understood as the same header.
+                                          type: string
+                                        value:
+                                          description: The header field value
+                                          type: string
+                                      required:
+                                      - name
+                                      - value
+                                      type: object
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                  path:
+                                    description: Path to access on the HTTP server.
+                                    type: string
+                                  port:
+                                    anyOf:
+                                    - type: integer
+                                    - type: string
+                                    description: |-
+                                      Name or number of the port to access on the container.
+                                      Number must be in the range 1 to 65535.
+                                      Name must be an IANA_SVC_NAME.
+                                    x-kubernetes-int-or-string: true
+                                  scheme:
+                                    description: |-
+                                      Scheme to use for connecting to the host.
+                                      Defaults to HTTP.
+                                    type: string
+                                required:
+                                - port
+                                type: object
+                              tcpSocket:
+                                description: TCPSocket specifies a connection to a
+                                  TCP port.
+                                properties:
+                                  host:
+                                    description: 'Optional: Host name to connect to,
+                                      defaults to the pod IP.'
+                                    type: string
+                                  port:
+                                    anyOf:
+                                    - type: integer
+                                    - type: string
+                                    description: |-
+                                      Number or name of the port to access on the container.
+                                      Number must be in the range 1 to 65535.
+                                      Name must be an IANA_SVC_NAME.
+                                    x-kubernetes-int-or-string: true
+                                required:
+                                - port
+                                type: object
+                            type: object
                           initialDelaySeconds:
                             description: |-
                               InitialDelaySeconds delays the first probe after the container starts. Usually left at
@@ -6772,6 +7000,120 @@ spec:
                             format: int32
                             minimum: 1
                             type: integer
+                          handler:
+                            description: |-
+                              Handler, when set, replaces the operator's default probe action (an HTTP check of NiFi's
+                              REST API, or an mTLS-aware exec check on a TLS cluster) with a custom one — an exec command,
+                              a different httpGet, or a tcpSocket. The scheduling fields below still apply. This is an
+                              escape hatch: a broken liveness handler will keep restarting the pod, so use it deliberately.
+                              Exactly one action (exec / httpGet / tcpSocket / grpc) must be set, as Kubernetes requires.
+                            properties:
+                              exec:
+                                description: Exec specifies a command to execute in
+                                  the container.
+                                properties:
+                                  command:
+                                    description: |-
+                                      Command is the command line to execute inside the container, the working directory for the
+                                      command  is root ('/') in the container's filesystem. The command is simply exec'd, it is
+                                      not run inside a shell, so traditional shell instructions ('|', etc) won't work. To use
+                                      a shell, you need to explicitly call out to that shell.
+                                      Exit status of 0 is treated as live/healthy and non-zero is unhealthy.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                type: object
+                              grpc:
+                                description: GRPC specifies a GRPC HealthCheckRequest.
+                                properties:
+                                  port:
+                                    description: Port number of the gRPC service.
+                                      Number must be in the range 1 to 65535.
+                                    format: int32
+                                    type: integer
+                                  service:
+                                    default: ""
+                                    description: |-
+                                      Service is the name of the service to place in the gRPC HealthCheckRequest
+                                      (see https://github.com/grpc/grpc/blob/master/doc/health-checking.md).
+
+                                      If this is not specified, the default behavior is defined by gRPC.
+                                    type: string
+                                required:
+                                - port
+                                type: object
+                              httpGet:
+                                description: HTTPGet specifies an HTTP GET request
+                                  to perform.
+                                properties:
+                                  host:
+                                    description: |-
+                                      Host name to connect to, defaults to the pod IP. You probably want to set
+                                      "Host" in httpHeaders instead.
+                                    type: string
+                                  httpHeaders:
+                                    description: Custom headers to set in the request.
+                                      HTTP allows repeated headers.
+                                    items:
+                                      description: HTTPHeader describes a custom header
+                                        to be used in HTTP probes
+                                      properties:
+                                        name:
+                                          description: |-
+                                            The header field name.
+                                            This will be canonicalized upon output, so case-variant names will be understood as the same header.
+                                          type: string
+                                        value:
+                                          description: The header field value
+                                          type: string
+                                      required:
+                                      - name
+                                      - value
+                                      type: object
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                  path:
+                                    description: Path to access on the HTTP server.
+                                    type: string
+                                  port:
+                                    anyOf:
+                                    - type: integer
+                                    - type: string
+                                    description: |-
+                                      Name or number of the port to access on the container.
+                                      Number must be in the range 1 to 65535.
+                                      Name must be an IANA_SVC_NAME.
+                                    x-kubernetes-int-or-string: true
+                                  scheme:
+                                    description: |-
+                                      Scheme to use for connecting to the host.
+                                      Defaults to HTTP.
+                                    type: string
+                                required:
+                                - port
+                                type: object
+                              tcpSocket:
+                                description: TCPSocket specifies a connection to a
+                                  TCP port.
+                                properties:
+                                  host:
+                                    description: 'Optional: Host name to connect to,
+                                      defaults to the pod IP.'
+                                    type: string
+                                  port:
+                                    anyOf:
+                                    - type: integer
+                                    - type: string
+                                    description: |-
+                                      Number or name of the port to access on the container.
+                                      Number must be in the range 1 to 65535.
+                                      Name must be an IANA_SVC_NAME.
+                                    x-kubernetes-int-or-string: true
+                                required:
+                                - port
+                                type: object
+                            type: object
                           initialDelaySeconds:
                             description: |-
                               InitialDelaySeconds delays the first probe after the container starts. Usually left at
