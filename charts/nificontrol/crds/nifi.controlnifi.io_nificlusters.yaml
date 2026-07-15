@@ -1236,6 +1236,43 @@ spec:
                         description: Enabled renders a ServiceMonitor selecting the
                           managed cluster's Service.
                         type: boolean
+                      endpoints:
+                        description: |-
+                          Endpoints, when set, replaces the single default scrape with these — one ServiceMonitor
+                          with multiple scrape endpoints (the Prometheus Operator model). Use it to scrape different
+                          NiFi metric subsets separately (for example one endpoint filtered to NIFI registries and
+                          another to JVM) via each endpoint's params. When empty, one default endpoint scrapes
+                          spec.metrics.path. All endpoints inherit the port, scheme, and TLS of the default scrape.
+                        items:
+                          description: |-
+                            NiFiClusterServiceMonitorEndpoint is one Prometheus scrape endpoint on the cluster's metrics
+                            Service. Path and timing default to the top-level metrics path and serviceMonitor
+                            interval/scrapeTimeout when omitted.
+                          properties:
+                            interval:
+                              description: Interval overrides the scrape interval
+                                for this endpoint.
+                              type: string
+                            params:
+                              additionalProperties:
+                                items:
+                                  type: string
+                                type: array
+                              description: |-
+                                Params are URL query parameters added to the scrape. NiFi's Prometheus endpoint uses these
+                                to filter metrics, for example {"includedRegistries": ["NIFI"]} or
+                                {"sampleLabelValue": ["(ProcessGroup|RootProcessGroup)"]}.
+                              type: object
+                            path:
+                              description: 'Path overrides the scraped HTTP path (default:
+                                spec.metrics.path).'
+                              type: string
+                            scrapeTimeout:
+                              description: ScrapeTimeout overrides the scrape timeout
+                                for this endpoint.
+                              type: string
+                          type: object
+                        type: array
                       insecureSkipVerify:
                         description: |-
                           InsecureSkipVerify disables TLS server-certificate verification when scraping a

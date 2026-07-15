@@ -66,12 +66,13 @@ type TLSConfig struct {
 
 // Endpoint describes a single scrape target on the selected Service.
 type Endpoint struct {
-	Port          string     `json:"port,omitempty"`
-	Path          string     `json:"path,omitempty"`
-	Scheme        string     `json:"scheme,omitempty"`
-	Interval      string     `json:"interval,omitempty"`
-	ScrapeTimeout string     `json:"scrapeTimeout,omitempty"`
-	TLSConfig     *TLSConfig `json:"tlsConfig,omitempty"`
+	Port          string              `json:"port,omitempty"`
+	Path          string              `json:"path,omitempty"`
+	Scheme        string              `json:"scheme,omitempty"`
+	Interval      string              `json:"interval,omitempty"`
+	ScrapeTimeout string              `json:"scrapeTimeout,omitempty"`
+	Params        map[string][]string `json:"params,omitempty"`
+	TLSConfig     *TLSConfig          `json:"tlsConfig,omitempty"`
 }
 
 // ServiceMonitorSpec is the subset of the Prometheus Operator ServiceMonitor spec that

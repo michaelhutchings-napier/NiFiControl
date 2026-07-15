@@ -778,6 +778,12 @@
             },
             "insecureSkipVerify": {
               "type": "boolean"
+            },
+            "endpoints": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
             }
           }
         }

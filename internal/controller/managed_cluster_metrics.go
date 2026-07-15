@@ -91,23 +91,40 @@ func desiredManagedClusterServiceMonitor(cluster *nifiv1alpha1.NiFiCluster, tls 
 		labels[key] = value
 	}
 
-	endpoint := prometheus.Endpoint{
-		Port:          "web",
-		Path:          path,
-		Scheme:        "http",
-		Interval:      smSpec.Interval,
-		ScrapeTimeout: smSpec.ScrapeTimeout,
-	}
+	scheme := "http"
+	var tlsConfig *prometheus.TLSConfig
 	if internalTLSEnabled(cluster) {
-		endpoint.Scheme = "https"
-		endpoint.TLSConfig = &prometheus.TLSConfig{
+		scheme = "https"
+		tlsConfig = &prometheus.TLSConfig{
 			ServerName:         fmt.Sprintf("%s.%s.svc", managedClusterResourceName(cluster), cluster.Namespace),
 			InsecureSkipVerify: smSpec.InsecureSkipVerify,
 		}
 		if !smSpec.InsecureSkipVerify && tls != nil && tls.clientSecretName != "" {
-			endpoint.TLSConfig.CA = &prometheus.SecretOrConfigMap{Secret: &prometheus.SecretKeySelector{Name: tls.clientSecretName, Key: "ca.crt"}}
-			endpoint.TLSConfig.Cert = &prometheus.SecretOrConfigMap{Secret: &prometheus.SecretKeySelector{Name: tls.clientSecretName, Key: "tls.crt"}}
-			endpoint.TLSConfig.KeySecret = &prometheus.SecretKeySelector{Name: tls.clientSecretName, Key: "tls.key"}
+			tlsConfig.CA = &prometheus.SecretOrConfigMap{Secret: &prometheus.SecretKeySelector{Name: tls.clientSecretName, Key: "ca.crt"}}
+			tlsConfig.Cert = &prometheus.SecretOrConfigMap{Secret: &prometheus.SecretKeySelector{Name: tls.clientSecretName, Key: "tls.crt"}}
+			tlsConfig.KeySecret = &prometheus.SecretKeySelector{Name: tls.clientSecretName, Key: "tls.key"}
+		}
+	}
+	// A per-endpoint TLSConfig is shared by pointer across endpoints; it is never mutated after
+	// this point and is serialized independently for each endpoint.
+	buildEndpoint := func(p string, params map[string][]string, interval, scrapeTimeout string) prometheus.Endpoint {
+		return prometheus.Endpoint{
+			Port:          "web",
+			Path:          stringOrDefault(p, path),
+			Scheme:        scheme,
+			Interval:      stringOrDefault(interval, smSpec.Interval),
+			ScrapeTimeout: stringOrDefault(scrapeTimeout, smSpec.ScrapeTimeout),
+			Params:        params,
+			TLSConfig:     tlsConfig,
+		}
+	}
+
+	var endpoints []prometheus.Endpoint
+	if len(smSpec.Endpoints) == 0 {
+		endpoints = []prometheus.Endpoint{buildEndpoint("", nil, "", "")}
+	} else {
+		for _, e := range smSpec.Endpoints {
+			endpoints = append(endpoints, buildEndpoint(e.Path, e.Params, e.Interval, e.ScrapeTimeout))
 		}
 	}
 
@@ -117,7 +134,7 @@ func desiredManagedClusterServiceMonitor(cluster *nifiv1alpha1.NiFiCluster, tls 
 			managedClusterMetricsServiceLabel: "true",
 		}},
 		NamespaceSelector: &prometheus.NamespaceSelector{MatchNames: []string{cluster.Namespace}},
-		Endpoints:         []prometheus.Endpoint{endpoint},
+		Endpoints:         endpoints,
 	}
 	return prometheus.NewServiceMonitor(managedClusterServiceMonitorName(cluster), cluster.Namespace, labels, spec)
 }

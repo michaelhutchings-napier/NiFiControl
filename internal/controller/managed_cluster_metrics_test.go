@@ -106,6 +106,50 @@ func TestReconcileManagedClusterMetricsRendersServiceMonitor(t *testing.T) {
 	assertControllerCondition(t, current.Status.Conditions, nifiv1alpha1.ConditionMetricsReady, metav1.ConditionTrue, "ServiceMonitorReady")
 }
 
+func TestReconcileManagedClusterMetricsMultipleEndpointsWithParams(t *testing.T) {
+	scheme := serviceMonitorTestScheme()
+	cluster := newMetricsCluster(true)
+	cluster.Spec.Metrics.ServiceMonitor.Endpoints = []nifiv1alpha1.NiFiClusterServiceMonitorEndpoint{
+		{Params: map[string][]string{"includedRegistries": {"NIFI"}}},
+		{Params: map[string][]string{"includedRegistries": {"JVM"}}, Interval: "60s"},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster).
+		WithStatusSubresource(&nifiv1alpha1.NiFiCluster{}).
+		Build()
+	r := &NiFiClusterReconciler{Client: k8sClient, Scheme: scheme}
+
+	if err := r.reconcileManagedClusterMetrics(context.Background(), cluster, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	sm := getUnstructured(t, k8sClient, prometheus.ServiceMonitorGVK, managedClusterServiceMonitorName(cluster), cluster.Namespace)
+	endpoints, found, err := unstructured.NestedSlice(sm.Object, "spec", "endpoints")
+	if err != nil || !found || len(endpoints) != 2 {
+		t.Fatalf("expected 2 endpoints (found=%v err=%v len=%d)", found, err, len(endpoints))
+	}
+
+	e0 := endpoints[0].(map[string]any)
+	if e0["path"] != defaultMetricsPath {
+		t.Errorf("endpoint[0] path = %v, want inherited default %s", e0["path"], defaultMetricsPath)
+	}
+	if e0["interval"] != "30s" {
+		t.Errorf("endpoint[0] interval = %v, want inherited 30s", e0["interval"])
+	}
+	if p, _, _ := unstructured.NestedStringSlice(e0, "params", "includedRegistries"); len(p) != 1 || p[0] != "NIFI" {
+		t.Errorf("endpoint[0] params = %v, want includedRegistries=[NIFI]", e0["params"])
+	}
+
+	e1 := endpoints[1].(map[string]any)
+	if e1["interval"] != "60s" {
+		t.Errorf("endpoint[1] interval = %v, want overridden 60s", e1["interval"])
+	}
+	if p, _, _ := unstructured.NestedStringSlice(e1, "params", "includedRegistries"); len(p) != 1 || p[0] != "JVM" {
+		t.Errorf("endpoint[1] params = %v, want includedRegistries=[JVM]", e1["params"])
+	}
+}
+
 func TestReconcileManagedClusterMetricsTLSUsesHTTPS(t *testing.T) {
 	scheme := serviceMonitorTestScheme()
 	cluster := newMetricsCluster(true)

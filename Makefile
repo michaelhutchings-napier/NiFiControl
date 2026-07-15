@@ -37,6 +37,7 @@ helm-template: helm-crds-check
 	$(HELM) template production $(HELM_CLUSTER_CHART) --namespace dataflows >/dev/null
 	$(HELM) template clustered $(HELM_CLUSTER_CHART) --namespace dataflows --set replicas=3 --set coordination.zookeeperConnectString=zookeeper.dataflows.svc:2181 >/dev/null
 	$(HELM) template metrics $(HELM_CLUSTER_CHART) --namespace dataflows --set replicas=3 --set coordination.zookeeperConnectString=zookeeper.dataflows.svc:2181 --set metrics.enabled=true --set metrics.serviceMonitor.enabled=true >/dev/null
+	$(HELM) template metrics-endpoints $(HELM_CLUSTER_CHART) --namespace dataflows --set metrics.enabled=true --set metrics.serviceMonitor.enabled=true --set-json 'metrics.serviceMonitor.endpoints=[{"params":{"includedRegistries":["NIFI"]}},{"params":{"includedRegistries":["JVM"]},"interval":"60s"}]' >/dev/null
 	$(HELM) template operator-sm $(HELM_CHART) --namespace nificontrol-system --set metrics.serviceMonitor.enabled=true >/dev/null
 	$(HELM) template le-tuning $(HELM_CHART) --namespace nificontrol-system --set leaderElection.leaseDuration=30s --set leaderElection.renewDeadline=20s --set leaderElection.retryPeriod=4s >/dev/null
 	$(HELM) template allinone $(HELM_CLUSTER_CHART) --namespace dataflows --set-json 'parameterContexts=[{"name":"pc","spec":{"parameters":[{"name":"k","value":"v"}]}}]' --set-json 'users=[{"name":"u","spec":{"identity":"CN=u"}}]' --set-json 'flowBundles=[{"name":"fb","spec":{"version":"1.0.0"}}]' >/dev/null

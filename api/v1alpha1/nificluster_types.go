@@ -836,6 +836,28 @@ type NiFiClusterServiceMonitorSpec struct {
 	// TLS-enabled cluster. Intended for development only; by default the scrape trusts the
 	// operator-managed CA.
 	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
+	// Endpoints, when set, replaces the single default scrape with these — one ServiceMonitor
+	// with multiple scrape endpoints (the Prometheus Operator model). Use it to scrape different
+	// NiFi metric subsets separately (for example one endpoint filtered to NIFI registries and
+	// another to JVM) via each endpoint's params. When empty, one default endpoint scrapes
+	// spec.metrics.path. All endpoints inherit the port, scheme, and TLS of the default scrape.
+	Endpoints []NiFiClusterServiceMonitorEndpoint `json:"endpoints,omitempty"`
+}
+
+// NiFiClusterServiceMonitorEndpoint is one Prometheus scrape endpoint on the cluster's metrics
+// Service. Path and timing default to the top-level metrics path and serviceMonitor
+// interval/scrapeTimeout when omitted.
+type NiFiClusterServiceMonitorEndpoint struct {
+	// Path overrides the scraped HTTP path (default: spec.metrics.path).
+	Path string `json:"path,omitempty"`
+	// Params are URL query parameters added to the scrape. NiFi's Prometheus endpoint uses these
+	// to filter metrics, for example {"includedRegistries": ["NIFI"]} or
+	// {"sampleLabelValue": ["(ProcessGroup|RootProcessGroup)"]}.
+	Params map[string][]string `json:"params,omitempty"`
+	// Interval overrides the scrape interval for this endpoint.
+	Interval string `json:"interval,omitempty"`
+	// ScrapeTimeout overrides the scrape timeout for this endpoint.
+	ScrapeTimeout string `json:"scrapeTimeout,omitempty"`
 }
 
 // NiFiClusterInternalTLSSpec configures operator-managed HTTPS and mutual TLS for an
