@@ -13,7 +13,7 @@
 #      operator-provided sensitive properties key (NiFi otherwise self-generates one that the
 #      next boot blanks, stranding the encrypted flow),
 #   5. remove configOverrides entirely -> shipped defaults restored from the image copy, the
-#      custom key is gone, and the overrides ConfigMap is deleted,
+#      custom key is gone, and the overrides Secret is deleted,
 #   6. add spec.pod (sidecar, annotation, extra volume/mount) and a logbackXml override ->
 #      pod carries them and conf/logback.xml is replaced,
 #   7. reserved sidecar names are rejected at admission,
@@ -131,7 +131,7 @@ wait_cluster_ready
 conf_grep nifi.properties '^nifi\.queue\.swap\.threshold=15000$' || { echo "override nifi.queue.swap.threshold=15000 not applied" >&2; exit 1; }
 conf_grep nifi.properties '^custom\.nificontrol\.test=hello=world|x$' || { echo "custom property override not applied verbatim" >&2; exit 1; }
 conf_grep bootstrap.conf '^java\.arg\.nificontroltest=-Dnificontrol\.test=1$' || { echo "bootstrap.conf override not applied" >&2; exit 1; }
-kubectl --context "${ctx}" -n "${namespace}" get configmap ov-nifi-config-overrides >/dev/null || { echo "overrides ConfigMap missing" >&2; exit 1; }
+kubectl --context "${ctx}" -n "${namespace}" get secret ov-nifi-config-overrides >/dev/null || { echo "overrides Secret missing" >&2; exit 1; }
 echo "  overrides applied; cluster Ready."
 
 echo "Phase 2: overriding an operator-managed key is rejected at admission..."
@@ -164,10 +164,10 @@ fi
 if conf_grep bootstrap.conf '^java\.arg\.nificontroltest='; then
   echo "bootstrap.conf override survived removal" >&2; exit 1
 fi
-if kubectl --context "${ctx}" -n "${namespace}" get configmap ov-nifi-config-overrides >/dev/null 2>&1; then
-  echo "overrides ConfigMap not cleaned up" >&2; exit 1
+if kubectl --context "${ctx}" -n "${namespace}" get secret ov-nifi-config-overrides >/dev/null 2>&1; then
+  echo "overrides Secret not cleaned up" >&2; exit 1
 fi
-echo "  defaults restored; ConfigMap cleaned up."
+echo "  defaults restored; Secret cleaned up."
 
 echo "Phase 5: spec.pod customization + logbackXml override..."
 checksum_before="$(sts_checksum)"
