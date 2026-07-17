@@ -188,6 +188,22 @@ type NiFiClusterServiceSpec struct {
 	// +kubebuilder:validation:Maximum=65535
 	NodePort    int32             `json:"nodePort,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
+	// IPFamilies sets the IP families of the client and headless Services (for dual-stack
+	// clusters). Leave unset to use the cluster default.
+	// +kubebuilder:validation:Enum=IPv4;IPv6
+	// +kubebuilder:validation:MaxItems=2
+	IPFamilies []corev1.IPFamily `json:"ipFamilies,omitempty"`
+	// IPFamilyPolicy selects single- or dual-stack for the client and headless Services. Leave
+	// unset to use the cluster default.
+	// +kubebuilder:validation:Enum=SingleStack;PreferDualStack;RequireDualStack
+	IPFamilyPolicy *corev1.IPFamilyPolicy `json:"ipFamilyPolicy,omitempty"`
+	// SessionAffinity pins a client to a backing pod on the client Service (None or ClientIP).
+	// Leave unset for the Kubernetes default (None). It is not applied to the headless Service.
+	// +kubebuilder:validation:Enum=None;ClientIP
+	SessionAffinity corev1.ServiceAffinity `json:"sessionAffinity,omitempty"`
+	// SessionAffinityConfig tunes ClientIP session affinity (e.g. the timeout) on the client
+	// Service. It is ignored unless SessionAffinity is ClientIP.
+	SessionAffinityConfig *corev1.SessionAffinityConfig `json:"sessionAffinityConfig,omitempty"`
 }
 
 // ProxyHost is a single host[:port] entry for NiFi's proxy allow-list. The length bound
@@ -240,6 +256,22 @@ type NiFiClusterExternalService struct {
 	LoadBalancerIP           string                                  `json:"loadBalancerIP,omitempty"`
 	LoadBalancerSourceRanges []string                                `json:"loadBalancerSourceRanges,omitempty"`
 	ExternalTrafficPolicy    corev1.ServiceExternalTrafficPolicyType `json:"externalTrafficPolicy,omitempty"`
+	// IPFamilies sets the IP families of this Service (for dual-stack clusters). Leave unset to
+	// use the cluster default.
+	// +kubebuilder:validation:Enum=IPv4;IPv6
+	// +kubebuilder:validation:MaxItems=2
+	IPFamilies []corev1.IPFamily `json:"ipFamilies,omitempty"`
+	// IPFamilyPolicy selects single- or dual-stack for this Service. Leave unset to use the
+	// cluster default.
+	// +kubebuilder:validation:Enum=SingleStack;PreferDualStack;RequireDualStack
+	IPFamilyPolicy *corev1.IPFamilyPolicy `json:"ipFamilyPolicy,omitempty"`
+	// SessionAffinity pins a client to a backing pod (None or ClientIP). Leave unset for the
+	// Kubernetes default (None).
+	// +kubebuilder:validation:Enum=None;ClientIP
+	SessionAffinity corev1.ServiceAffinity `json:"sessionAffinity,omitempty"`
+	// SessionAffinityConfig tunes ClientIP session affinity (e.g. the timeout). It is ignored
+	// unless SessionAffinity is ClientIP.
+	SessionAffinityConfig *corev1.SessionAffinityConfig `json:"sessionAffinityConfig,omitempty"`
 }
 
 // NiFiClusterExternalServicePort is one port exposed by an external Service.

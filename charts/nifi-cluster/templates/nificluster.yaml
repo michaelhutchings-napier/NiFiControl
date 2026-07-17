@@ -23,6 +23,20 @@ spec:
     annotations:
       {{- toYaml . | nindent 6 }}
     {{- end }}
+    {{- with .Values.service.ipFamilies }}
+    ipFamilies:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.service.ipFamilyPolicy }}
+    ipFamilyPolicy: {{ . }}
+    {{- end }}
+    {{- with .Values.service.sessionAffinity }}
+    sessionAffinity: {{ . }}
+    {{- end }}
+    {{- with .Values.service.sessionAffinityConfig }}
+    sessionAffinityConfig:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
   {{- with .Values.ports }}
   ports:
     {{- with .http }}

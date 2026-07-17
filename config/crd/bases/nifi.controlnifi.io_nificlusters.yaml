@@ -782,6 +782,29 @@ spec:
                         receive on one of the Service's "externally-facing" addresses (NodePorts, ExternalIPs,
                         and LoadBalancer IPs.
                       type: string
+                    ipFamilies:
+                      description: |-
+                        IPFamilies sets the IP families of this Service (for dual-stack clusters). Leave unset to
+                        use the cluster default.
+                      enum:
+                      - IPv4
+                      - IPv6
+                      items:
+                        description: |-
+                          IPFamily represents the IP Family (IPv4 or IPv6). This type is used
+                          to express the family of an IP expressed by a type (e.g. service.spec.ipFamilies).
+                        type: string
+                      maxItems: 2
+                      type: array
+                    ipFamilyPolicy:
+                      description: |-
+                        IPFamilyPolicy selects single- or dual-stack for this Service. Leave unset to use the
+                        cluster default.
+                      enum:
+                      - SingleStack
+                      - PreferDualStack
+                      - RequireDualStack
+                      type: string
                     labels:
                       additionalProperties:
                         type: string
@@ -841,6 +864,32 @@ spec:
                       maxItems: 16
                       minItems: 1
                       type: array
+                    sessionAffinity:
+                      description: |-
+                        SessionAffinity pins a client to a backing pod (None or ClientIP). Leave unset for the
+                        Kubernetes default (None).
+                      enum:
+                      - None
+                      - ClientIP
+                      type: string
+                    sessionAffinityConfig:
+                      description: |-
+                        SessionAffinityConfig tunes ClientIP session affinity (e.g. the timeout). It is ignored
+                        unless SessionAffinity is ClientIP.
+                      properties:
+                        clientIP:
+                          description: clientIP contains the configurations of Client
+                            IP based session affinity.
+                          properties:
+                            timeoutSeconds:
+                              description: |-
+                                timeoutSeconds specifies the seconds of ClientIP type session sticky time.
+                                The value must be >0 && <=86400(for 1 day) if ServiceAffinity == "ClientIP".
+                                Default value is 10800(for 3 hours).
+                              format: int32
+                              type: integer
+                          type: object
+                      type: object
                     type:
                       default: ClusterIP
                       description: Service Type string describes ingress methods for
@@ -8727,6 +8776,29 @@ spec:
                     additionalProperties:
                       type: string
                     type: object
+                  ipFamilies:
+                    description: |-
+                      IPFamilies sets the IP families of the client and headless Services (for dual-stack
+                      clusters). Leave unset to use the cluster default.
+                    enum:
+                    - IPv4
+                    - IPv6
+                    items:
+                      description: |-
+                        IPFamily represents the IP Family (IPv4 or IPv6). This type is used
+                        to express the family of an IP expressed by a type (e.g. service.spec.ipFamilies).
+                      type: string
+                    maxItems: 2
+                    type: array
+                  ipFamilyPolicy:
+                    description: |-
+                      IPFamilyPolicy selects single- or dual-stack for the client and headless Services. Leave
+                      unset to use the cluster default.
+                    enum:
+                    - SingleStack
+                    - PreferDualStack
+                    - RequireDualStack
+                    type: string
                   nodePort:
                     format: int32
                     maximum: 65535
@@ -8738,6 +8810,32 @@ spec:
                     maximum: 65535
                     minimum: 1
                     type: integer
+                  sessionAffinity:
+                    description: |-
+                      SessionAffinity pins a client to a backing pod on the client Service (None or ClientIP).
+                      Leave unset for the Kubernetes default (None). It is not applied to the headless Service.
+                    enum:
+                    - None
+                    - ClientIP
+                    type: string
+                  sessionAffinityConfig:
+                    description: |-
+                      SessionAffinityConfig tunes ClientIP session affinity (e.g. the timeout) on the client
+                      Service. It is ignored unless SessionAffinity is ClientIP.
+                    properties:
+                      clientIP:
+                        description: clientIP contains the configurations of Client
+                          IP based session affinity.
+                        properties:
+                          timeoutSeconds:
+                            description: |-
+                              timeoutSeconds specifies the seconds of ClientIP type session sticky time.
+                              The value must be >0 && <=86400(for 1 day) if ServiceAffinity == "ClientIP".
+                              Default value is 10800(for 3 hours).
+                            format: int32
+                            type: integer
+                        type: object
+                    type: object
                   type:
                     default: ClusterIP
                     description: Service Type string describes ingress methods for

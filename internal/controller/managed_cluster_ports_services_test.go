@@ -107,6 +107,75 @@ func TestManagedClusterHeadlessServiceCustomPorts(t *testing.T) {
 	}
 }
 
+func TestManagedClusterServiceIPFamilyAndSessionAffinity(t *testing.T) {
+	scheme := managedClusterTestScheme()
+	cluster := hardeningCluster()
+	policy := corev1.IPFamilyPolicyPreferDualStack
+	timeout := int32(10800)
+	cluster.Spec.Service.IPFamilies = []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}
+	cluster.Spec.Service.IPFamilyPolicy = &policy
+	cluster.Spec.Service.SessionAffinity = corev1.ServiceAffinityClientIP
+	cluster.Spec.Service.SessionAffinityConfig = &corev1.SessionAffinityConfig{ClientIP: &corev1.ClientIPConfig{TimeoutSeconds: &timeout}}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).WithStatusSubresource(&nifiv1alpha1.NiFiCluster{}).Build()
+	r := &NiFiClusterReconciler{Client: k8sClient, Scheme: scheme}
+
+	// Client (non-headless) Service: every passthrough is applied.
+	if err := r.reconcileManagedClusterService(context.Background(), cluster, false); err != nil {
+		t.Fatal(err)
+	}
+	clientSvc := &corev1.Service{}
+	if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: managedClusterResourceName(cluster), Namespace: cluster.Namespace}, clientSvc); err != nil {
+		t.Fatal(err)
+	}
+	if len(clientSvc.Spec.IPFamilies) != 2 || clientSvc.Spec.IPFamilies[0] != corev1.IPv4Protocol || clientSvc.Spec.IPFamilies[1] != corev1.IPv6Protocol {
+		t.Fatalf("client ipFamilies = %#v", clientSvc.Spec.IPFamilies)
+	}
+	if clientSvc.Spec.IPFamilyPolicy == nil || *clientSvc.Spec.IPFamilyPolicy != corev1.IPFamilyPolicyPreferDualStack {
+		t.Fatalf("client ipFamilyPolicy = %v", clientSvc.Spec.IPFamilyPolicy)
+	}
+	if clientSvc.Spec.SessionAffinity != corev1.ServiceAffinityClientIP {
+		t.Fatalf("client sessionAffinity = %q, want ClientIP", clientSvc.Spec.SessionAffinity)
+	}
+	if clientSvc.Spec.SessionAffinityConfig == nil || clientSvc.Spec.SessionAffinityConfig.ClientIP == nil ||
+		clientSvc.Spec.SessionAffinityConfig.ClientIP.TimeoutSeconds == nil || *clientSvc.Spec.SessionAffinityConfig.ClientIP.TimeoutSeconds != 10800 {
+		t.Fatalf("client sessionAffinityConfig = %#v", clientSvc.Spec.SessionAffinityConfig)
+	}
+
+	// Headless Service: IP families apply, session affinity does not (a headless Service does not proxy).
+	if err := r.reconcileManagedClusterService(context.Background(), cluster, true); err != nil {
+		t.Fatal(err)
+	}
+	headless := &corev1.Service{}
+	if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: managedClusterHeadlessServiceName(cluster), Namespace: cluster.Namespace}, headless); err != nil {
+		t.Fatal(err)
+	}
+	if len(headless.Spec.IPFamilies) != 2 || headless.Spec.IPFamilyPolicy == nil {
+		t.Fatalf("headless ipFamilies=%#v policy=%v", headless.Spec.IPFamilies, headless.Spec.IPFamilyPolicy)
+	}
+	if headless.Spec.SessionAffinity == corev1.ServiceAffinityClientIP {
+		t.Fatal("headless Service must not carry ClientIP session affinity")
+	}
+}
+
+func TestManagedClusterServiceNetworkingDefaultsUnset(t *testing.T) {
+	scheme := managedClusterTestScheme()
+	cluster := hardeningCluster() // no service networking configured
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).WithStatusSubresource(&nifiv1alpha1.NiFiCluster{}).Build()
+	r := &NiFiClusterReconciler{Client: k8sClient, Scheme: scheme}
+	if err := r.reconcileManagedClusterService(context.Background(), cluster, false); err != nil {
+		t.Fatal(err)
+	}
+	svc := &corev1.Service{}
+	if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: managedClusterResourceName(cluster), Namespace: cluster.Namespace}, svc); err != nil {
+		t.Fatal(err)
+	}
+	// Unset fields must be left for Kubernetes to default, never forced by the operator.
+	if svc.Spec.IPFamilies != nil || svc.Spec.IPFamilyPolicy != nil || svc.Spec.SessionAffinity != "" {
+		t.Fatalf("unset networking must stay default: families=%#v policy=%v affinity=%q",
+			svc.Spec.IPFamilies, svc.Spec.IPFamilyPolicy, svc.Spec.SessionAffinity)
+	}
+}
+
 func TestManagedClusterAdditiveProxyHosts(t *testing.T) {
 	cluster := hardeningCluster()
 	cluster.Spec.Ingress = &nifiv1alpha1.NiFiClusterIngressSpec{Enabled: true, Host: "nifi.example.com"}
@@ -438,6 +507,8 @@ func TestManagedClusterExternalServicesReconcileAndPrune(t *testing.T) {
 		},
 		LoadBalancerSourceRanges: []string{"10.0.0.0/8"},
 		ExternalTrafficPolicy:    corev1.ServiceExternalTrafficPolicyTypeLocal,
+		IPFamilyPolicy:           ptr.To(corev1.IPFamilyPolicyPreferDualStack),
+		SessionAffinity:          corev1.ServiceAffinityClientIP,
 	}}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).WithStatusSubresource(&nifiv1alpha1.NiFiCluster{}).Build()
 	r := &NiFiClusterReconciler{Client: k8sClient, Scheme: scheme}
@@ -467,6 +538,12 @@ func TestManagedClusterExternalServicesReconcileAndPrune(t *testing.T) {
 	}
 	if service.Spec.ExternalTrafficPolicy != corev1.ServiceExternalTrafficPolicyTypeLocal {
 		t.Fatalf("externalTrafficPolicy = %q, want Local", service.Spec.ExternalTrafficPolicy)
+	}
+	if service.Spec.IPFamilyPolicy == nil || *service.Spec.IPFamilyPolicy != corev1.IPFamilyPolicyPreferDualStack {
+		t.Fatalf("external ipFamilyPolicy = %v, want PreferDualStack", service.Spec.IPFamilyPolicy)
+	}
+	if service.Spec.SessionAffinity != corev1.ServiceAffinityClientIP {
+		t.Fatalf("external sessionAffinity = %q, want ClientIP", service.Spec.SessionAffinity)
 	}
 
 	// Dropping the Service from the spec prunes it.

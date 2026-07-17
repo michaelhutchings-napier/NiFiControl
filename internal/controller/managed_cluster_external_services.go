@@ -55,6 +55,7 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterExternalService(ctx conte
 		if spec.ExternalTrafficPolicy != "" && service.Spec.Type != corev1.ServiceTypeClusterIP {
 			service.Spec.ExternalTrafficPolicy = spec.ExternalTrafficPolicy
 		}
+		applyServiceNetworking(service, spec.IPFamilies, spec.IPFamilyPolicy, spec.SessionAffinity, spec.SessionAffinityConfig, true)
 		return nil
 	})
 	return err

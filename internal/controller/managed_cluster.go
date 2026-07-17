@@ -489,13 +489,34 @@ func (r *NiFiClusterReconciler) reconcileManagedClusterService(ctx context.Conte
 			if service.ResourceVersion == "" {
 				service.Spec.ClusterIP = corev1.ClusterIPNone
 			}
+			// Session affinity is meaningless on a headless Service (it does not proxy), so only
+			// the IP-family passthroughs apply here.
+			applyServiceNetworking(service, cluster.Spec.Service.IPFamilies, cluster.Spec.Service.IPFamilyPolicy, "", nil, false)
 			return nil
 		}
 		service.Spec.Type = managedClusterServiceType(cluster)
 		service.Spec.PublishNotReadyAddresses = false
+		applyServiceNetworking(service, cluster.Spec.Service.IPFamilies, cluster.Spec.Service.IPFamilyPolicy, cluster.Spec.Service.SessionAffinity, cluster.Spec.Service.SessionAffinityConfig, true)
 		return nil
 	})
 	return err
+}
+
+// applyServiceNetworking sets the IP-family and (for client-facing Services) session-affinity
+// passthroughs, leaving each field at the Kubernetes/cluster default when the spec omits it. The
+// fields are assigned only when set so an unspecified value never clobbers a Kubernetes-defaulted
+// one (and never churns the Service on re-reconcile).
+func applyServiceNetworking(service *corev1.Service, ipFamilies []corev1.IPFamily, ipFamilyPolicy *corev1.IPFamilyPolicy, sessionAffinity corev1.ServiceAffinity, sessionAffinityConfig *corev1.SessionAffinityConfig, allowSessionAffinity bool) {
+	if len(ipFamilies) > 0 {
+		service.Spec.IPFamilies = ipFamilies
+	}
+	if ipFamilyPolicy != nil {
+		service.Spec.IPFamilyPolicy = ipFamilyPolicy
+	}
+	if allowSessionAffinity && sessionAffinity != "" {
+		service.Spec.SessionAffinity = sessionAffinity
+		service.Spec.SessionAffinityConfig = sessionAffinityConfig
+	}
 }
 
 func (r *NiFiClusterReconciler) reconcileManagedClusterStatefulSet(ctx context.Context, cluster *nifiv1alpha1.NiFiCluster, tls *clusterTLSMaterials, replicas int32, overridesChecksum string, auth *resolvedClusterAuth) (*appsv1.StatefulSet, error) {
