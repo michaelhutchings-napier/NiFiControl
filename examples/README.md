@@ -25,6 +25,7 @@ They assume the NiFiControl operator and its CRDs are already installed (see the
 | [parameter-provider.yaml](parameter-provider.yaml) | Source parameters from env vars or an external secret manager | `NiFiParameterProvider` |
 | [canvas-flow.yaml](canvas-flow.yaml) | A small flow built declaratively on the canvas | `NiFiProcessGroup`, `NiFiControllerService`, `NiFiProcessor`, `NiFiConnection`, `NiFiFunnel`, `NiFiOutputPort`, `NiFiLabel` |
 | [flow-deployment.yaml](flow-deployment.yaml) | GitOps: version a flow bundle and deploy it | `NiFiFlowBundle`, `NiFiFlowDeployment`, `NiFiRegistryClient` |
+| [flow-validation.yaml](flow-validation.yaml) | Pre-flight dry run: validate a flow without deploying it | `NiFiFlowDeployment` |
 | [backup-restore.yaml](backup-restore.yaml) | Capture a flow into a ConfigMap and restore it | `NiFiBackup`, `NiFiRestore` |
 | [autoscaling.yaml](autoscaling.yaml) | Scale a cluster (or node pool) on queue depth or CPU | `NiFiNodeGroup`, `NiFiAutoscaler` |
 

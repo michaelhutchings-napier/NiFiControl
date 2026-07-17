@@ -1,0 +1,59 @@
+# Pre-flight flow validation (dry run). spec.validateOnly imports the resolved flow into a temporary,
+# detached process group, enables its controller services, inspects component validity, records the
+# result in status.validationResult, and deletes the temporary group -- nothing is wired into the live
+# flow. Safe to run against production and to gate CI on.
+#
+#   kubectl -n dataflows apply -f examples/flow-validation.yaml
+#   kubectl -n dataflows wait --for=condition=Ready nififlowdeployment/payments-check --timeout=2m
+#   kubectl -n dataflows get nififlowdeployment/payments-check -o jsonpath='{.status.validationResult}'
+#
+# Ready becomes true only when the flow validates; an invalid flow reports Ready=false and lists the
+# offending components. See docs/flow-validation.md.
+apiVersion: nifi.controlnifi.io/v1alpha1
+kind: NiFiFlowDeployment
+metadata: {name: payments-check}
+spec:
+  clusterRef: {name: quickstart}
+  validateOnly: true
+  source:
+    # Any snapshot source works (inline / bundleRef). Inline keeps this example self-contained; in CI
+    # you would point at the same bundleRef your real NiFiFlowDeployment deploys.
+    inline:
+      snapshot:
+        flowContents:
+          identifier: "00000000-0000-0000-0000-000000000001"
+          name: placeholder
+          componentType: PROCESS_GROUP
+          position: {x: 0, "y": 0}
+          controllerServices: []
+          processGroups: []
+          remoteProcessGroups: []
+          inputPorts: []
+          outputPorts: []
+          connections: []
+          funnels: []
+          labels: []
+          processors:
+            # A complete VersionedProcessor: NiFi rejects an import that omits the scheduling,
+            # style, or property-descriptor fields, so include them even when empty.
+            - identifier: "00000000-0000-0000-0000-0000000000aa"
+              name: generate
+              type: org.apache.nifi.processors.standard.GenerateFlowFile
+              bundle: {group: org.apache.nifi, artifact: nifi-standard-nar, version: 2.10.0}
+              scheduledState: ENABLED
+              componentType: PROCESSOR
+              position: {x: 0, "y": 0}
+              properties: {}
+              propertyDescriptors: {}
+              style: {}
+              autoTerminatedRelationships: [success]
+              concurrentlySchedulableTaskCount: 1
+              schedulingStrategy: TIMER_DRIVEN
+              schedulingPeriod: "0 sec"
+              executionNode: ALL
+              penaltyDuration: "30 sec"
+              yieldDuration: "1 sec"
+              bulletinLevel: WARN
+              runDurationMillis: 0
+  target:
+    parentProcessGroupRef: {root: true}

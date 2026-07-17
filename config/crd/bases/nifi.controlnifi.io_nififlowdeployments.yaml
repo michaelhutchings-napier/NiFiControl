@@ -1371,6 +1371,16 @@ spec:
                   processGroupName:
                     type: string
                 type: object
+              validateOnly:
+                description: |-
+                  ValidateOnly runs the deployment as a pre-flight dry run: the resolved flow is imported
+                  into a temporary, detached process group, its controller services are enabled, its
+                  component validity is inspected, and the result is reported in status.validationResult
+                  before the temporary group is discarded. Nothing is wired into the live flow, so this is
+                  safe to gate a CI pipeline on. The deployment becomes Ready only when the flow validates;
+                  an invalid flow reports Ready=false with the offending components. It requires a source
+                  that resolves to a flow snapshot (inline or bundleRef).
+                type: boolean
             required:
             - clusterRef
             - source
@@ -1671,6 +1681,85 @@ spec:
                     type: string
                 type: object
               syncState:
+                type: string
+              validationPhase:
+                description: |-
+                  ValidationPhase drives the validate-only state machine: empty (idle), Validating (waiting
+                  for the imported flow's components to settle), or Cleanup (deleting the temporary group).
+                type: string
+              validationProcessGroupId:
+                description: |-
+                  ValidationProcessGroupID is the temporary process group a validate-only run imports and
+                  then deletes. It is tracked so an interrupted run can be cleaned up on the next reconcile.
+                type: string
+              validationResult:
+                description: ValidationResult reports the outcome of the most recent
+                  spec.validateOnly dry run.
+                properties:
+                  checkedAt:
+                    description: CheckedAt is when the validation completed.
+                    format: date-time
+                    type: string
+                  checkedDigest:
+                    description: |-
+                      CheckedDigest is the resolved artifact digest that was validated. It guards against
+                      re-running an identical validation every reconcile.
+                    type: string
+                  checkedVersion:
+                    description: CheckedVersion is the source version that was validated.
+                    type: string
+                  invalidComponents:
+                    description: |-
+                      InvalidComponents lists the invalid components with their validation errors, capped for
+                      status size. Message notes when the list was truncated.
+                    items:
+                      description: FlowInvalidComponent identifies a component the
+                        dry run found invalid.
+                      properties:
+                        errors:
+                          description: Errors are the component's validation errors,
+                            capped for status size.
+                          items:
+                            type: string
+                          type: array
+                        id:
+                          description: ID is the component's NiFi id.
+                          type: string
+                        kind:
+                          description: Kind is Processor or ControllerService.
+                          type: string
+                        name:
+                          description: Name is the component's display name.
+                          type: string
+                        processGroupId:
+                          description: ProcessGroupID is the id of the process group
+                            the component lives in.
+                          type: string
+                        type:
+                          description: Type is the component's NiFi type (e.g. org.apache.nifi.processors...).
+                          type: string
+                      type: object
+                    type: array
+                  invalidCount:
+                    description: InvalidCount is the number of invalid components
+                      reported by the imported flow.
+                    format: int32
+                    type: integer
+                  message:
+                    description: Message is a human-readable summary of the result.
+                    type: string
+                  valid:
+                    description: Valid is true when the imported flow reported no
+                      invalid components.
+                    type: boolean
+                required:
+                - invalidCount
+                - valid
+                type: object
+              validationStartedAt:
+                description: ValidationStartedAt anchors the settle timeout for the
+                  current validate-only run.
+                format: date-time
                 type: string
             type: object
         type: object

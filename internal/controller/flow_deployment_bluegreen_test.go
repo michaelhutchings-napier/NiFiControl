@@ -20,13 +20,17 @@ import (
 // fakeNiFi is an in-memory NiFi topology used to drive the BlueGreen state machine. It
 // implements the snapshot, process-group, scheduler, and BlueGreen client interfaces.
 type fakeNiFi struct {
-	pgs         map[string]*fakePG
-	connections []nifi.ConnectionEntity
-	queues      map[string]int64
-	runStatus   map[string]string
-	csEnabled   map[string]bool
-	candidate   *fakeCandidate
-	ids         int
+	pgs               map[string]*fakePG
+	connections       []nifi.ConnectionEntity
+	queues            map[string]int64
+	runStatus         map[string]string
+	csEnabled         map[string]bool
+	csState           map[string]string
+	validationReports map[string]nifi.FlowValidationReport
+	childGroups       []nifi.ProcessGroupEntity
+	candidate         *fakeCandidate
+	ids               int
+	imports           int
 }
 
 type fakePG struct {
@@ -49,11 +53,28 @@ type fakeCandidate struct {
 
 func newFakeNiFi() *fakeNiFi {
 	return &fakeNiFi{
-		pgs:       map[string]*fakePG{},
-		queues:    map[string]int64{},
-		runStatus: map[string]string{},
-		csEnabled: map[string]bool{},
+		pgs:               map[string]*fakePG{},
+		queues:            map[string]int64{},
+		runStatus:         map[string]string{},
+		csEnabled:         map[string]bool{},
+		csState:           map[string]string{},
+		validationReports: map[string]nifi.FlowValidationReport{},
 	}
+}
+
+// --- nifi.FlowValidationClient ---
+
+func (f *fakeNiFi) InspectValidation(_ context.Context, _ string, pgID string) (nifi.FlowValidationReport, error) {
+	return f.validationReports[pgID], nil
+}
+
+func (f *fakeNiFi) SetControllerServicesState(_ context.Context, _ string, pgID string, state string) error {
+	f.csState[pgID] = state
+	return nil
+}
+
+func (f *fakeNiFi) ListChildProcessGroups(_ context.Context, _ string, _ string) ([]nifi.ProcessGroupEntity, error) {
+	return f.childGroups, nil
 }
 
 func (f *fakeNiFi) nextID(prefix string) string {
@@ -68,6 +89,7 @@ func port(id, name string) nifi.PortEntity {
 // --- nifi.FlowSnapshotClient ---
 
 func (f *fakeNiFi) ImportProcessGroup(_ context.Context, _ string, _ string, snapshot json.RawMessage) (*nifi.ProcessGroupEntity, error) {
+	f.imports++
 	var decoded struct {
 		FlowContents struct {
 			Name string `json:"name"`

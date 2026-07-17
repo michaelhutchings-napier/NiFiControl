@@ -46,6 +46,8 @@ operator prunes, reports, reconciles, or adopts what it finds in NiFi.
 
 - **[Backup and restore](backup-restore.md)** — capture a process group's flow into a ConfigMap or
   Secret and restore it back.
+- **[Flow validation (dry run)](flow-validation.md)** — `validateOnly` pre-flight checks a flow in a
+  throwaway process group and reports invalid components, without touching the live flow.
 - **[BlueGreen rollouts](bluegreen-rollout.md)** — transactional flow rollouts where the graph
   topology allows.
 - **[Rollout readiness and controls](rollout-readiness.md)** — gate rollouts on valid components and

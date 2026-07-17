@@ -1863,6 +1863,7 @@ type NiFiFlowDeploymentReconciler struct {
 	FlowSnapshotReader    nifi.FlowSnapshotReader
 	ProcessGroupScheduler nifi.ProcessGroupScheduler
 	BlueGreenClient       nifi.BlueGreenClient
+	FlowValidationClient  nifi.FlowValidationClient
 	ArtifactResolver      flowartifact.Resolver
 }
 
@@ -1918,6 +1919,16 @@ func (r *NiFiFlowDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.R
 			return ctrl.Result{}, markFlowDeploymentNotReady(ctx, r.Client, instance, "InvalidFlowSnapshot", message)
 		}
 		return ctrl.Result{}, nil
+	}
+	if instance.Spec.ValidateOnly {
+		if len(snapshot) == 0 {
+			message := "validateOnly requires a source that resolves to a flow snapshot (inline or bundleRef)."
+			if shouldMarkFlowDeploymentNotReady(instance, "ValidateOnlyRequiresSnapshot", message) {
+				return ctrl.Result{}, markFlowDeploymentNotReady(ctx, r.Client, instance, "ValidateOnlyRequiresSnapshot", message)
+			}
+			return ctrl.Result{}, nil
+		}
+		return r.reconcileFlowValidation(ctx, instance, endpoint, parentID, snapshot, snapshotVersion, snapshotDigest)
 	}
 	if len(snapshot) > 0 {
 		return r.reconcileSnapshotFlowDeployment(ctx, instance, endpoint, parentID, snapshot, snapshotVersion, snapshotDigest)
@@ -1994,7 +2005,17 @@ func (r *NiFiFlowDeploymentReconciler) reconcileFlowDeploymentDelete(ctx context
 	if processGroupID == "" {
 		processGroupID = instance.Status.NiFiID
 	}
-	if instance.Spec.DeletionPolicy != nifiv1alpha1.DeletionPolicyDelete || processGroupID == "" {
+	// A validate-only run's temporary process group is an operator-internal throwaway; clean it up
+	// on deletion regardless of DeletionPolicy so an interrupted validation never leaks it.
+	validationPGID := instance.Status.ValidationProcessGroupID
+	if instance.Spec.DeletionPolicy != nifiv1alpha1.DeletionPolicyDelete && validationPGID == "" {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
+	}
+	if instance.Spec.DeletionPolicy != nifiv1alpha1.DeletionPolicyDelete {
+		processGroupID = ""
+	}
+	if processGroupID == "" && validationPGID == "" {
 		_, err := removeFinalizer(ctx, r.Client, instance)
 		return ctrl.Result{}, err
 	}
@@ -2018,6 +2039,13 @@ func (r *NiFiFlowDeploymentReconciler) reconcileFlowDeploymentDelete(ctx context
 	processGroups := r.ProcessGroupClient
 	if processGroups == nil {
 		processGroups = nifi.HTTPProcessGroupClient{}
+	}
+	if validationPGID != "" {
+		r.deleteValidationProcessGroup(ctx, endpoint, validationPGID)
+	}
+	if processGroupID == "" {
+		_, err := removeFinalizer(ctx, r.Client, instance)
+		return ctrl.Result{}, err
 	}
 	current, err := processGroups.GetProcessGroup(ctx, endpoint, processGroupID)
 	if err != nil {

@@ -336,6 +336,7 @@ type ControllerServiceComponent struct {
 	Properties       map[string]string `json:"properties,omitempty"`
 	State            string            `json:"state,omitempty"`
 	ValidationStatus string            `json:"validationStatus,omitempty"`
+	ValidationErrors []string          `json:"validationErrors,omitempty"`
 }
 
 type ProcessorEntity struct {
@@ -353,6 +354,7 @@ type ProcessorComponent struct {
 	Position         *Position       `json:"position,omitempty"`
 	State            string          `json:"state,omitempty"`
 	ValidationStatus string          `json:"validationStatus,omitempty"`
+	ValidationErrors []string        `json:"validationErrors,omitempty"`
 	Config           ProcessorConfig `json:"config,omitempty"`
 }
 

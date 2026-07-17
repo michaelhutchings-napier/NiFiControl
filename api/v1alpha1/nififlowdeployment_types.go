@@ -130,9 +130,17 @@ type NiFiFlowDeploymentSpec struct {
 	Source              FlowDeploymentSource  `json:"source"`
 	Target              FlowDeploymentTarget  `json:"target"`
 	ParameterContextRef *LocalObjectReference `json:"parameterContextRef,omitempty"`
-	Rollout             RolloutStrategy       `json:"rollout,omitempty"`
-	Rollback            RollbackStrategy      `json:"rollback,omitempty"`
-	Ownership           OwnershipPolicy       `json:"ownership,omitempty"`
+	// ValidateOnly runs the deployment as a pre-flight dry run: the resolved flow is imported
+	// into a temporary, detached process group, its controller services are enabled, its
+	// component validity is inspected, and the result is reported in status.validationResult
+	// before the temporary group is discarded. Nothing is wired into the live flow, so this is
+	// safe to gate a CI pipeline on. The deployment becomes Ready only when the flow validates;
+	// an invalid flow reports Ready=false with the offending components. It requires a source
+	// that resolves to a flow snapshot (inline or bundleRef).
+	ValidateOnly bool             `json:"validateOnly,omitempty"`
+	Rollout      RolloutStrategy  `json:"rollout,omitempty"`
+	Rollback     RollbackStrategy `json:"rollback,omitempty"`
+	Ownership    OwnershipPolicy  `json:"ownership,omitempty"`
 	// +kubebuilder:validation:Enum=Delete;Orphan
 	// +kubebuilder:default=Orphan
 	DeletionPolicy DeletionPolicy       `json:"deletionPolicy,omitempty"`
@@ -157,6 +165,52 @@ type NiFiFlowDeploymentStatus struct {
 	LastRollback           *FlowRollbackStatus       `json:"lastRollback,omitempty"`
 	LastSuccessful         *FlowDeploymentHistory    `json:"lastSuccessfulDeployment,omitempty"`
 	RolloutHistory         []FlowDeploymentHistory   `json:"rolloutHistory,omitempty"`
+	// ValidationResult reports the outcome of the most recent spec.validateOnly dry run.
+	ValidationResult *FlowValidationResult `json:"validationResult,omitempty"`
+	// ValidationProcessGroupID is the temporary process group a validate-only run imports and
+	// then deletes. It is tracked so an interrupted run can be cleaned up on the next reconcile.
+	ValidationProcessGroupID string `json:"validationProcessGroupId,omitempty"`
+	// ValidationPhase drives the validate-only state machine: empty (idle), Validating (waiting
+	// for the imported flow's components to settle), or Cleanup (deleting the temporary group).
+	ValidationPhase string `json:"validationPhase,omitempty"`
+	// ValidationStartedAt anchors the settle timeout for the current validate-only run.
+	ValidationStartedAt *metav1.Time `json:"validationStartedAt,omitempty"`
+}
+
+// FlowValidationResult is the outcome of a spec.validateOnly dry run.
+type FlowValidationResult struct {
+	// Valid is true when the imported flow reported no invalid components.
+	Valid bool `json:"valid"`
+	// CheckedVersion is the source version that was validated.
+	CheckedVersion string `json:"checkedVersion,omitempty"`
+	// CheckedDigest is the resolved artifact digest that was validated. It guards against
+	// re-running an identical validation every reconcile.
+	CheckedDigest string `json:"checkedDigest,omitempty"`
+	// InvalidCount is the number of invalid components reported by the imported flow.
+	InvalidCount int32 `json:"invalidCount"`
+	// InvalidComponents lists the invalid components with their validation errors, capped for
+	// status size. Message notes when the list was truncated.
+	InvalidComponents []FlowInvalidComponent `json:"invalidComponents,omitempty"`
+	// CheckedAt is when the validation completed.
+	CheckedAt metav1.Time `json:"checkedAt,omitempty"`
+	// Message is a human-readable summary of the result.
+	Message string `json:"message,omitempty"`
+}
+
+// FlowInvalidComponent identifies a component the dry run found invalid.
+type FlowInvalidComponent struct {
+	// Kind is Processor or ControllerService.
+	Kind string `json:"kind,omitempty"`
+	// ID is the component's NiFi id.
+	ID string `json:"id,omitempty"`
+	// Name is the component's display name.
+	Name string `json:"name,omitempty"`
+	// Type is the component's NiFi type (e.g. org.apache.nifi.processors...).
+	Type string `json:"type,omitempty"`
+	// ProcessGroupID is the id of the process group the component lives in.
+	ProcessGroupID string `json:"processGroupId,omitempty"`
+	// Errors are the component's validation errors, capped for status size.
+	Errors []string `json:"errors,omitempty"`
 }
 
 type FlowReplaceRequestStatus struct {

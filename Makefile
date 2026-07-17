@@ -40,6 +40,7 @@ helm-template: helm-crds-check
 	$(HELM) template metrics-endpoints $(HELM_CLUSTER_CHART) --namespace dataflows --set metrics.enabled=true --set metrics.serviceMonitor.enabled=true --set-json 'metrics.serviceMonitor.endpoints=[{"params":{"includedRegistries":["NIFI"]}},{"params":{"includedRegistries":["JVM"]},"interval":"60s"}]' >/dev/null
 	$(HELM) template probe-cmd $(HELM_CLUSTER_CHART) --namespace dataflows --set-json 'pod={"probes":{"liveness":{"handler":{"exec":{"command":["/bin/sh","-c","curl -sf http://localhost:8080/nifi-api/system-diagnostics"]}}}}}' >/dev/null
 	$(HELM) template pod-debug $(HELM_CLUSTER_CHART) --namespace dataflows --set pod.shareProcessNamespace=true --set pod.suspendOnCrash=true >/dev/null
+	$(HELM) template flow-validate $(HELM_CLUSTER_CHART) --namespace dataflows --set-json 'flowDeployments=[{"name":"fd","spec":{"validateOnly":true,"source":{"inline":{"snapshot":{"flowContents":{"name":"fd"}}}},"target":{"processGroupName":"fd"}}}]' >/dev/null
 	$(HELM) template operator-sm $(HELM_CHART) --namespace nificontrol-system --set metrics.serviceMonitor.enabled=true >/dev/null
 	$(HELM) template le-tuning $(HELM_CHART) --namespace nificontrol-system --set leaderElection.leaseDuration=30s --set leaderElection.renewDeadline=20s --set leaderElection.retryPeriod=4s >/dev/null
 	$(HELM) template allinone $(HELM_CLUSTER_CHART) --namespace dataflows --set-json 'parameterContexts=[{"name":"pc","spec":{"parameters":[{"name":"k","value":"v"}]}}]' --set-json 'users=[{"name":"u","spec":{"identity":"CN=u"}}]' --set-json 'flowBundles=[{"name":"fb","spec":{"version":"1.0.0"}}]' >/dev/null
@@ -105,6 +106,10 @@ integration-canvas-kind:
 .PHONY: integration-flowdeploy-kind
 integration-flowdeploy-kind:
 	./hack/test-flowdeploy-kind.sh
+
+.PHONY: integration-flowvalidate-kind
+integration-flowvalidate-kind:
+	./hack/test-flowvalidate-kind.sh
 
 .PHONY: integration-backup-restore-kind
 integration-backup-restore-kind:

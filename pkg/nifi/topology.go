@@ -16,9 +16,10 @@ const (
 	ConnectableOutputPort = "OUTPUT_PORT"
 	ConnectableFunnel     = "FUNNEL"
 
-	RunStateRunning = "RUNNING"
-	RunStateStopped = "STOPPED"
-	RunStateEnabled = "ENABLED"
+	RunStateRunning  = "RUNNING"
+	RunStateStopped  = "STOPPED"
+	RunStateEnabled  = "ENABLED"
+	RunStateDisabled = "DISABLED"
 )
 
 // BlueGreenClient is the NiFi 2.x surface a transactional BlueGreen rollout needs beyond
