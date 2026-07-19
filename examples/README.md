@@ -1,8 +1,6 @@
 # NiFiControl examples
 
-Complete, `kubectl apply`-able scenarios. Every manifest here uses the exact spec shapes that
-NiFiControl's end-to-end kind harnesses (`hack/test-*-kind.sh`) apply against real Apache NiFi 2.10,
-so they are working configurations, not sketches.
+Complete, `kubectl apply`-able scenarios for Apache NiFi 2.10.
 
 Apply an example with, e.g.:
 
@@ -11,10 +9,8 @@ kubectl create namespace dataflows
 kubectl -n dataflows apply -f examples/quickstart.yaml
 ```
 
-They assume the NiFiControl operator and its CRDs are already installed (see the
-[chart](../charts/nificontrol) and [docs](../docs/README.md)). TLS examples additionally require
-[cert-manager](https://cert-manager.io); the autoscaling example requires
-[KEDA](https://keda.sh) and/or the Prometheus Operator.
+Install the operator first. TLS examples require cert-manager. Autoscaling
+examples require KEDA and/or the Prometheus Operator.
 
 | Example | What it shows | Kinds |
 | --- | --- | --- |
@@ -29,7 +25,5 @@ They assume the NiFiControl operator and its CRDs are already installed (see the
 | [backup-restore.yaml](backup-restore.yaml) | Capture a flow into a ConfigMap and restore it | `NiFiBackup`, `NiFiRestore` |
 | [autoscaling.yaml](autoscaling.yaml) | Scale a cluster (or node pool) on queue depth or CPU | `NiFiNodeGroup`, `NiFiAutoscaler` |
 
-Every NiFi-resident kind supports `deletionPolicy` (`Delete`/`Orphan`), `driftPolicy`
-(`Ignore`/`Warn`/`Reconcile`/`Fail`), and `adoptionPolicy` (`Never`/`IfExists`/`AdoptById`/`AdoptByName`).
-The examples set these where they matter and omit them where the defaults are fine — see
-[docs/README.md](../docs/README.md) for the model.
+Most NiFi-resident kinds support `deletionPolicy`, `driftPolicy`, and
+`adoptionPolicy`. The examples set them only where they matter.

@@ -1,84 +1,42 @@
-# NiFiControl Documentation
+# NiFiControl Docs
 
-NiFiControl is a declarative Kubernetes control plane for Apache NiFi 2.x. It exposes the whole
-NiFi lifecycle — clusters, tenancy, canvas components, and GitOps flow deployments — as Custom
-Resources under `nifi.controlnifi.io`, and reconciles them against a running NiFi over its REST API.
+NiFiControl manages Apache NiFi 2.x with Kubernetes CRDs. The docs are short
+operator references: install it, pick the CRDs you need, apply examples, and check
+status conditions.
 
-New here? Start with the [runnable examples](../examples/) — each is a complete, `kubectl apply`-able
-scenario, verified end to end against real NiFi in kind.
+## Start
 
-## Getting started
+- [Production cluster](production-cluster.md)
+- [Internal TLS](internal-tls.md)
+- [User authentication](user-authentication.md)
+- [Authorization](authorization.md)
+- [Examples](../examples/)
 
-- **[Examples](../examples/)** — copy-paste scenarios from a one-node quickstart to a full secured
-  cluster with tenants, a declarative flow, GitOps deployments, autoscaling, and backup/restore.
-- **[Production cluster hardening](production-cluster.md)** — pod scheduling, PodDisruptionBudget,
-  Ingress + proxy hosts, rolling / `OnDelete` upgrades, termination grace, and OpenShift SCCs.
-- **[Deploying with Argo CD](argocd.md)** — a Lua health check so Argo CD tracks NiFiControl
-  resources' `Ready` status, plus CRD/sync-wave ordering for GitOps.
-- **[Running in an Istio mesh](istio.md)** — sidecar injection, excluding NiFi's node-to-node
-  cluster ports so clustering works, mesh-mTLS vs internalTLS, and ingress-gateway exposure.
+## Flow Management
 
-## Concepts
+- [Flow validation](flow-validation.md)
+- [BlueGreen rollout](bluegreen-rollout.md)
+- [Rollout readiness](rollout-readiness.md)
+- [Backup and restore](backup-restore.md)
+- [Parameter providers](parameter-providers.md)
 
-NiFiControl manages two layers. The **control plane** (`NiFiCluster`, `NiFiNodeGroup`) owns the
-StatefulSet, services, TLS, and coordination. The **canvas/tenant/flow layer** (users, groups,
-policies, parameter contexts, parameter providers, process groups, processors, connections, ports,
-controller services, reporting tasks, flow bundles, and flow deployments) reconciles by driving the
-NiFi REST API. Every
-NiFi-resident kind shares `deletionPolicy` (Delete/Orphan), `driftPolicy` (Ignore/Warn/Reconcile/Fail),
-and `adoptionPolicy` (Never/IfExists/AdoptById/AdoptByName), so you choose per resource whether the
-operator prunes, reports, reconciles, or adopts what it finds in NiFi.
+## Operations
 
-## Security
+- [Autoscaling](autoscaling.md)
+- [Node groups](node-groups.md)
+- [Node lifecycle](node-lifecycle.md)
+- [Observability](observability.md)
+- [Argo CD](argocd.md)
+- [Istio](istio.md)
+- [Migrating from NiFiKop](migrating-from-nifikop.md)
 
-- **[Internal HTTPS and mutual TLS](internal-tls.md)** — cert-manager-backed TLS, self-signed CA /
-  issuerRef / external BYO PKCS12, zero-restart certificate auto-reload, and per-node identity
-  certificates via the cert-manager CSI driver.
-- **[User authentication](user-authentication.md)** — single-user, LDAP, and OIDC login for a
-  secured cluster.
-- **[Authorization (tenants and access policies)](authorization.md)** — `NiFiUser`, `NiFiUserGroup`,
-  and `NiFiPolicy`, and how the operator authorizes itself and other clients.
-- **[Parameter providers](parameter-providers.md)** — `NiFiParameterProvider` sources parameters
-  from environment variables, files, or an external secret manager, keeping sensitive values out of
-  NiFi and out of CRs.
-
-## Flow management
-
-- **[Backup and restore](backup-restore.md)** — capture a process group's flow into a ConfigMap or
-  Secret and restore it back.
-- **[Flow validation (dry run)](flow-validation.md)** — `validateOnly` pre-flight checks a flow in a
-  throwaway process group and reports invalid components, without touching the live flow.
-- **[BlueGreen rollouts](bluegreen-rollout.md)** — transactional flow rollouts where the graph
-  topology allows.
-- **[Rollout readiness and controls](rollout-readiness.md)** — gate rollouts on valid components and
-  enabled services, drain queues, bound retries, and cancel in-flight rollouts.
-
-## Scaling and lifecycle
-
-- **[Autoscaling](autoscaling.md)** — a NiFi-aware `NiFiAutoscaler` that renders a KEDA `ScaledObject`
-  (Prometheus/queue-depth) or a native HPA (CPU/memory), with safe scale-down defaults.
-- **[Node groups](node-groups.md)** — heterogeneous node pools sharing one NiFi cluster.
-- **[Graceful node offload](node-lifecycle.md)** — how scale-down offloads a removed node's data
-  through the NiFi cluster API before the pod is deleted.
-
-## Observability
-
-- **[Observability](observability.md)** — Prometheus metrics, the rendered `ServiceMonitor` (incl.
-  TLS clusters), operator metrics, and Kubernetes Events.
-
-## Migration and reference
-
-- **[Migrating from NiFiKop](migrating-from-nifikop.md)** — a kind-by-kind mapping of NiFiKop's
-  `Nifi*` resources to NiFiControl's `NiFi*` equivalents.
-- **[Design: the declarative CRD model](design/declarative-crd-model.md)** — the API design,
-  ownership/drift/adoption model, and roadmap.
-
-## API kinds at a glance
+## API Groups
 
 | Area | Kinds |
 | --- | --- |
 | Cluster | `NiFiCluster`, `NiFiNodeGroup` |
-| Tenancy | `NiFiUser`, `NiFiUserGroup`, `NiFiPolicy`, `NiFiParameterContext`, `NiFiParameterProvider` |
+| Security | `NiFiUser`, `NiFiUserGroup`, `NiFiPolicy` |
+| Config | `NiFiParameterContext`, `NiFiParameterProvider`, `NiFiRegistryClient` |
 | Canvas | `NiFiProcessGroup`, `NiFiProcessor`, `NiFiConnection`, `NiFiInputPort`, `NiFiOutputPort`, `NiFiFunnel`, `NiFiLabel`, `NiFiControllerService`, `NiFiRemoteProcessGroup`, `NiFiReportingTask` |
-| Flow / GitOps | `NiFiRegistryClient`, `NiFiFlowBundle`, `NiFiFlowDeployment` |
-| Operations | `NiFiBackup`, `NiFiRestore`, `NiFiAutoscaler` |
+| Flow | `NiFiFlowBundle`, `NiFiFlowDeployment` |
+| Ops | `NiFiBackup`, `NiFiRestore`, `NiFiAutoscaler` |

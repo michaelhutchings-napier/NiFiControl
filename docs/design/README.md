@@ -1,7 +1,6 @@
-# Design
+# Design Notes
 
-The first design target is a clean declarative API for Apache NiFi on
-Kubernetes, independent of NiFiKop's project identity.
+Short design references:
 
-The API group starts as `nifi.controlnifi.io`.
-
+- [Controller runtime](controller-runtime.md)
+- [Declarative CRD model](declarative-crd-model.md)

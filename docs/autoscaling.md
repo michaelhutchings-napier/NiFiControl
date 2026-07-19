@@ -1,229 +1,55 @@
 # Autoscaling
 
-`NiFiCluster` exposes a Kubernetes **scale subresource**, so a clustered cluster can be
-resized by anything that speaks the standard scale API — `kubectl scale`, a
-HorizontalPodAutoscaler, or (recommended) KEDA. NiFiControl deliberately does **not** ship a
-bespoke autoscaler: the scaling *decision* belongs to KEDA/HPA, and the operator owns *safe
-execution* of the resulting replica change.
+`NiFiCluster` and `NiFiNodeGroup` expose the Kubernetes scale subresource. Scale
+them with `kubectl scale`, HPA, KEDA, or the native `NiFiAutoscaler`.
 
-```bash
-kubectl scale nificluster/production --replicas=5
-```
+`NiFiAutoscaler` is the recommended path. It creates:
 
-The scale subresource maps:
+- a KEDA `ScaledObject` for Prometheus queue metrics, or
+- a native HPA for CPU/memory.
 
-| field | path |
-| --- | --- |
-| desired replicas | `.spec.replicas` |
-| current replicas | `.status.replicas` |
-| pod selector | `.status.selector` |
+Scale-down uses NiFiControl's graceful offload path before deleting pods.
 
-An autoscaler writes `.spec.replicas`; the operator reconciles the StatefulSet to match and
-reports current size and the NiFi-node label selector back in `.status`.
-
-## Why this composes with graceful offload
-
-Scaling a stateful NiFi cluster down is not free: each removed node must hand its queued
-FlowFiles to the nodes that remain. Because the autoscaler targets the `NiFiCluster` scale
-subresource (not the StatefulSet directly), a scale-down runs the operator's
-[graceful node offload](node-lifecycle.md) — disconnect → offload → remove, highest-ordinal
-first, one node at a time — instead of abruptly deleting pods. Autoscaling is therefore
-lossless by construction, and the `spec.scaleDown` policy (timeout, `onTimeout`) still applies.
-
-Each offload is comparatively expensive, so autoscaling NiFi should be **deliberate, not
-twitchy**. The guidance below reflects that.
-
-## NiFiAutoscaler (recommended)
-
-`NiFiAutoscaler` is the NiFi-native way to autoscale. It does **not** implement its own metrics
-loop or scaling algorithm — it *renders* the right backend for you and adds NiFi-safe defaults,
-validation, and one status surface:
+## Queue-Based Example
 
 ```yaml
 apiVersion: nifi.controlnifi.io/v1alpha1
 kind: NiFiAutoscaler
 metadata:
-  name: production
+  name: ingest
 spec:
-  target:
-    kind: NiFiCluster        # or NiFiNodeGroup, to autoscale a single tier
+  scaleTargetRef:
+    kind: NiFiCluster
     name: production
-  minReplicas: 3
-  maxReplicas: 9
+  minReplicas: 1
+  maxReplicas: 5
   metrics:
     - type: Prometheus
       prometheus:
         serverAddress: http://prometheus.monitoring.svc:9090
-        query: sum(nifi_amount_items_queued)   # NiFi 2.x FlowFile queue depth
-        threshold: "10000"
-  behavior:
-    scaleDownStrategy: HighestOrdinal
-    stabilizationSeconds: 600
-    maxNodesPerStep: 1
-```
-
-What it does:
-
-- **Renders a KEDA `ScaledObject`** when a `Prometheus` metric is used (KEDA must be installed;
-  otherwise the autoscaler reports `MetricsReady=False`/`KEDANotInstalled` and waits), or a
-  **native `HorizontalPodAutoscaler`** for a `Resource` (cpu/memory) metric — no KEDA needed.
-- **NiFi-safe defaults**: `minReplicas` floored at 1 (never scale a cluster to zero),
-  one-node-at-a-time scale-down, a long stabilization window — because each node offload is
-  expensive.
-- **Targets `NiFiCluster` or `NiFiNodeGroup`** via their scale subresource, so scale-downs run
-  the operator's [graceful node offload](node-lifecycle.md).
-- **`scaleDownStrategy`** describes the operator's highest-ordinal-first offload: `HighestOrdinal`
-  (the default) and `NonPrimary` both keep the coordinator-eligible ordinal 0 until last —
-  `NonPrimary` states that intent explicitly. Removing an arbitrary (least-busy) node is not
-  offered, because it would require pod-level management rather than StatefulSet scale-down.
-
-It composes with the lower-level objects below; reach for those directly only if you need a
-KEDA/HPA feature the CRD does not yet expose.
-
-### Authenticating to a secured Prometheus
-
-If Prometheus (or Thanos/Cortex/Grafana Cloud) requires authentication, set
-`prometheus.authentication`. The operator renders a KEDA `TriggerAuthentication` from the
-referenced Secret and wires the trigger's `authModes`/`authenticationRef` — you no longer have
-to hand-write the `ScaledObject` *and* a `TriggerAuthentication`. KEDA (not the operator) reads
-the Secret, so the operator never handles the credential material.
-
-```yaml
-  metrics:
-    - type: Prometheus
-      prometheus:
-        serverAddress: https://prometheus.monitoring.svc:9090
         query: sum(nifi_amount_items_queued)
         threshold: "10000"
-        authentication:
-          mode: Bearer            # Bearer | Basic | TLS
-          secretName: prom-creds  # a Secret in the NiFiAutoscaler's namespace
-        # unsafeSsl: true         # dev only — skip TLS verification instead of providing a CA
 ```
 
-The credential Secret keys default to the conventional names, so a standard Secret needs no
-overrides:
-
-- **Bearer** reads `bearerToken` (override with `bearerTokenKey`).
-- **Basic** reads `username` and `password` (`usernameKey`/`passwordKey`).
-- **TLS** (mutual TLS) reads `ca.crt`, `tls.crt`, and `tls.key` (`caKey`/`certKey`/`keyKey`) —
-  exactly the keys a cert-manager `Certificate` produces, so a cert-manager-issued Secret works
-  as-is.
-
-The rendered `TriggerAuthentication` is owned by the `NiFiAutoscaler` (garbage-collected with it)
-and is pruned automatically if you later remove `authentication` or rename the trigger. For any
-KEDA auth surface beyond these three modes (pod identity, a `ClusterTriggerAuthentication`,
-Vault, etc.), reach for a hand-written `TriggerAuthentication` as shown below.
-
-## KEDA directly
-
-NiFi load is event/queue-driven, so scale on dataflow signals (queue depth, backpressure,
-connection counts) rather than CPU. KEDA scales on those external metrics and drives the same
-scale subresource (it manages an HPA underneath); a `NiFiAutoscaler` renders exactly this, or
-you can write the `ScaledObject` yourself:
+## CPU Example
 
 ```yaml
-apiVersion: keda.sh/v1alpha1
-kind: ScaledObject
-metadata:
-  name: production-nifi
 spec:
   scaleTargetRef:
-    apiVersion: nifi.controlnifi.io/v1alpha1
-    kind: NiFiCluster
-    name: production
-  minReplicaCount: 3          # keep enough nodes for steady-state throughput
-  maxReplicaCount: 9
-  cooldownPeriod: 600         # wait before scaling down — offload is expensive
-  advanced:
-    horizontalPodAutoscalerConfig:
-      behavior:
-        scaleDown:
-          stabilizationWindowSeconds: 600
-          policies:
-            - type: Pods
-              value: 1        # remove at most one node at a time
-              periodSeconds: 300
-  triggers:
-    - type: prometheus
-      metadata:
-        serverAddress: http://prometheus.monitoring.svc:9090
-        # Total FlowFiles queued across the flow, scraped from NiFi's metrics.
-        query: sum(nifi_amount_items_queued)
-        threshold: "10000"          # target queued FlowFiles per node
-```
-
-A complete example is in `config/samples/autoscaling/keda_scaledobject_nificluster.yaml`.
-
-## HorizontalPodAutoscaler (without KEDA)
-
-A plain HPA also works against the scale subresource. CPU/memory are weak proxies for
-dataflow load, so prefer an external/Prometheus metric where possible:
-
-```yaml
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: production-nifi
-spec:
-  scaleTargetRef:
-    apiVersion: nifi.controlnifi.io/v1alpha1
-    kind: NiFiCluster
-    name: production
-  minReplicas: 3
-  maxReplicas: 9
-  behavior:
-    scaleDown:
-      stabilizationWindowSeconds: 600
-      policies:
-        - type: Pods
-          value: 1
-          periodSeconds: 300
+    kind: NiFiNodeGroup
+    name: workers
+  minReplicas: 1
+  maxReplicas: 6
   metrics:
     - type: Resource
       resource:
         name: cpu
-        target:
-          type: Utilization
-          averageUtilization: 70
+        targetAverageUtilization: 70
 ```
 
-See `config/samples/autoscaling/hpa_nificluster.yaml`.
+## Notes
 
-> The HPA/KEDA controller needs RBAC to read and update the `nificlusters/scale` subresource.
-> KEDA grants this for its managed HPAs; for a hand-written HPA, grant the
-> horizontal-pod-autoscaler service account `get`/`update`/`patch` on
-> `nifi.controlnifi.io/nificlusters/scale`.
-
-## Getting the metric signal
-
-KEDA's Prometheus trigger needs NiFi metrics in Prometheus. NiFi 2.x **always** serves
-Prometheus-format metrics from its REST API at `/nifi-api/flow/metrics/prometheus` on the web
-port (the standalone `PrometheusReportingTask` was removed in NiFi 2.0). Turn on
-`spec.metrics` and the operator renders a `ServiceMonitor` for that endpoint:
-
-```yaml
-spec:
-  metrics:
-    enabled: true
-    serviceMonitor:
-      enabled: true
-      interval: 30s
-```
-
-This requires the Prometheus Operator CRDs (`monitoring.coreos.com`); if they are absent the
-cluster reports `MetricsReady=False` (`CRDsNotInstalled`) and otherwise reconciles normally.
-On a TLS cluster the scrape uses HTTPS with the operator-managed client certificate, and the
-scrape identity needs NiFi read authorization. See [docs/observability.md](observability.md)
-for the full picture, and `config/samples/autoscaling/servicemonitor_nificluster.yaml` for a
-hand-written ServiceMonitor if you prefer to manage it yourself.
-
-## Guardrails
-
-- Keep `minReplicaCount`/`minReplicas` at or above your steady-state throughput need; a NiFi
-  cluster needs at least one node and benefits from headroom during offload.
-- Use a long `scaleDown` stabilization window and a one-node-at-a-time policy — this matches
-  the operator's sequential offload and avoids thrashing.
-- Node ordinal 0 (the typical primary/coordinator) is removed last, because the operator
-  always scales down from the highest ordinal.
-- `spec.replicas` has a minimum of 1; the operator never scales a managed cluster to zero.
+- Use `NiFiNodeGroup` targets when only one pool should grow.
+- Use queue-depth metrics for flow pressure; CPU is a fallback signal.
+- Secured Prometheus endpoints can use `authenticationRef`.
+- Highest ordinals are offloaded first during scale-down.
