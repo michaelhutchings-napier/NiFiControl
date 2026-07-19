@@ -4,10 +4,10 @@ import (
 	"context"
 	"net/http"
 	"testing"
-	"time"
 
 	nifiv1alpha1 "github.com/michaelhutchings-napier/NiFiControl/api/v1alpha1"
 	"github.com/michaelhutchings-napier/NiFiControl/pkg/nifi"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -164,9 +164,15 @@ func TestNiFiPolicyReconcileAdoptsExactPolicyAndAddsUser(t *testing.T) {
 			UserRefs:   []nifiv1alpha1.LocalObjectReference{{Name: "scraper"}},
 		},
 	}
-	// An exact policy already exists for /flow read, with no users.
+	// An exact policy already exists for /flow read with NiFi's seeded initial-admin tenant.
+	// NiFiPolicy owns only the grant it declares, so it must preserve the existing admin grant.
 	policies := &fakeAccessPolicyClient{byResource: map[string]nifi.AccessPolicyEntity{
-		policyKey("read", "/flow"): {ID: "p-existing", Revision: nifi.Revision{Version: 2}, Component: nifi.AccessPolicyComponent{ID: "p-existing", Resource: "/flow", Action: "read"}},
+		policyKey("read", "/flow"): {ID: "p-existing", Revision: nifi.Revision{Version: 2}, Component: nifi.AccessPolicyComponent{
+			ID:       "p-existing",
+			Resource: "/flow",
+			Action:   "read",
+			Users:    []nifi.TenantRef{{ID: "u-operator"}},
+		}},
 	}}
 	k8sClient := policyTestClient(scheme, cluster, user, policy)
 	r := &NiFiPolicyReconciler{Client: k8sClient, Scheme: scheme, AccessPolicyClient: policies}
@@ -175,7 +181,7 @@ func TestNiFiPolicyReconcileAdoptsExactPolicyAndAddsUser(t *testing.T) {
 	if len(policies.created) != 0 {
 		t.Fatalf("should adopt, not create: %#v", policies.created)
 	}
-	if len(policies.updated) != 1 || len(policies.updated[0].Component.Users) != 1 || policies.updated[0].Component.Users[0].ID != "u-scraper" {
+	if len(policies.updated) != 1 || !tenantSetContainsAll(policies.updated[0].Component.Users, []nifi.TenantRef{{ID: "u-operator"}, {ID: "u-scraper"}}) {
 		t.Fatalf("update = %#v", policies.updated)
 	}
 	got := &nifiv1alpha1.NiFiPolicy{}
@@ -214,45 +220,91 @@ func TestNiFiPolicyReconcileCreatesWhenOnlyInheritedPolicyExists(t *testing.T) {
 	}
 }
 
-func TestNiFiPolicyReconcileRejectsConflictingTuple(t *testing.T) {
+func TestNiFiPolicyReconcileAllowsMultipleGrantOwnersForSameTuple(t *testing.T) {
 	scheme := testScheme()
 	cluster := readyTestCluster()
-	user := readyUser("scraper", "u-scraper", "CN=scraper")
-	tuple := func(name string, created int64) *nifiv1alpha1.NiFiPolicy {
+	scraper := readyUser("scraper", "u-scraper", "CN=scraper")
+	dashboard := readyUser("dashboard", "u-dashboard", "CN=dashboard")
+	tuple := func(name, userName string) *nifiv1alpha1.NiFiPolicy {
 		return &nifiv1alpha1.NiFiPolicy{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: 1, CreationTimestamp: metav1.NewTime(time.Unix(created, 0))},
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: 1},
 			Spec: nifiv1alpha1.NiFiPolicySpec{
 				ClusterRef: nifiv1alpha1.ClusterReference{Name: cluster.Name},
 				Resource:   "/flow",
 				Action:     "read",
-				UserRefs:   []nifiv1alpha1.LocalObjectReference{{Name: "scraper"}},
+				UserRefs:   []nifiv1alpha1.LocalObjectReference{{Name: userName}},
 			},
 		}
 	}
-	owner := tuple("aaa-owner", 100) // older -> owns the tuple
-	loser := tuple("zzz-loser", 200) // newer -> must yield
-	k8sClient := policyTestClient(scheme, cluster, user, owner, loser)
-	policies := &fakeAccessPolicyClient{}
+	one := tuple("scraper-read-flow", "scraper")
+	two := tuple("dashboard-read-flow", "dashboard")
+	k8sClient := policyTestClient(scheme, cluster, scraper, dashboard, one, two)
+	policies := &fakeAccessPolicyClient{byResource: map[string]nifi.AccessPolicyEntity{
+		policyKey("read", "/flow"): {ID: "p-existing", Revision: nifi.Revision{Version: 2}, Component: nifi.AccessPolicyComponent{ID: "p-existing", Resource: "/flow", Action: "read"}},
+	}}
 	r := &NiFiPolicyReconciler{Client: k8sClient, Scheme: scheme, AccessPolicyClient: policies}
 
-	// The loser must not touch NiFi and must report a conflict.
-	reconcileTwice(t, r, loser.Name)
-	if len(policies.created) != 0 || len(policies.updated) != 0 {
-		t.Fatalf("loser must not write to NiFi: created=%#v updated=%#v", policies.created, policies.updated)
-	}
-	gotLoser := &nifiv1alpha1.NiFiPolicy{}
-	_ = k8sClient.Get(context.Background(), types.NamespacedName{Name: loser.Name, Namespace: "default"}, gotLoser)
-	assertControllerCondition(t, gotLoser.Status.Conditions, nifiv1alpha1.ConditionReady, metav1.ConditionFalse, "PolicyConflict")
+	reconcileTwice(t, r, one.Name)
+	reconcileTwice(t, r, two.Name)
 
-	// The owner reconciles normally.
-	reconcileTwice(t, r, owner.Name)
-	if len(policies.created) != 1 {
-		t.Fatalf("owner should create exactly one policy: %#v", policies.created)
+	current := policies.byResource[policyKey("read", "/flow")]
+	if !tenantSetContainsAll(current.Component.Users, []nifi.TenantRef{{ID: "u-scraper"}, {ID: "u-dashboard"}}) {
+		t.Fatalf("policy users = %#v, want both grant owners preserved", current.Component.Users)
 	}
-	gotOwner := &nifiv1alpha1.NiFiPolicy{}
-	_ = k8sClient.Get(context.Background(), types.NamespacedName{Name: owner.Name, Namespace: "default"}, gotOwner)
-	if !gotOwner.Status.Ready {
-		t.Fatalf("owner status = %+v", gotOwner.Status)
+}
+
+func TestNiFiPolicyDeleteRemovesOnlyManagedGrant(t *testing.T) {
+	scheme := testScheme()
+	cluster := readyTestCluster()
+	policy := &nifiv1alpha1.NiFiPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "scraper-read-flow", Namespace: "default", Generation: 1, Finalizers: []string{NiFiControlFinalizer}},
+		Spec: nifiv1alpha1.NiFiPolicySpec{
+			ClusterRef:     nifiv1alpha1.ClusterReference{Name: cluster.Name},
+			Resource:       "/flow",
+			Action:         "read",
+			DeletionPolicy: nifiv1alpha1.DeletionPolicyDelete,
+		},
+		Status: nifiv1alpha1.NiFiPolicyStatus{
+			CommonStatus: nifiv1alpha1.CommonStatus{
+				Ready:              true,
+				ObservedGeneration: 1,
+				NiFiID:             "p-existing",
+				Revision:           nifiv1alpha1.RevisionStatus{Version: 7},
+			},
+			UserIDs: []string{"u-scraper"},
+		},
+	}
+	policies := &fakeAccessPolicyClient{byResource: map[string]nifi.AccessPolicyEntity{
+		policyKey("read", "/flow"): {
+			ID:       "p-existing",
+			Revision: nifi.Revision{Version: 8},
+			Component: nifi.AccessPolicyComponent{
+				ID:       "p-existing",
+				Resource: "/flow",
+				Action:   "read",
+				Users:    []nifi.TenantRef{{ID: "u-operator"}, {ID: "u-scraper"}},
+			},
+		},
+	}}
+	k8sClient := policyTestClient(scheme, cluster, policy)
+	r := &NiFiPolicyReconciler{Client: k8sClient, Scheme: scheme, AccessPolicyClient: policies}
+	if err := k8sClient.Delete(context.Background(), policy); err != nil {
+		t.Fatal(err)
+	}
+	reconcileTwice(t, r, policy.Name)
+
+	if len(policies.deleted) != 0 {
+		t.Fatalf("policy must not be deleted while other tenants remain: %#v", policies.deleted)
+	}
+	if len(policies.updated) != 1 {
+		t.Fatalf("expected one update removing only the managed grant, got %#v", policies.updated)
+	}
+	if got := policies.updated[0].Component.Users; len(got) != 1 || got[0].ID != "u-operator" {
+		t.Fatalf("remaining users = %#v, want only u-operator", got)
+	}
+	got := &nifiv1alpha1.NiFiPolicy{}
+	if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: policy.Name, Namespace: "default"}, got); !apierrors.IsNotFound(err) {
+		t.Fatalf("finalizer should be removed and the policy CR deleted; got err=%v", err)
 	}
 }
 

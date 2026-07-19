@@ -24,7 +24,8 @@ NiFiUserGroup (users) ┘
 `NiFiPolicy` references tenants by resource name (`userRefs` / `userGroupRefs`), not by raw
 identity, so the operator resolves each to its NiFi tenant id and waits until the referenced
 `NiFiUser`/`NiFiUserGroup` is `Ready`. This keeps identities defined once and reused across
-policies.
+policies. Each `NiFiPolicy` owns only the grants it declares; it preserves other tenants already
+present on the same NiFi access policy, including NiFi's seeded initial-admin grants.
 
 ### NiFiUser
 
@@ -52,7 +53,7 @@ their resolved tenant ids are recorded in `status.memberIds`.
 `/data/process-groups/{id}`, `/policies`, `/tenants`, …) and `action` is `read` or `write`. The
 operator finds the exact policy for that `(resource, action)` — distinguishing it from an
 inherited/effective policy NiFi may return for a component resource — and creates it if absent,
-then reconciles its granted users and groups to match the spec.
+then ensures the declared users and groups are granted.
 
 ```yaml
 apiVersion: nifi.controlnifi.io/v1alpha1
@@ -115,5 +116,7 @@ TLS.
 
 ## Deletion
 
-With `deletionPolicy: Delete`, removing a `NiFiPolicy`/`NiFiUser`/`NiFiUserGroup` deletes the
-corresponding NiFi tenant or policy. The default `Orphan` leaves NiFi state in place.
+With `deletionPolicy: Delete`, removing a `NiFiPolicy` removes only that resource's recorded user
+and group grants from the NiFi access policy, preserving unrelated tenants. If no tenants remain,
+the empty access policy is deleted. Removing a `NiFiUser`/`NiFiUserGroup` deletes the corresponding
+NiFi tenant. The default `Orphan` leaves NiFi state in place.

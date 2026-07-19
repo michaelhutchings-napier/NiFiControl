@@ -38,10 +38,18 @@ trap cleanup EXIT
 dump_diagnostics() {
   echo "==== NiFiCluster status ====" >&2
   kubectl --context "${ctx}" -n "${namespace}" get nificluster secure -o jsonpath='{.status.conditions}' 2>&1 | tr ',' '\n' >&2 || true
+  echo "==== NiFiUser status ====" >&2
+  kubectl --context "${ctx}" -n "${namespace}" get nifiuser scraper -o yaml 2>&1 >&2 || true
+  echo "==== NiFiPolicy status ====" >&2
+  kubectl --context "${ctx}" -n "${namespace}" get nifipolicy scraper-read-flow -o yaml 2>&1 >&2 || true
   echo "==== operator logs (tail) ====" >&2
   kubectl --context "${ctx}" -n "${opns}" logs deploy/nificontrol --tail=40 2>&1 >&2 || true
   echo "==== NiFi pod ====" >&2
   kubectl --context "${ctx}" -n "${namespace}" get pods 2>&1 >&2 || true
+  echo "==== NiFi container logs (tail) ====" >&2
+  kubectl --context "${ctx}" -n "${namespace}" logs secure-nifi-0 -c nifi --tail=120 2>&1 >&2 || true
+  echo "==== NiFi authorization log hints ====" >&2
+  kubectl --context "${ctx}" -n "${namespace}" exec secure-nifi-0 -c nifi -- sh -c 'grep -iE "authoriz|access|certificate|identity|forbidden|403|denied" /opt/nifi/nifi-current/logs/nifi-app.log | tail -80' 2>&1 >&2 || true
 }
 
 if ! kind get clusters 2>/dev/null | grep -qx "${cluster}"; then

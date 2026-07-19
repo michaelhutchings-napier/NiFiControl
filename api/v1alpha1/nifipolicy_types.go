@@ -2,10 +2,11 @@ package v1alpha1
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-// NiFiPolicySpec declares a NiFi access policy: a (resource, action) tuple granted to a set of
-// user and user-group tenants. Access policies exist only on a secured NiFi with a managed
+// NiFiPolicySpec declares grants on a NiFi access policy: a (resource, action) tuple granted to a
+// set of user and user-group tenants. Access policies exist only on a secured NiFi with a managed
 // authorizer. The granted tenants are referenced as NiFiUser / NiFiUserGroup resources so the
-// operator can resolve their NiFi tenant ids.
+// operator can resolve their NiFi tenant ids. The operator preserves unrelated tenants already
+// present on the same NiFi access policy.
 type NiFiPolicySpec struct {
 	ClusterRef ClusterReference `json:"clusterRef"`
 	// Resource is the NiFi resource the policy applies to, for example "/flow", "/controller",
