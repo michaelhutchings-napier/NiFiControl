@@ -2936,6 +2936,12 @@ func (r *NiFiConnectionReconciler) reconcileExistingConnection(ctx context.Conte
 		updateEntity.ID = nifiID
 		updateEntity.Component.ID = nifiID
 		updateEntity.Revision.Version = existing.Revision.Version
+		// Keep NiFi's own endpoints on the update: a connection's source/destination cannot be
+		// changed while running, and re-sending our resolved remote-port connectable (whose id
+		// differs from NiFi's stored one) would trip "Cannot change the destination". Only the
+		// mutable settings this update carries should reach NiFi.
+		updateEntity.Component.Source = existing.Component.Source
+		updateEntity.Component.Destination = existing.Component.Destination
 		updated, err := connections.UpdateConnection(ctx, endpoint, updateEntity)
 		if err != nil {
 			message := fmt.Sprintf("Failed to update NiFi connection: %v", err)
@@ -4729,10 +4735,6 @@ func nifiPositionSlicesEqual(left []nifi.Position, right []nifi.Position) bool {
 	return true
 }
 
-func nifiConnectablesEqual(left nifi.Connectable, right nifi.Connectable) bool {
-	return left.ID == right.ID && left.Type == right.Type && left.GroupID == right.GroupID
-}
-
 func componentReferenceID(ref *nifi.ComponentReference) string {
 	if ref == nil {
 		return ""
@@ -5451,25 +5453,42 @@ func connectionEntityID(entity nifi.ConnectionEntity) string {
 }
 
 func connectionNeedsUpdate(desired nifi.ConnectionEntity, existing nifi.ConnectionEntity) bool {
-	if desired.Component.ParentGroupID != "" && desired.Component.ParentGroupID != existing.Component.ParentGroupID {
+	// A connection's endpoints (source/destination) and parent group are identity fixed at
+	// creation, so they are deliberately not compared here. NiFi refuses to change the source or
+	// destination of a running connection, and for a remote port its stored connectable id differs
+	// from the id the RPG advertises in its discovered ports (which is what we resolve into the
+	// desired connectable) — so comparing endpoints produced a perpetual update loop that
+	// re-sent a "different" destination on every reconcile and hard-failed the moment the port
+	// started transmitting ("Cannot change the destination of connection because the current
+	// destination is running"). Changing a connection's endpoints in the spec therefore requires
+	// recreating it, matching NiFi's own constraint.
+	//
+	// Every setting below is compared only when the user actually pinned it: unset tunables are
+	// omitted on create, so NiFi fills them with resolved defaults (backpressure 10000 / "1 GB",
+	// expiration "0 sec", loadBalanceStrategy "DO_NOT_LOAD_BALANCE") that would otherwise read as
+	// drift and re-update the connection forever.
+	if desired.Component.BackPressureObjectThreshold != 0 && desired.Component.BackPressureObjectThreshold != existing.Component.BackPressureObjectThreshold {
 		return true
 	}
-	if !nifiConnectablesEqual(desired.Component.Source, existing.Component.Source) ||
-		!nifiConnectablesEqual(desired.Component.Destination, existing.Component.Destination) {
+	if desired.Component.BackPressureDataSizeThreshold != "" && desired.Component.BackPressureDataSizeThreshold != existing.Component.BackPressureDataSizeThreshold {
 		return true
 	}
-	if desired.Component.BackPressureObjectThreshold != existing.Component.BackPressureObjectThreshold ||
-		desired.Component.BackPressureDataSizeThreshold != existing.Component.BackPressureDataSizeThreshold ||
-		desired.Component.FlowFileExpiration != existing.Component.FlowFileExpiration ||
-		desired.Component.LoadBalanceStrategy != existing.Component.LoadBalanceStrategy ||
-		desired.Component.LoadBalancePartitionAttribute != existing.Component.LoadBalancePartitionAttribute {
+	if desired.Component.FlowFileExpiration != "" && desired.Component.FlowFileExpiration != existing.Component.FlowFileExpiration {
 		return true
 	}
-	if !stringSlicesEqual(desired.Component.SelectedRelationships, existing.Component.SelectedRelationships) ||
-		!stringSlicesEqual(desired.Component.Prioritizers, existing.Component.Prioritizers) {
+	if desired.Component.LoadBalanceStrategy != "" && desired.Component.LoadBalanceStrategy != existing.Component.LoadBalanceStrategy {
 		return true
 	}
-	return !nifiPositionSlicesEqual(desired.Component.Bends, existing.Component.Bends)
+	if desired.Component.LoadBalancePartitionAttribute != "" && desired.Component.LoadBalancePartitionAttribute != existing.Component.LoadBalancePartitionAttribute {
+		return true
+	}
+	if len(desired.Component.SelectedRelationships) > 0 && !stringSlicesEqual(desired.Component.SelectedRelationships, existing.Component.SelectedRelationships) {
+		return true
+	}
+	if len(desired.Component.Prioritizers) > 0 && !stringSlicesEqual(desired.Component.Prioritizers, existing.Component.Prioritizers) {
+		return true
+	}
+	return len(desired.Component.Bends) > 0 && !nifiPositionSlicesEqual(desired.Component.Bends, existing.Component.Bends)
 }
 
 func connectionStatusMatches(instance *nifiv1alpha1.NiFiConnection, nifiID string, revisionVersion int64, sourceID string, destinationID string) bool {
