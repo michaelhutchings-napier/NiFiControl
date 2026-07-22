@@ -452,6 +452,52 @@ func (f *fakeConnectionClient) DeleteConnection(ctx context.Context, baseURI str
 	return f.err
 }
 
+func TestConnectionNeedsUpdateToleratesResolvedDefaultsAndEndpoints(t *testing.T) {
+	// desired mirrors a spec that pins only its endpoints and relationships. NiFi fills the rest
+	// with resolved defaults and, for a remote input port, stores a destination id that differs
+	// from the one the RPG advertised (which is what we resolve into the desired connectable).
+	// None of that may read as drift, or the operator re-updates the connection on every reconcile
+	// and hard-fails once the remote port starts transmitting ("Cannot change the destination of
+	// connection because the current destination is running").
+	desired := nifi.ConnectionEntity{
+		Component: nifi.ConnectionComponent{
+			ParentGroupID:         "root",
+			Source:                nifi.Connectable{ID: "proc-1", Type: "PROCESSOR", GroupID: "root"},
+			Destination:           nifi.Connectable{ID: "rpg-advertised-port", Type: "REMOTE_INPUT_PORT", GroupID: "rpg-1"},
+			SelectedRelationships: []string{"success"},
+		},
+	}
+	existing := nifi.ConnectionEntity{
+		Component: nifi.ConnectionComponent{
+			ParentGroupID:                 "root",
+			Source:                        nifi.Connectable{ID: "proc-1", Type: "PROCESSOR", GroupID: "root"},
+			Destination:                   nifi.Connectable{ID: "nifi-internal-port-id", Type: "REMOTE_INPUT_PORT", GroupID: "rpg-1"},
+			SelectedRelationships:         []string{"success"},
+			BackPressureObjectThreshold:   10000,
+			BackPressureDataSizeThreshold: "1 GB",
+			FlowFileExpiration:            "0 sec",
+			LoadBalanceStrategy:           "DO_NOT_LOAD_BALANCE",
+		},
+	}
+	if connectionNeedsUpdate(desired, existing) {
+		t.Fatal("connectionNeedsUpdate = true for NiFi resolved defaults + a differing remote-port endpoint id; want false")
+	}
+
+	// A user-pinned change to a mutable setting must still be detected.
+	pinnedExpiration := desired
+	pinnedExpiration.Component.FlowFileExpiration = "60 sec"
+	if !connectionNeedsUpdate(pinnedExpiration, existing) {
+		t.Fatal("connectionNeedsUpdate = false after pinning a new flowFileExpiration; want true")
+	}
+
+	// A user-pinned relationship change must still be detected.
+	changedRelationships := desired
+	changedRelationships.Component.SelectedRelationships = []string{"failure"}
+	if !connectionNeedsUpdate(changedRelationships, existing) {
+		t.Fatal("connectionNeedsUpdate = false after changing selectedRelationships; want true")
+	}
+}
+
 func TestNiFiProcessGroupReconcileCreatesProcessGroup(t *testing.T) {
 	scheme := testScheme()
 	cluster := readyTestCluster()
